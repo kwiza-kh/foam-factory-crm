@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { makeId, today } from "./lib/utils.js";
 import { loadAISettings } from "./lib/aiSettings.js";
 import { AISettingsModal } from "./components/AISettingsModal.jsx";
+import { AIImportButton } from "./components/AIImportButton.jsx";
 import { AgGridReact } from "ag-grid-react";
 import {
   AllCommunityModule,
@@ -484,6 +485,16 @@ function App() {
     setSelectedCustomerId(newCustomer.id);
   };
 
+  const handleAIImport = (tableKey, rows) => {
+    updateSelectedCustomer((customer) => ({
+      ...customer,
+      [tableKey]: [
+        ...(customer[tableKey] || []),
+        ...rows.map((row) => ({ id: makeId(tableKey), ...row })),
+      ],
+    }));
+  };
+
   const resetDemoData = () => {
     setCustomers(initialCustomers);
     setSelectedCustomerId(initialCustomers[0]?.id);
@@ -625,6 +636,18 @@ function App() {
                   placeholder="筛选当前表格"
                 />
               </label>
+              {selectedCustomer && (
+                <AIImportButton
+                  tableKey={activeTable}
+                  tableLabel={tableConfigs[activeTable].rowLabel}
+                  columns={[
+                    ...tableConfigs[activeTable].defaultColumns,
+                    ...(selectedCustomer.customColumns?.[activeTable] || []),
+                  ]}
+                  aiSettings={aiSettings}
+                  onImport={handleAIImport}
+                />
+              )}
               <button
                 className="secondary-button"
                 type="button"
