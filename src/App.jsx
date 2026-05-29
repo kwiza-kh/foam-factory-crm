@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { makeId, today } from "./lib/utils.js";
+import { loadAISettings } from "./lib/aiSettings.js";
+import { AISettingsModal } from "./components/AISettingsModal.jsx";
 import { AgGridReact } from "ag-grid-react";
 import {
   AllCommunityModule,
@@ -21,6 +23,7 @@ import {
   Truck,
   UserRoundPlus,
   X,
+  Bot,
 } from "lucide-react";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
@@ -330,6 +333,8 @@ function App() {
   const [showCustomerModal, setShowCustomerModal] = useState(false);
   const [showColumnModal, setShowColumnModal] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState(null);
+  const [aiSettings, setAISettings] = useState(loadAISettings);
+  const [showAISettings, setShowAISettings] = useState(false);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(customers));
@@ -554,6 +559,14 @@ function App() {
             <button
               className="icon-button"
               type="button"
+              title="AI 设置"
+              onClick={() => setShowAISettings(true)}
+            >
+              <Bot size={18} />
+            </button>
+            <button
+              className="icon-button"
+              type="button"
               title="编辑客户档案"
               onClick={() => {
                 setEditingCustomer(selectedCustomer);
@@ -682,6 +695,14 @@ function App() {
           onClose={() => setShowColumnModal(false)}
           onAddColumn={addCustomColumn}
           onRemoveColumn={removeCustomColumn}
+        />
+      )}
+
+      {showAISettings && (
+        <AISettingsModal
+          settings={aiSettings}
+          onClose={() => setShowAISettings(false)}
+          onSave={setAISettings}
         />
       )}
     </div>
