@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { makeId, today } from "./lib/utils.js";
 import { AgGridReact } from "ag-grid-react";
 import {
   AllCommunityModule,
@@ -290,10 +291,6 @@ const localeText = {
   filters: "筛选",
 };
 
-const makeId = (prefix) =>
-  `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
-
-const today = () => new Date().toISOString().slice(0, 10);
 
 const formatCurrency = (value) => {
   const number = Number(value || 0);
