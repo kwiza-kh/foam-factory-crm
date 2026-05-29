@@ -6,6 +6,48 @@
 
 const ANTHROPIC_PROVIDERS = new Set(['anthropic', 'custom-anthropic']);
 
+/**
+ * Fetch available models from the provider's /v1/models endpoint.
+ * Returns an array of model ID strings, sorted alphabetically.
+ */
+export async function fetchModels(settings) {
+  const { provider, apiKey, baseUrl } = settings;
+  if (!apiKey)  throw new Error('请先填写 API Key');
+  if (!baseUrl) throw new Error('请先填写 Base URL');
+
+  const isAnthropic = ANTHROPIC_PROVIDERS.has(provider);
+  const url = `${baseUrl}/v1/models`;
+
+  const headers = isAnthropic
+    ? {
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
+      }
+    : { 'Authorization': `Bearer ${apiKey}` };
+
+  const res = await fetch(url, { headers });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`获取模型列表失败 ${res.status}: ${body.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  const models = (data.data || []).map(m => m.id).filter(Boolean);
+  if (models.length === 0) throw new Error('未返回任何模型，请检查 Base URL 和 API Key');
+  return models.sort();
+}
+
+/**
+ * Send a minimal message to verify the API key and endpoint are working.
+ * Returns the model's brief reply string on success, throws on failure.
+ */
+export async function testConnection(settings) {
+  const reply = await callAI(settings, [
+    { role: 'user', content: '请回复"连接正常"四个字，不要其他内容。' },
+  ]);
+  return reply;
+}
+
 export async function callAI(settings, messages) {
   const { provider, apiKey, baseUrl, model } = settings;
   if (!apiKey) throw new Error('请先在 AI 设置中填写 API Key');

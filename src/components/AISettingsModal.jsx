@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { X, Bot } from 'lucide-react';
+import { X, Bot, Loader2, RefreshCw } from 'lucide-react';
 import { saveAISettings, PROVIDER_DEFAULTS } from '../lib/aiSettings.js';
+import { fetchModels, testConnection } from '../lib/ai-import/aiClient.js';
 
 const PROVIDER_LABELS = {
   anthropic:          'Claude (Anthropic)',
@@ -25,10 +26,45 @@ function Field({ label, required = false, children }) {
 
 export function AISettingsModal({ settings, onClose, onSave }) {
   const [form, setForm] = useState({ ...settings });
+  const [fetchedModels, setFetchedModels] = useState(null);
+  const [fetchError, setFetchError] = useState(null);
+  const [fetching, setFetching] = useState(false);
+  const [testStatus, setTestStatus] = useState(null); // null | 'testing' | 'ok' | 'error'
+  const [testError, setTestError] = useState(null);
 
   const handleProviderChange = (provider) => {
     const defaults = PROVIDER_DEFAULTS[provider];
     setForm(prev => ({ ...prev, provider, baseUrl: defaults.baseUrl, model: defaults.model }));
+    setFetchedModels(null);
+    setFetchError(null);
+  };
+
+  const handleFetchModels = async () => {
+    setFetching(true);
+    setFetchError(null);
+    try {
+      const models = await fetchModels(form);
+      setFetchedModels(models);
+      if (!form.model || !models.includes(form.model)) {
+        setForm(f => ({ ...f, model: models[0] }));
+      }
+    } catch (err) {
+      setFetchError(err.message);
+    } finally {
+      setFetching(false);
+    }
+  };
+
+  const handleTestConnection = async () => {
+    setTestStatus('testing');
+    setTestError(null);
+    try {
+      await testConnection(form);
+      setTestStatus('ok');
+    } catch (err) {
+      setTestStatus('error');
+      setTestError(err.message);
+    }
   };
 
   const handleSubmit = (e) => {
@@ -39,7 +75,8 @@ export function AISettingsModal({ settings, onClose, onSave }) {
   };
 
   const isAnthropic = form.provider === 'anthropic' || form.provider === 'custom-anthropic';
-  const presets = isAnthropic ? MODEL_PRESETS.anthropic : MODEL_PRESETS.openai;
+  const fallbackPresets = isAnthropic ? MODEL_PRESETS.anthropic : MODEL_PRESETS.openai;
+  const canFetch = Boolean(form.baseUrl && form.apiKey);
 
   return (
     <div className="modal-backdrop" role="presentation">
@@ -80,25 +117,80 @@ export function AISettingsModal({ settings, onClose, onSave }) {
             />
           </Field>
 
-          <Field label="模型">
-            <input
-              list="ai-model-list"
-              value={form.model}
-              onChange={e => setForm(f => ({ ...f, model: e.target.value }))}
-              placeholder="claude-sonnet-4-6"
-            />
-            <datalist id="ai-model-list">
-              {presets.map(m => <option key={m} value={m} />)}
-            </datalist>
-          </Field>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+              <span style={{ fontSize: 13, color: 'var(--muted)' }}>模型</span>
+              <button
+                type="button"
+                className="ghost-button compact"
+                style={{ fontSize: 12, padding: '3px 8px' }}
+                disabled={!canFetch || fetching}
+                onClick={handleFetchModels}
+                title={canFetch ? '从 Base URL 获取模型列表' : '请先填写 Base URL 和 API Key'}
+              >
+                {fetching
+                  ? <Loader2 size={12} style={{ animation: 'spin 0.9s linear infinite' }} />
+                  : <RefreshCw size={12} />
+                }
+                {fetching ? '获取中…' : '获取模型列表'}
+              </button>
+              {fetchError && (
+                <span style={{ fontSize: 12, color: 'var(--red)' }} title={fetchError}>获取失败</span>
+              )}
+            </div>
+
+            {fetchedModels ? (
+              <select
+                value={form.model}
+                onChange={e => setForm(f => ({ ...f, model: e.target.value }))}
+                style={{ width: '100%' }}
+              >
+                {fetchedModels.map(m => <option key={m} value={m}>{m}</option>)}
+              </select>
+            ) : (
+              <>
+                <input
+                  list="ai-model-list"
+                  value={form.model}
+                  onChange={e => setForm(f => ({ ...f, model: e.target.value }))}
+                  placeholder="claude-sonnet-4-6"
+                  style={{ width: '100%' }}
+                />
+                <datalist id="ai-model-list">
+                  {fallbackPresets.map(m => <option key={m} value={m} />)}
+                </datalist>
+              </>
+            )}
+          </div>
         </div>
 
-        <div className="modal-actions">
-          <button className="ghost-button" type="button" onClick={onClose}>取消</button>
-          <button className="primary-action compact" type="submit">
-            <Bot size={15} />
-            保存
-          </button>
+        <div className="modal-actions" style={{ justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <button
+              type="button"
+              className="ghost-button compact"
+              disabled={!canFetch || testStatus === 'testing'}
+              onClick={handleTestConnection}
+            >
+              {testStatus === 'testing'
+                ? <Loader2 size={13} style={{ animation: 'spin 0.9s linear infinite' }} />
+                : null}
+              {testStatus === 'testing' ? '测试中…' : '测试连接'}
+            </button>
+            {testStatus === 'ok' && (
+              <span style={{ fontSize: 12, color: 'var(--lime)' }}>✓ 连接正常</span>
+            )}
+            {testStatus === 'error' && (
+              <span style={{ fontSize: 12, color: 'var(--red)' }} title={testError}>✗ 连接失败</span>
+            )}
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="ghost-button" type="button" onClick={onClose}>取消</button>
+            <button className="primary-action compact" type="submit">
+              <Bot size={15} />
+              保存
+            </button>
+          </div>
         </div>
       </form>
     </div>
