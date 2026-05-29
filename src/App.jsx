@@ -4,6 +4,9 @@ import { loadAISettings } from "./lib/aiSettings.js";
 import { AISettingsModal } from "./components/AISettingsModal.jsx";
 import { AIImportButton } from "./components/AIImportButton.jsx";
 import { AIChatPanel } from "./components/AIChatPanel.jsx";
+import { exportTableToExcel } from "./lib/exporter.js";
+import { exportBackup, importBackup } from "./lib/backup.js";
+import { DeliveryPrintModal } from "./components/DeliveryPrintModal.jsx";
 import { AgGridReact } from "ag-grid-react";
 import {
   AllCommunityModule,
@@ -26,6 +29,10 @@ import {
   UserRoundPlus,
   X,
   Bot,
+  Download,
+  AlertTriangle,
+  Archive,
+  Printer,
 } from "lucide-react";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
@@ -337,6 +344,8 @@ function App() {
   const [editingCustomer, setEditingCustomer] = useState(null);
   const [aiSettings, setAISettings] = useState(loadAISettings);
   const [showAISettings, setShowAISettings] = useState(false);
+  const backupInputRef = useRef();
+  const [printDelivery, setPrintDelivery] = useState(null);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(customers));
@@ -362,6 +371,23 @@ function App() {
         .some((text) => text.toLowerCase().includes(keyword)),
     );
   }, [customers, searchText]);
+
+  const alertMap = useMemo(() => {
+    const map = {};
+    const todayTs = new Date().setHours(0, 0, 0, 0);
+    const warnTs = todayTs + 3 * 86_400_000;
+    for (const customer of customers) {
+      let severity = null;
+      for (const order of customer.orders || []) {
+        if (["已完成", "异常"].includes(order.status) || !order.dueDate) continue;
+        const dueTs = new Date(order.dueDate).setHours(0, 0, 0, 0);
+        if (dueTs < todayTs) { severity = "danger"; break; }
+        if (dueTs <= warnTs && severity !== "danger") severity = "warning";
+      }
+      if (severity) map[customer.id] = severity;
+    }
+    return map;
+  }, [customers]);
 
   const metrics = useMemo(() => {
     const allOrders = customers.flatMap((customer) => customer.orders || []);
@@ -520,6 +546,21 @@ function App() {
     });
   };
 
+  const handleRestore = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    e.target.value = "";
+    try {
+      const data = await importBackup(file);
+      if (window.confirm(`恢复备份将覆盖当前所有数据（共 ${data.length} 个客户）。确认继续？`)) {
+        setCustomers(data);
+        setSelectedCustomerId(data[0]?.id);
+      }
+    } catch (err) {
+      alert(`恢复失败：${err.message}`);
+    }
+  };
+
   const resetDemoData = () => {
     setCustomers(initialCustomers);
     setSelectedCustomerId(initialCustomers[0]?.id);
@@ -570,7 +611,15 @@ function App() {
               type="button"
               onClick={() => setSelectedCustomerId(customer.id)}
             >
-              <span className="customer-name">{customer.name}</span>
+              <span className="customer-name">
+                {customer.name}
+                {alertMap[customer.id] && (
+                  <span
+                    className={`alert-dot alert-dot--${alertMap[customer.id]}`}
+                    title={alertMap[customer.id] === "danger" ? "有订单已逾期" : "有订单即将到期"}
+                  />
+                )}
+              </span>
               <span className="customer-meta">
                 {customer.contact || "未填联系人"} · {customer.level}
               </span>
@@ -579,6 +628,31 @@ function App() {
         </div>
 
         <div className="sidebar-footer">
+          <input
+            ref={backupInputRef}
+            type="file"
+            accept=".json"
+            style={{ display: "none" }}
+            onChange={handleRestore}
+          />
+          <button
+            className="ghost-button"
+            type="button"
+            title="导出全部客户数据为 JSON 备份文件"
+            onClick={() => exportBackup(customers)}
+          >
+            <Archive size={14} />
+            备份数据
+          </button>
+          <button
+            className="ghost-button"
+            type="button"
+            title="从备份文件恢复数据（将覆盖当前数据）"
+            onClick={() => backupInputRef.current.click()}
+          >
+            <Archive size={14} />
+            恢复备份
+          </button>
           <button className="ghost-button" type="button" onClick={resetDemoData}>
             恢复演示数据
           </button>
@@ -624,6 +698,15 @@ function App() {
             </article>
           ))}
         </section>
+
+        {selectedCustomer && alertMap[selectedCustomer.id] && (
+          <section className={`alert-banner alert-banner--${alertMap[selectedCustomer.id]}`}>
+            <AlertTriangle size={15} />
+            {alertMap[selectedCustomer.id] === "danger"
+              ? "该客户有订单已逾期，请尽快跟进。"
+              : "该客户有订单 3 天内到期，请注意安排。"}
+          </section>
+        )}
 
         <section className="customer-panel">
           <div className="profile-strip">
@@ -673,6 +756,22 @@ function App() {
                   onImport={handleAIImport}
                 />
               )}
+              {selectedCustomer && (
+                <button
+                  className="secondary-button"
+                  type="button"
+                  title="导出当前表格为 Excel"
+                  onClick={() =>
+                    exportTableToExcel(selectedCustomer, activeTable, [
+                      ...tableConfigs[activeTable].defaultColumns,
+                      ...(selectedCustomer.customColumns?.[activeTable] || []),
+                    ])
+                  }
+                >
+                  <Download size={15} />
+                  导出 Excel
+                </button>
+              )}
               <button
                 className="secondary-button"
                 type="button"
@@ -702,6 +801,7 @@ function App() {
               quickFilter={quickFilter}
               onRowsChange={handleRowsChange}
               onDeleteRows={deleteRows}
+              onPrintRow={activeTable === "deliveries" ? setPrintDelivery : null}
             />
           ) : (
             <div className="empty-state">请先新增或选择一个客户。</div>
@@ -759,6 +859,14 @@ function App() {
         aiSettings={aiSettings}
         onApplyChanges={handleApplyChanges}
       />
+
+      {printDelivery && selectedCustomer && (
+        <DeliveryPrintModal
+          delivery={printDelivery}
+          customer={selectedCustomer}
+          onClose={() => setPrintDelivery(null)}
+        />
+      )}
     </div>
   );
 }
@@ -769,6 +877,7 @@ function BusinessGrid({
   quickFilter,
   onRowsChange,
   onDeleteRows,
+  onPrintRow = null,
 }) {
   const gridRef = useRef(null);
   const config = tableConfigs[tableKey];
@@ -779,21 +888,33 @@ function BusinessGrid({
     const actionColumn = {
       field: "__actions",
       headerName: "",
-      width: 68,
+      width: onPrintRow ? 100 : 68,
       pinned: "right",
       sortable: false,
       filter: false,
       resizable: false,
       editable: false,
       cellRenderer: (params) => (
-        <button
-          className="grid-delete"
-          type="button"
-          title="删除该行"
-          onClick={() => onDeleteRows(tableKey, [params.data.id])}
-        >
-          <X size={15} />
-        </button>
+        <div style={{ display: "flex", gap: 4, alignItems: "center", height: "100%" }}>
+          {onPrintRow && (
+            <button
+              className="grid-delete"
+              type="button"
+              title="打印送货单"
+              onClick={() => onPrintRow(params.data)}
+            >
+              <Printer size={14} />
+            </button>
+          )}
+          <button
+            className="grid-delete"
+            type="button"
+            title="删除该行"
+            onClick={() => onDeleteRows(tableKey, [params.data.id])}
+          >
+            <X size={15} />
+          </button>
+        </div>
       ),
     };
 

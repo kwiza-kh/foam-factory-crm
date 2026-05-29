@@ -874,3 +874,34 @@ h4 {
 .ai-chat-input-row input:disabled {
   opacity: 0.4;
 }
+
+/* ── 到期预警 ─────────────────────────────────── */
+.alert-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-left: 6px;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+.alert-dot--danger  { background: var(--red);   box-shadow: 0 0 4px var(--red); }
+.alert-dot--warning { background: var(--amber); box-shadow: 0 0 4px var(--amber); }
+
+.alert-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 20px;
+  font-size: 13px;
+  font-weight: 500;
+}
+.alert-banner--danger  { background: rgba(255, 107, 132, 0.12); color: var(--red);   border-bottom: 1px solid rgba(255, 107, 132, 0.25); }
+.alert-banner--warning { background: rgba(255, 202, 104, 0.10); color: var(--amber); border-bottom: 1px solid rgba(255, 202, 104, 0.22); }
+
+/* ── 侧栏备份按钮并排 ─────────────────────────── */
+.sidebar-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
