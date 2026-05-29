@@ -3,6 +3,7 @@ import { makeId, today } from "./lib/utils.js";
 import { loadAISettings } from "./lib/aiSettings.js";
 import { AISettingsModal } from "./components/AISettingsModal.jsx";
 import { AIImportButton } from "./components/AIImportButton.jsx";
+import { AIChatPanel } from "./components/AIChatPanel.jsx";
 import { AgGridReact } from "ag-grid-react";
 import {
   AllCommunityModule,
@@ -495,6 +496,30 @@ function App() {
     }));
   };
 
+  const handleApplyChanges = (changes) => {
+    updateSelectedCustomer((customer) => {
+      let updated = { ...customer };
+      for (const change of changes) {
+        if (change.table === "deliveries") continue;
+        if (change.action === "update" && change.id && change.patch) {
+          updated[change.table] = (updated[change.table] || []).map((row) =>
+            row.id === change.id ? { ...row, ...change.patch } : row,
+          );
+        } else if (change.action === "add" && change.row) {
+          updated[change.table] = [
+            ...(updated[change.table] || []),
+            { id: makeId(change.table), ...change.row },
+          ];
+        } else if (change.action === "delete" && change.id) {
+          updated[change.table] = (updated[change.table] || []).filter(
+            (row) => row.id !== change.id,
+          );
+        }
+      }
+      return updated;
+    });
+  };
+
   const resetDemoData = () => {
     setCustomers(initialCustomers);
     setSelectedCustomerId(initialCustomers[0]?.id);
@@ -728,6 +753,12 @@ function App() {
           onSave={setAISettings}
         />
       )}
+
+      <AIChatPanel
+        customer={selectedCustomer}
+        aiSettings={aiSettings}
+        onApplyChanges={handleApplyChanges}
+      />
     </div>
   );
 }
