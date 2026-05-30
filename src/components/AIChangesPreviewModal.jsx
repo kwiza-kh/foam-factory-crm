@@ -2,7 +2,7 @@ import { Check, X } from 'lucide-react';
 
 const TABLE_LABELS = { products: '产品', orders: '订单', deliveries: '送货单' };
 const ACTION_LABELS = { update: '修改', add: '新增', delete: '删除' };
-const ACTION_COLORS = { update: 'var(--amber)', add: 'var(--lime)', delete: 'var(--red)' };
+const ACTION_COLORS = { update: 'var(--amber)', add: 'var(--green)', delete: 'var(--red)' };
 
 export function AIChangesPreviewModal({ changes, customer, onConfirm, onClose }) {
   const getRow = (table, id) => customer[table]?.find(r => r.id === id);
@@ -40,12 +40,12 @@ export function AIChangesPreviewModal({ changes, customer, onConfirm, onClose })
                       {existing?.[k] !== undefined && (
                         <span style={{ textDecoration: 'line-through', opacity: 0.5 }}>{String(existing[k])}</span>
                       )}
-                      <span style={{ color: 'var(--lime)' }}>→ {String(v)}</span>
+                      <span style={{ color: 'var(--green)' }}>→ {String(v)}</span>
                     </div>
                   ))
                 }
                 {change.action === 'add' && (
-                  <span style={{ color: 'var(--lime)', wordBreak: 'break-all' }}>
+                  <span style={{ color: 'var(--green)', wordBreak: 'break-all' }}>
                     {JSON.stringify(change.row)}
                   </span>
                 )}

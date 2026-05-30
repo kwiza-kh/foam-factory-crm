@@ -1,4 +1,30 @@
 /**
+ * Build a one-shot example for the AI showing expected input→output mapping.
+ * Uses the actual target columns to construct a realistic example.
+ */
+function buildExample(tableLabel, columns) {
+  const fields = columns.filter(c => c.field !== '__actions');
+  const exampleInput = {};
+  const exampleOutput = {};
+  for (const col of fields) {
+    const sample = col.type === 'number' ? '100' : col.type === 'date' ? '2025-01-15' : `示例${col.headerName}`;
+    exampleInput[`${col.headerName}列`] = col.required ? sample : '';
+    exampleOutput[col.field] = col.required ? sample : '';
+  }
+  return `示例输入：${JSON.stringify(exampleInput)}\n示例输出：${JSON.stringify(exampleOutput)}`;
+}
+
+function trimRows(rows) {
+  return rows.map(row => {
+    const cleaned = {};
+    for (const [k, v] of Object.entries(row)) {
+      cleaned[k.trim()] = typeof v === 'string' ? v.trim() : v;
+    }
+    return cleaned;
+  });
+}
+
+/**
  * buildImportMessages — 构建导入用的 AI 消息列表
  * @param {string} tableLabel  — 中文表名，如 "产品"
  * @param {Array}  columns     — defaultColumns + customColumns 合并后的数组
@@ -6,8 +32,8 @@
  * @returns {Array}            — Anthropic 格式的 messages 数组
  */
 export function buildImportMessages(tableLabel, columns, parsed) {
-  const fieldDesc = columns
-    .filter(col => col.field !== '__actions')
+  const fields = columns.filter(col => col.field !== '__actions');
+  const fieldDesc = fields
     .map(col => {
       let desc = `- ${col.field}（${col.headerName}`;
       if (col.required) desc += '，必填';
@@ -23,6 +49,15 @@ export function buildImportMessages(tableLabel, columns, parsed) {
 目标字段：
 ${fieldDesc}
 
+规则：
+1. 根据列名语义自动匹配，不要依赖列的顺序
+2. 数字字段去掉逗号、百分号、单位符号，只保留纯数字（如 "1,234 元" → "1234"）
+3. 日期统一转为 YYYY-MM-DD 格式（如 "2025年1月5日" → "2025-01-05"）
+4. 无法匹配的字段留空字符串 ""，严禁编造数据
+5. 跳过完全空白的行
+
+${buildExample(tableLabel, columns)}
+
 只返回 JSON 数组，不要包含任何其他文字、注释或 markdown 代码块。`;
 
   if (parsed.type === 'image') {
@@ -36,7 +71,7 @@ ${fieldDesc}
   }
 
   const dataSection = parsed.type === 'rows'
-    ? `原始数据（JSON）：\n${JSON.stringify(parsed.rows, null, 2)}`
+    ? `原始数据（JSON）：\n${JSON.stringify(trimRows(parsed.rows), null, 2)}`
     : `原始文本：\n${parsed.text}`;
 
   return [{ role: 'user', content: `${instruction}\n\n${dataSection}` }];

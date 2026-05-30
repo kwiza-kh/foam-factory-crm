@@ -1,27 +1,30 @@
-import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
 
-export function exportTableToExcel(customer, tableKey, columns) {
+export async function exportTableToExcel(customer, tableKey, columns) {
   const rows = customer[tableKey] || [];
   const cols = columns.filter(c => c.field !== '__actions' && c.field !== 'id');
-
   const headers = cols.map(c => c.headerName);
   const data = rows.map(row => cols.map(col => row[col.field] ?? ''));
 
-  const ws = XLSX.utils.aoa_to_sheet([headers, ...data]);
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet(tableKey);
 
-  // Auto-width columns
-  const colWidths = headers.map((h, i) => {
-    const maxLen = Math.max(
-      h.length,
-      ...data.map(r => String(r[i] ?? '').length),
-    );
-    return { wch: Math.min(maxLen + 2, 40) };
+  ws.columns = headers.map((h, i) => {
+    const maxLen = Math.max(h.length, ...data.map(r => String(r[i] ?? '').length));
+    return { header: h, width: Math.min(maxLen + 2, 40) };
   });
-  ws['!cols'] = colWidths;
 
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, tableKey);
+  data.forEach(row => ws.addRow(row));
 
+  const buffer = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buffer], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
   const date = new Date().toISOString().slice(0, 10);
-  XLSX.writeFile(wb, `${customer.name}_${tableKey}_${date}.xlsx`);
+  a.href = url;
+  a.download = `${customer.name}_${tableKey}_${date}.xlsx`;
+  a.click();
+  URL.revokeObjectURL(url);
 }

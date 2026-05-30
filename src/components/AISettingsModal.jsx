@@ -178,7 +178,7 @@ export function AISettingsModal({ settings, onClose, onSave }) {
               {testStatus === 'testing' ? '测试中…' : '测试连接'}
             </button>
             {testStatus === 'ok' && (
-              <span style={{ fontSize: 12, color: 'var(--lime)' }}>✓ 连接正常</span>
+              <span style={{ fontSize: 12, color: 'var(--green)' }}>✓ 连接正常</span>
             )}
             {testStatus === 'error' && (
               <span style={{ fontSize: 12, color: 'var(--red)' }} title={testError}>✗ 连接失败</span>

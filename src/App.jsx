@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { makeId, today } from "./lib/utils.js";
+import { api } from "./lib/api.js";
 import { loadAISettings } from "./lib/aiSettings.js";
 import { AISettingsModal } from "./components/AISettingsModal.jsx";
 import { AIImportButton } from "./components/AIImportButton.jsx";
@@ -18,6 +19,7 @@ import {
   ClipboardList,
   FilePlus2,
   Filter,
+  KanbanSquare,
   LayoutDashboard,
   PackageCheck,
   Plus,
@@ -25,6 +27,7 @@ import {
   Search,
   Settings2,
   SquarePen,
+  Trash2,
   Truck,
   UserRoundPlus,
   X,
@@ -36,8 +39,6 @@ import {
 } from "lucide-react";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
-
-const STORAGE_KEY = "foam-factory-crm:v1";
 
 const statusOptions = ["待确认", "生产中", "待发货", "已发货", "已完成", "异常"];
 const deliveryStatusOptions = ["待装车", "配送中", "已签收", "回单异常"];
@@ -320,22 +321,10 @@ const toFieldKey = (label) =>
     .replace(/[^a-z0-9\u4e00-\u9fa5]+/gi, "_")
     .replace(/^_+|_+$/g, "")}_${Math.random().toString(36).slice(2, 5)}`;
 
-function loadCustomers() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return initialCustomers;
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) && parsed.length ? parsed : initialCustomers;
-  } catch {
-    return initialCustomers;
-  }
-}
-
 function App() {
-  const [customers, setCustomers] = useState(loadCustomers);
-  const [selectedCustomerId, setSelectedCustomerId] = useState(
-    () => loadCustomers()[0]?.id,
-  );
+  const [customers, setCustomers] = useState([]);
+  const [selectedCustomerId, setSelectedCustomerId] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [activeTable, setActiveTable] = useState("orders");
   const [searchText, setSearchText] = useState("");
   const [quickFilter, setQuickFilter] = useState("");
@@ -346,10 +335,17 @@ function App() {
   const [showAISettings, setShowAISettings] = useState(false);
   const backupInputRef = useRef();
   const [printDelivery, setPrintDelivery] = useState(null);
+  const [showKanban, setShowKanban] = useState(false);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(customers));
-  }, [customers]);
+    api.getCustomers()
+      .then(data => {
+        setCustomers(data);
+        if (data.length) setSelectedCustomerId(data[0].id);
+      })
+      .catch(err => alert(`加载失败：${err.message}`))
+      .finally(() => setLoading(false));
+  }, []);
 
   const selectedCustomer = useMemo(
     () => customers.find((customer) => customer.id === selectedCustomerId),
@@ -428,71 +424,85 @@ function App() {
     );
   };
 
-  const handleRowsChange = (tableKey, rows) => {
-    updateSelectedCustomer((customer) => ({
-      ...customer,
-      [tableKey]: rows,
-    }));
+  const handleRowsChange = async (tableKey, rows) => {
+    updateSelectedCustomer(c => ({ ...c, [tableKey]: rows }));
+    try {
+      await api.setRows(selectedCustomerId, tableKey, rows);
+    } catch (err) {
+      alert(`保存失败：${err.message}`);
+    }
   };
 
-  const addRow = (tableKey) => {
+  const addRow = async (tableKey) => {
     const config = tableConfigs[tableKey];
-    updateSelectedCustomer((customer) => ({
-      ...customer,
-      [tableKey]: [
-        { id: makeId(tableKey), ...config.emptyRow, date: today() },
-        ...(customer[tableKey] || []),
-      ],
-    }));
+    const newRow = { id: makeId(tableKey), ...config.emptyRow, date: today() };
+    const newRows = [newRow, ...(selectedCustomer?.[tableKey] || [])];
+    updateSelectedCustomer(c => ({ ...c, [tableKey]: newRows }));
+    try {
+      await api.setRows(selectedCustomerId, tableKey, newRows);
+    } catch (err) {
+      alert(`保存失败：${err.message}`);
+    }
   };
 
-  const deleteRows = (tableKey, ids) => {
-    updateSelectedCustomer((customer) => ({
-      ...customer,
-      [tableKey]: (customer[tableKey] || []).filter((row) => !ids.includes(row.id)),
+  const deleteRows = async (tableKey, ids) => {
+    updateSelectedCustomer(c => ({
+      ...c,
+      [tableKey]: (c[tableKey] || []).filter(r => !ids.includes(r.id)),
     }));
+    try {
+      await api.deleteRows(selectedCustomerId, tableKey, ids);
+    } catch (err) {
+      alert(`删除失败：${err.message}`);
+    }
   };
 
-  const addCustomColumn = (tableKey, column) => {
-    updateSelectedCustomer((customer) => ({
-      ...customer,
-      customColumns: {
-        ...customer.customColumns,
-        [tableKey]: [...(customer.customColumns?.[tableKey] || []), column],
-      },
-    }));
+  const addCustomColumn = async (tableKey, column) => {
+    const newCustomColumns = {
+      ...selectedCustomer.customColumns,
+      [tableKey]: [...(selectedCustomer.customColumns?.[tableKey] || []), column],
+    };
+    updateSelectedCustomer(c => ({ ...c, customColumns: newCustomColumns }));
+    try {
+      await api.updateCustomer(selectedCustomerId, { ...selectedCustomer, customColumns: newCustomColumns });
+    } catch (err) {
+      alert(`保存失败：${err.message}`);
+    }
   };
 
-  const removeCustomColumn = (tableKey, field) => {
-    updateSelectedCustomer((customer) => {
-      const rows = (customer[tableKey] || []).map((row) => {
-        const nextRow = { ...row };
-        delete nextRow[field];
-        return nextRow;
-      });
-      return {
-        ...customer,
-        [tableKey]: rows,
-        customColumns: {
-          ...customer.customColumns,
-          [tableKey]: (customer.customColumns?.[tableKey] || []).filter(
-            (column) => column.field !== field,
-          ),
-        },
-      };
+  const removeCustomColumn = async (tableKey, field) => {
+    const cleanedRows = (selectedCustomer[tableKey] || []).map(row => {
+      const next = { ...row };
+      delete next[field];
+      return next;
     });
+    const newCustomColumns = {
+      ...selectedCustomer.customColumns,
+      [tableKey]: (selectedCustomer.customColumns?.[tableKey] || []).filter(c => c.field !== field),
+    };
+    updateSelectedCustomer(c => ({ ...c, [tableKey]: cleanedRows, customColumns: newCustomColumns }));
+    try {
+      await Promise.all([
+        api.updateCustomer(selectedCustomerId, { ...selectedCustomer, customColumns: newCustomColumns }),
+        api.setRows(selectedCustomerId, tableKey, cleanedRows),
+      ]);
+    } catch (err) {
+      alert(`保存失败：${err.message}`);
+    }
   };
 
-  const upsertCustomer = (customerInput) => {
+  const upsertCustomer = async (customerInput) => {
     if (customerInput.id) {
-      setCustomers((current) =>
-        current.map((customer) =>
-          customer.id === customerInput.id ? { ...customer, ...customerInput } : customer,
-        ),
+      setCustomers(current =>
+        current.map(c => c.id === customerInput.id ? { ...c, ...customerInput } : c),
       );
+      try {
+        await api.updateCustomer(customerInput.id, customerInput);
+      } catch (err) {
+        alert(`保存失败：${err.message}`);
+      }
       return;
     }
-
     const newCustomer = {
       id: makeId("cus"),
       name: customerInput.name,
@@ -508,42 +518,56 @@ function App() {
       orders: [],
       deliveries: [],
     };
-    setCustomers((current) => [newCustomer, ...current]);
+    setCustomers(current => [newCustomer, ...current]);
     setSelectedCustomerId(newCustomer.id);
+    try {
+      await api.createCustomer(newCustomer);
+    } catch (err) {
+      alert(`保存失败：${err.message}`);
+    }
   };
 
-  const handleAIImport = (tableKey, rows) => {
-    updateSelectedCustomer((customer) => ({
-      ...customer,
-      [tableKey]: [
-        ...(customer[tableKey] || []),
-        ...rows.map((row) => ({ id: makeId(tableKey), ...row })),
-      ],
-    }));
+  const handleAIImport = async (tableKey, rows) => {
+    const newRows = [
+      ...(selectedCustomer[tableKey] || []),
+      ...rows.map(row => ({ id: makeId(tableKey), ...row })),
+    ];
+    updateSelectedCustomer(c => ({ ...c, [tableKey]: newRows }));
+    try {
+      await api.setRows(selectedCustomerId, tableKey, newRows);
+    } catch (err) {
+      alert(`保存失败：${err.message}`);
+    }
   };
 
-  const handleApplyChanges = (changes) => {
-    updateSelectedCustomer((customer) => {
-      let updated = { ...customer };
-      for (const change of changes) {
-        if (change.table === "deliveries") continue;
-        if (change.action === "update" && change.id && change.patch) {
-          updated[change.table] = (updated[change.table] || []).map((row) =>
-            row.id === change.id ? { ...row, ...change.patch } : row,
-          );
-        } else if (change.action === "add" && change.row) {
-          updated[change.table] = [
-            ...(updated[change.table] || []),
-            { id: makeId(change.table), ...change.row },
-          ];
-        } else if (change.action === "delete" && change.id) {
-          updated[change.table] = (updated[change.table] || []).filter(
-            (row) => row.id !== change.id,
-          );
-        }
+  const handleApplyChanges = async (changes) => {
+    let updated = { ...selectedCustomer };
+    for (const change of changes) {
+      if (change.table === "deliveries") continue;
+      if (change.action === "update" && change.id && change.patch) {
+        updated[change.table] = (updated[change.table] || []).map(row =>
+          row.id === change.id ? { ...row, ...change.patch } : row,
+        );
+      } else if (change.action === "add" && change.row) {
+        updated[change.table] = [
+          ...(updated[change.table] || []),
+          { id: makeId(change.table), ...change.row },
+        ];
+      } else if (change.action === "delete" && change.id) {
+        updated[change.table] = (updated[change.table] || []).filter(row => row.id !== change.id);
       }
-      return updated;
-    });
+    }
+    setCustomers(current => current.map(c => c.id === selectedCustomerId ? updated : c));
+    const affectedTables = [...new Set(
+      changes.filter(c => c.table !== 'deliveries').map(c => c.table),
+    )];
+    try {
+      await Promise.all(affectedTables.map(table =>
+        api.setRows(selectedCustomerId, table, updated[table] || []),
+      ));
+    } catch (err) {
+      alert(`保存失败：${err.message}`);
+    }
   };
 
   const handleRestore = async (e) => {
@@ -553,6 +577,7 @@ function App() {
     try {
       const data = await importBackup(file);
       if (window.confirm(`恢复备份将覆盖当前所有数据（共 ${data.length} 个客户）。确认继续？`)) {
+        await api.replaceAll(data);
         setCustomers(data);
         setSelectedCustomerId(data[0]?.id);
       }
@@ -561,11 +586,54 @@ function App() {
     }
   };
 
-  const resetDemoData = () => {
-    setCustomers(initialCustomers);
-    setSelectedCustomerId(initialCustomers[0]?.id);
-    setActiveTable("orders");
+  const handleColumnOrderChange = useCallback(async (tableKey, order) => {
+    const newCustomColumns = {
+      ...selectedCustomer.customColumns,
+      columnOrder: {
+        ...(selectedCustomer.customColumns?.columnOrder || {}),
+        [tableKey]: order,
+      },
+    };
+    updateSelectedCustomer(c => ({ ...c, customColumns: newCustomColumns }));
+    try {
+      await api.updateCustomer(selectedCustomerId, { ...selectedCustomer, customColumns: newCustomColumns });
+    } catch (err) {
+      alert(`保存失败：${err.message}`);
+    }
+  }, [selectedCustomer, selectedCustomerId]);
+
+  const deleteCustomer = async (id) => {
+    if (!window.confirm('确认删除该客户？此操作不可恢复，包括所有订单和送货记录。')) return;
+    setCustomers(current => current.filter(c => c.id !== id));
+    if (selectedCustomerId === id) {
+      const remaining = customers.filter(c => c.id !== id);
+      setSelectedCustomerId(remaining[0]?.id || null);
+    }
+    try {
+      await api.deleteCustomer(id);
+    } catch (err) {
+      alert(`删除失败：${err.message}`);
+    }
   };
+
+  const resetDemoData = async () => {
+    try {
+      await api.replaceAll(initialCustomers);
+      setCustomers(initialCustomers);
+      setSelectedCustomerId(initialCustomers[0]?.id);
+      setActiveTable("orders");
+    } catch (err) {
+      alert(`重置失败：${err.message}`);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="app-shell" style={{ alignItems: 'center', justifyContent: 'center' }}>
+        <p style={{ color: '#82e5ff', fontSize: '1rem' }}>正在连接数据库...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="app-shell">
@@ -592,6 +660,15 @@ function App() {
           新增客户
         </button>
 
+        <button
+          className={`ghost-button kanban-toggle ${showKanban ? 'is-active' : ''}`}
+          type="button"
+          onClick={() => setShowKanban(v => !v)}
+        >
+          <KanbanSquare size={15} />
+          订单看板
+        </button>
+
         <label className="search-box">
           <Search size={16} />
           <input
@@ -603,27 +680,37 @@ function App() {
 
         <div className="customer-list" aria-label="客户列表">
           {filteredCustomers.map((customer) => (
-            <button
-              className={`customer-item ${
-                customer.id === selectedCustomerId ? "is-active" : ""
-              }`}
+            <div
+              className={`customer-item ${customer.id === selectedCustomerId ? "is-active" : ""}`}
               key={customer.id}
-              type="button"
-              onClick={() => setSelectedCustomerId(customer.id)}
             >
-              <span className="customer-name">
-                {customer.name}
-                {alertMap[customer.id] && (
-                  <span
-                    className={`alert-dot alert-dot--${alertMap[customer.id]}`}
-                    title={alertMap[customer.id] === "danger" ? "有订单已逾期" : "有订单即将到期"}
-                  />
-                )}
-              </span>
-              <span className="customer-meta">
-                {customer.contact || "未填联系人"} · {customer.level}
-              </span>
-            </button>
+              <button
+                className="customer-item-body"
+                type="button"
+                onClick={() => setSelectedCustomerId(customer.id)}
+              >
+                <span className="customer-name">
+                  {customer.name}
+                  {alertMap[customer.id] && (
+                    <span
+                      className={`alert-dot alert-dot--${alertMap[customer.id]}`}
+                      title={alertMap[customer.id] === "danger" ? "有订单已逾期" : "有订单即将到期"}
+                    />
+                  )}
+                </span>
+                <span className="customer-meta">
+                  {customer.contact || "未填联系人"} · {customer.level}
+                </span>
+              </button>
+              <button
+                className="customer-delete"
+                type="button"
+                title="删除客户"
+                onClick={() => deleteCustomer(customer.id)}
+              >
+                <Trash2 size={13} />
+              </button>
+            </div>
           ))}
         </div>
 
@@ -699,114 +786,121 @@ function App() {
           ))}
         </section>
 
-        {selectedCustomer && alertMap[selectedCustomer.id] && (
-          <section className={`alert-banner alert-banner--${alertMap[selectedCustomer.id]}`}>
-            <AlertTriangle size={15} />
-            {alertMap[selectedCustomer.id] === "danger"
-              ? "该客户有订单已逾期，请尽快跟进。"
-              : "该客户有订单 3 天内到期，请注意安排。"}
-          </section>
-        )}
+        {showKanban ? (
+          <OrderKanban customers={customers} onSelectCustomer={id => { setSelectedCustomerId(id); setShowKanban(false); }} />
+        ) : (
+          <>
+            {selectedCustomer && alertMap[selectedCustomer.id] && (
+              <section className={`alert-banner alert-banner--${alertMap[selectedCustomer.id]}`}>
+                <AlertTriangle size={15} />
+                {alertMap[selectedCustomer.id] === "danger"
+                  ? "该客户有订单已逾期，请尽快跟进。"
+                  : "该客户有订单 3 天内到期，请注意安排。"}
+              </section>
+            )}
 
-        <section className="customer-panel">
-          <div className="profile-strip">
-            <InfoPill label="联系人" value={selectedCustomer?.contact} />
-            <InfoPill label="电话" value={selectedCustomer?.phone} />
-            <InfoPill label="账期" value={selectedCustomer?.paymentTerm} />
-            <InfoPill label="地址" value={selectedCustomer?.address} wide />
-          </div>
-        </section>
+            <section className="customer-panel">
+              <div className="profile-strip">
+                <InfoPill label="联系人" value={selectedCustomer?.contact} />
+                <InfoPill label="电话" value={selectedCustomer?.phone} />
+                <InfoPill label="账期" value={selectedCustomer?.paymentTerm} />
+                <InfoPill label="地址" value={selectedCustomer?.address} wide />
+              </div>
+            </section>
 
-        <section className="table-section">
-          <div className="table-toolbar">
-            <div className="tabs" role="tablist" aria-label="业务模块">
-              {Object.entries(tableConfigs).map(([key, config]) => {
-                const Icon = config.icon;
-                return (
+            <section className="table-section">
+              <div className="table-toolbar">
+                <div className="tabs" role="tablist" aria-label="业务模块">
+                  {Object.entries(tableConfigs).map(([key, config]) => {
+                    const Icon = config.icon;
+                    return (
+                      <button
+                        key={key}
+                        className={`tab-button ${activeTable === key ? "is-active" : ""}`}
+                        type="button"
+                        onClick={() => setActiveTable(key)}
+                      >
+                        <Icon size={17} />
+                        {config.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="toolbar-actions">
+                  <label className="filter-box">
+                    <Filter size={16} />
+                    <input
+                      value={quickFilter}
+                      onChange={(event) => setQuickFilter(event.target.value)}
+                      placeholder="筛选当前表格"
+                    />
+                  </label>
+                  {selectedCustomer && (
+                    <AIImportButton
+                      tableKey={activeTable}
+                      tableLabel={tableConfigs[activeTable].rowLabel}
+                      columns={[
+                        ...tableConfigs[activeTable].defaultColumns,
+                        ...(selectedCustomer.customColumns?.[activeTable] || []),
+                      ]}
+                      aiSettings={aiSettings}
+                      onImport={handleAIImport}
+                    />
+                  )}
+                  {selectedCustomer && (
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      title="导出当前表格为 Excel"
+                      onClick={() =>
+                        exportTableToExcel(selectedCustomer, activeTable, [
+                          ...tableConfigs[activeTable].defaultColumns,
+                          ...(selectedCustomer.customColumns?.[activeTable] || []),
+                        ])
+                      }
+                    >
+                      <Download size={15} />
+                      导出 Excel
+                    </button>
+                  )}
                   <button
-                    key={key}
-                    className={`tab-button ${activeTable === key ? "is-active" : ""}`}
+                    className="secondary-button"
                     type="button"
-                    onClick={() => setActiveTable(key)}
+                    onClick={() => setShowColumnModal(true)}
+                    disabled={!selectedCustomer}
                   >
-                    <Icon size={17} />
-                    {config.label}
+                    <Settings2 size={17} />
+                    自定义表头
                   </button>
-                );
-              })}
-            </div>
-            <div className="toolbar-actions">
-              <label className="filter-box">
-                <Filter size={16} />
-                <input
-                  value={quickFilter}
-                  onChange={(event) => setQuickFilter(event.target.value)}
-                  placeholder="筛选当前表格"
-                />
-              </label>
-              {selectedCustomer && (
-                <AIImportButton
-                  tableKey={activeTable}
-                  tableLabel={tableConfigs[activeTable].rowLabel}
-                  columns={[
-                    ...tableConfigs[activeTable].defaultColumns,
-                    ...(selectedCustomer.customColumns?.[activeTable] || []),
-                  ]}
-                  aiSettings={aiSettings}
-                  onImport={handleAIImport}
-                />
-              )}
-              {selectedCustomer && (
-                <button
-                  className="secondary-button"
-                  type="button"
-                  title="导出当前表格为 Excel"
-                  onClick={() =>
-                    exportTableToExcel(selectedCustomer, activeTable, [
-                      ...tableConfigs[activeTable].defaultColumns,
-                      ...(selectedCustomer.customColumns?.[activeTable] || []),
-                    ])
-                  }
-                >
-                  <Download size={15} />
-                  导出 Excel
-                </button>
-              )}
-              <button
-                className="secondary-button"
-                type="button"
-                onClick={() => setShowColumnModal(true)}
-                disabled={!selectedCustomer}
-              >
-                <Settings2 size={17} />
-                自定义表头
-              </button>
-              <button
-                className="primary-action compact"
-                type="button"
-                onClick={() => addRow(activeTable)}
-                disabled={!selectedCustomer}
-              >
-                <Plus size={17} />
-                新增{tableConfigs[activeTable].rowLabel}
-              </button>
-            </div>
-          </div>
+                  <button
+                    className="primary-action compact"
+                    type="button"
+                    onClick={() => addRow(activeTable)}
+                    disabled={!selectedCustomer}
+                  >
+                    <Plus size={17} />
+                    新增{tableConfigs[activeTable].rowLabel}
+                  </button>
+                </div>
+              </div>
 
-          {selectedCustomer ? (
-            <BusinessGrid
-              key={`${selectedCustomer.id}-${activeTable}`}
-              customer={selectedCustomer}
-              tableKey={activeTable}
-              quickFilter={quickFilter}
-              onRowsChange={handleRowsChange}
-              onDeleteRows={deleteRows}
-              onPrintRow={activeTable === "deliveries" ? setPrintDelivery : null}
-            />
-          ) : (
-            <div className="empty-state">请先新增或选择一个客户。</div>
-          )}
-        </section>
+              {selectedCustomer ? (
+                <BusinessGrid
+                  key={`${selectedCustomer.id}-${activeTable}`}
+                  customer={selectedCustomer}
+                  tableKey={activeTable}
+                  quickFilter={quickFilter}
+                  onRowsChange={handleRowsChange}
+                  onDeleteRows={deleteRows}
+                  onPrintRow={activeTable === "deliveries" ? setPrintDelivery : null}
+                  onColumnOrderChange={handleColumnOrderChange}
+                />
+              ) : (
+                <div className="empty-state">请先新增或选择一个客户。</div>
+              )}
+            </section>
+          </>
+        )}
       </main>
 
       <aside className="inspector">
@@ -878,11 +972,13 @@ function BusinessGrid({
   onRowsChange,
   onDeleteRows,
   onPrintRow = null,
+  onColumnOrderChange,
 }) {
   const gridRef = useRef(null);
   const config = tableConfigs[tableKey];
   const rows = customer[tableKey] || [];
   const customColumns = customer.customColumns?.[tableKey] || [];
+  const savedOrder = customer.customColumns?.columnOrder?.[tableKey];
 
   const columnDefs = useMemo(() => {
     const actionColumn = {
@@ -918,12 +1014,21 @@ function BusinessGrid({
       ),
     };
 
-    return [
+    const allCols = [
       ...config.defaultColumns.map(toGridColumn),
       ...customColumns.map(toGridColumn),
-      actionColumn,
     ];
-  }, [config.defaultColumns, customColumns, onDeleteRows, tableKey]);
+
+    if (savedOrder?.length) {
+      allCols.sort((a, b) => {
+        const ai = savedOrder.indexOf(a.field);
+        const bi = savedOrder.indexOf(b.field);
+        return (ai === -1 ? 9999 : ai) - (bi === -1 ? 9999 : bi);
+      });
+    }
+
+    return [...allCols, actionColumn];
+  }, [config.defaultColumns, customColumns, onDeleteRows, tableKey, savedOrder]);
 
   const defaultColDef = useMemo(
     () => ({
@@ -944,6 +1049,14 @@ function BusinessGrid({
     onRowsChange(tableKey, updatedRows);
   };
 
+  const handleDragStopped = useCallback((event) => {
+    if (!onColumnOrderChange) return;
+    const order = event.api.getColumnState()
+      .filter(c => c.colId !== '__actions')
+      .map(c => c.colId);
+    onColumnOrderChange(tableKey, order);
+  }, [onColumnOrderChange, tableKey]);
+
   return (
     <div className="grid-shell">
       <AgGridReact
@@ -958,6 +1071,7 @@ function BusinessGrid({
         localeText={localeText}
         quickFilterText={quickFilter}
         onCellValueChanged={handleCellValueChanged}
+        onDragStopped={handleDragStopped}
         getRowId={(params) => params.data.id}
       />
     </div>
@@ -1005,6 +1119,61 @@ function statusClass(value = "") {
   if (value.includes("生产") || value.includes("配送")) return "is-live";
   if (value.includes("发货") || value.includes("装车")) return "is-waiting";
   return "";
+}
+
+const KANBAN_COLS = ["待确认", "生产中", "待发货", "已发货"];
+
+function OrderKanban({ customers, onSelectCustomer }) {
+  const cards = useMemo(() => {
+    const result = {};
+    for (const col of KANBAN_COLS) result[col] = [];
+    for (const c of customers) {
+      for (const o of c.orders || []) {
+        if (KANBAN_COLS.includes(o.status)) {
+          result[o.status].push({ ...o, customerName: c.name, customerId: c.id });
+        }
+      }
+    }
+    return result;
+  }, [customers]);
+
+  return (
+    <section className="kanban-board">
+      {KANBAN_COLS.map(col => (
+        <div key={col} className="kanban-col">
+          <div className={`kanban-col-header status-chip ${statusClass(col)}`}>
+            {col} <span className="kanban-count">{cards[col].length}</span>
+          </div>
+          <div className="kanban-cards">
+            {cards[col].map(order => (
+              <button
+                key={order.id}
+                className="kanban-card"
+                type="button"
+                onClick={() => onSelectCustomer(order.customerId)}
+              >
+                <span className="kanban-customer">{order.customerName}</span>
+                <span className="kanban-order-no">{order.orderNo}</span>
+                {order.amount > 0 && (
+                  <span className="kanban-amount">
+                    ¥{Number(order.amount).toLocaleString("zh-CN")}
+                  </span>
+                )}
+                {order.dueDate && (
+                  <span className={`kanban-due ${new Date(order.dueDate) < new Date() ? "is-overdue" : ""}`}>
+                    交期 {order.dueDate}
+                  </span>
+                )}
+              </button>
+            ))}
+            {cards[col].length === 0 && (
+              <p className="kanban-empty">暂无订单</p>
+            )}
+          </div>
+        </div>
+      ))}
+    </section>
+  );
 }
 
 function InfoPill({ label, value, wide = false }) {
