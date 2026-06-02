@@ -1,0 +1,58 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Customer {
+  id            String     @id
+  name          String
+  contact       String     @default("")
+  phone         String     @default("")
+  address       String     @default("")
+  level         String     @default("")
+  paymentTerm   String     @default("") @map("payment_term")
+  taxNo         String     @default("") @map("tax_no")
+  note          String     @default("")
+  customColumns Json       @default("{\"products\":[],\"orders\":[],\"deliveries\":[]}") @map("custom_columns")
+  products      Product[]
+  orders        Order[]
+  deliveries    Delivery[]
+
+  @@map("customers")
+}
+
+model Product {
+  id         String   @id
+  customerId String   @map("customer_id")
+  sortOrder  Int      @default(0) @map("sort_order")
+  data       Json     @default("{}")
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId], map: "products_customer_idx")
+  @@map("products")
+}
+
+model Order {
+  id         String   @id
+  customerId String   @map("customer_id")
+  sortOrder  Int      @default(0) @map("sort_order")
+  data       Json     @default("{}")
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId], map: "orders_customer_idx")
+  @@map("orders")
+}
+
+model Delivery {
+  id         String   @id
+  customerId String   @map("customer_id")
+  sortOrder  Int      @default(0) @map("sort_order")
+  data       Json     @default("{}")
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId], map: "deliveries_customer_idx")
+  @@map("deliveries")
+}

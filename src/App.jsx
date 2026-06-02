@@ -1,10 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { makeId, today } from "./lib/utils.js";
 import { api } from "./lib/api.js";
-import { loadAISettings } from "./lib/aiSettings.js";
-import { AISettingsModal } from "./components/AISettingsModal.jsx";
-import { AIImportButton } from "./components/AIImportButton.jsx";
-import { AIChatPanel } from "./components/AIChatPanel.jsx";
+import { OrderImportButton } from "./components/OrderImportButton.jsx";
 import { exportTableToExcel } from "./lib/exporter.js";
 import { exportBackup, importBackup } from "./lib/backup.js";
 import { DeliveryPrintModal } from "./components/DeliveryPrintModal.jsx";
@@ -31,7 +28,6 @@ import {
   Truck,
   UserRoundPlus,
   X,
-  Bot,
   Download,
   AlertTriangle,
   Archive,
@@ -77,22 +73,7 @@ const tableConfigs = {
     label: "订单录入 / 跟进",
     icon: ClipboardList,
     rowLabel: "订单",
-    defaultColumns: [
-      { field: "orderNo", headerName: "订单号", width: 140, required: true },
-      { field: "date", headerName: "下单日期", width: 130, type: "date" },
-      { field: "product", headerName: "产品", width: 150 },
-      { field: "quantity", headerName: "数量", width: 100, type: "number" },
-      { field: "amount", headerName: "金额", width: 120, type: "number" },
-      { field: "dueDate", headerName: "交期", width: 130, type: "date" },
-      {
-        field: "status",
-        headerName: "跟进状态",
-        width: 130,
-        type: "select",
-        options: statusOptions,
-      },
-      { field: "followUp", headerName: "跟进记录", flex: 1, minWidth: 220 },
-    ],
+    defaultColumns: [],
     emptyRow: {
       orderNo: "",
       date: "",
@@ -331,8 +312,6 @@ function App() {
   const [showCustomerModal, setShowCustomerModal] = useState(false);
   const [showColumnModal, setShowColumnModal] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState(null);
-  const [aiSettings, setAISettings] = useState(loadAISettings);
-  const [showAISettings, setShowAISettings] = useState(false);
   const backupInputRef = useRef();
   const [printDelivery, setPrintDelivery] = useState(null);
   const [showKanban, setShowKanban] = useState(false);
@@ -527,44 +506,35 @@ function App() {
     }
   };
 
-  const handleAIImport = async (tableKey, rows) => {
+  const handleOrderImport = async (rows, extraColumns = []) => {
+    const existingColumns = selectedCustomer.customColumns?.orders || [];
+    const existingFields = new Set([
+      ...tableConfigs.orders.defaultColumns.map(column => column.field),
+      ...existingColumns.map(column => column.field),
+    ]);
+    const newExtraColumns = extraColumns.filter(column => !existingFields.has(column.field));
+    const customColumns = {
+      ...selectedCustomer.customColumns,
+      orders: [...existingColumns, ...newExtraColumns],
+    };
     const newRows = [
-      ...(selectedCustomer[tableKey] || []),
-      ...rows.map(row => ({ id: makeId(tableKey), ...row })),
+      ...(selectedCustomer.orders || []),
+      ...rows.map(row => ({
+        ...tableConfigs.orders.emptyRow,
+        id: makeId("orders"),
+        ...row,
+        status: row.status || tableConfigs.orders.emptyRow.status,
+      })),
     ];
-    updateSelectedCustomer(c => ({ ...c, [tableKey]: newRows }));
-    try {
-      await api.setRows(selectedCustomerId, tableKey, newRows);
-    } catch (err) {
-      alert(`保存失败：${err.message}`);
-    }
-  };
 
-  const handleApplyChanges = async (changes) => {
-    let updated = { ...selectedCustomer };
-    for (const change of changes) {
-      if (change.table === "deliveries") continue;
-      if (change.action === "update" && change.id && change.patch) {
-        updated[change.table] = (updated[change.table] || []).map(row =>
-          row.id === change.id ? { ...row, ...change.patch } : row,
-        );
-      } else if (change.action === "add" && change.row) {
-        updated[change.table] = [
-          ...(updated[change.table] || []),
-          { id: makeId(change.table), ...change.row },
-        ];
-      } else if (change.action === "delete" && change.id) {
-        updated[change.table] = (updated[change.table] || []).filter(row => row.id !== change.id);
-      }
-    }
-    setCustomers(current => current.map(c => c.id === selectedCustomerId ? updated : c));
-    const affectedTables = [...new Set(
-      changes.filter(c => c.table !== 'deliveries').map(c => c.table),
-    )];
+    updateSelectedCustomer(c => ({ ...c, orders: newRows, customColumns }));
     try {
-      await Promise.all(affectedTables.map(table =>
-        api.setRows(selectedCustomerId, table, updated[table] || []),
-      ));
+      await Promise.all([
+        newExtraColumns.length
+          ? api.updateCustomer(selectedCustomerId, { ...selectedCustomer, customColumns })
+          : Promise.resolve(),
+        api.setRows(selectedCustomerId, "orders", newRows),
+      ]);
     } catch (err) {
       alert(`保存失败：${err.message}`);
     }
@@ -756,14 +726,6 @@ function App() {
             <button
               className="icon-button"
               type="button"
-              title="AI 设置"
-              onClick={() => setShowAISettings(true)}
-            >
-              <Bot size={18} />
-            </button>
-            <button
-              className="icon-button"
-              type="button"
               title="编辑客户档案"
               onClick={() => {
                 setEditingCustomer(selectedCustomer);
@@ -835,16 +797,10 @@ function App() {
                       placeholder="筛选当前表格"
                     />
                   </label>
-                  {selectedCustomer && (
-                    <AIImportButton
-                      tableKey={activeTable}
-                      tableLabel={tableConfigs[activeTable].rowLabel}
-                      columns={[
-                        ...tableConfigs[activeTable].defaultColumns,
-                        ...(selectedCustomer.customColumns?.[activeTable] || []),
-                      ]}
-                      aiSettings={aiSettings}
-                      onImport={handleAIImport}
+                  {selectedCustomer && activeTable === "orders" && (
+                    <OrderImportButton
+                      disabled={!selectedCustomer}
+                      onImport={handleOrderImport}
                     />
                   )}
                   {selectedCustomer && (
@@ -940,19 +896,6 @@ function App() {
         />
       )}
 
-      {showAISettings && (
-        <AISettingsModal
-          settings={aiSettings}
-          onClose={() => setShowAISettings(false)}
-          onSave={setAISettings}
-        />
-      )}
-
-      <AIChatPanel
-        customer={selectedCustomer}
-        aiSettings={aiSettings}
-        onApplyChanges={handleApplyChanges}
-      />
 
       {printDelivery && selectedCustomer && (
         <DeliveryPrintModal
@@ -975,10 +918,23 @@ function BusinessGrid({
   onColumnOrderChange,
 }) {
   const gridRef = useRef(null);
+  const dragSelectingRef = useRef(false);
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [columnFilters, setColumnFilters] = useState({});
+  const [filterPopup, setFilterPopup] = useState(null);
   const config = tableConfigs[tableKey];
   const rows = customer[tableKey] || [];
   const customColumns = customer.customColumns?.[tableKey] || [];
   const savedOrder = customer.customColumns?.columnOrder?.[tableKey];
+  const filteredRows = useMemo(() => {
+    const activeFilters = Object.entries(columnFilters);
+    if (!activeFilters.length) return rows;
+    return rows.filter(row =>
+      activeFilters.every(([field, allowedValues]) =>
+        allowedValues.has(filterValue(row[field]).key),
+      ),
+    );
+  }, [rows, columnFilters]);
 
   const columnDefs = useMemo(() => {
     const actionColumn = {
@@ -1034,7 +990,7 @@ function BusinessGrid({
     () => ({
       editable: true,
       sortable: true,
-      filter: true,
+      filter: false,
       resizable: true,
       minWidth: 90,
       singleClickEdit: true,
@@ -1049,6 +1005,42 @@ function BusinessGrid({
     onRowsChange(tableKey, updatedRows);
   };
 
+  useEffect(() => {
+    const rowIds = new Set(rows.map(row => row.id));
+    setSelectedIds(current => current.filter(id => rowIds.has(id)));
+  }, [rows]);
+
+  useEffect(() => {
+    const stopDragSelection = () => {
+      dragSelectingRef.current = false;
+    };
+    document.addEventListener("mouseup", stopDragSelection);
+    return () => document.removeEventListener("mouseup", stopDragSelection);
+  }, []);
+
+  const isInteractiveTarget = (target) =>
+    Boolean(target?.closest?.("button,input,textarea,select,[role='button']"));
+
+  const selectDraggedRow = useCallback((event) => {
+    if (!event.node || isInteractiveTarget(event.event?.target)) return;
+    event.node.setSelected(true, false);
+  }, []);
+
+  const handleCellMouseDown = useCallback((event) => {
+    if (!event.node || isInteractiveTarget(event.event?.target)) return;
+    dragSelectingRef.current = true;
+    event.node.setSelected(true, false);
+  }, []);
+
+  const handleCellMouseOver = useCallback((event) => {
+    if (!dragSelectingRef.current) return;
+    selectDraggedRow(event);
+  }, [selectDraggedRow]);
+
+  const handleSelectionChanged = useCallback((event) => {
+    setSelectedIds(event.api.getSelectedRows().map(row => row.id));
+  }, []);
+
   const handleDragStopped = useCallback((event) => {
     if (!onColumnOrderChange) return;
     const order = event.api.getColumnState()
@@ -1057,24 +1049,96 @@ function BusinessGrid({
     onColumnOrderChange(tableKey, order);
   }, [onColumnOrderChange, tableKey]);
 
+  const handleBatchDelete = () => {
+    if (!selectedIds.length) return;
+    if (!window.confirm(`确认删除选中的 ${selectedIds.length} 行？此操作不可恢复。`)) return;
+    onDeleteRows(tableKey, selectedIds);
+    setSelectedIds([]);
+    gridRef.current?.api?.deselectAll();
+  };
+
+  const openColumnFilter = useCallback((field, headerName, anchorRect) => {
+    setFilterPopup({
+      field,
+      headerName,
+      left: Math.min(anchorRect.left, window.innerWidth - 270),
+      top: Math.max(12, Math.min(anchorRect.bottom + 6, window.innerHeight - 390)),
+    });
+  }, []);
+
+  const closeColumnFilter = useCallback(() => {
+    setFilterPopup(null);
+  }, []);
+
+  const applyColumnFilter = useCallback((field, selectedValues, allValues) => {
+    setColumnFilters(current => {
+      const next = { ...current };
+      if (selectedValues.size === allValues.length) delete next[field];
+      else next[field] = new Set(selectedValues);
+      return next;
+    });
+    setFilterPopup(null);
+    gridRef.current?.api?.deselectAll();
+    setSelectedIds([]);
+  }, []);
+
+  const clearColumnFilter = useCallback((field) => {
+    setColumnFilters(current => {
+      const next = { ...current };
+      delete next[field];
+      return next;
+    });
+    setFilterPopup(null);
+  }, []);
+
+  const gridContext = useMemo(() => ({
+    openColumnFilter,
+    activeFilterFields: new Set(Object.keys(columnFilters)),
+  }), [columnFilters, openColumnFilter]);
+
   return (
-    <div className="grid-shell">
-      <AgGridReact
-        ref={gridRef}
-        theme={gridTheme}
-        rowData={rows}
-        columnDefs={columnDefs}
-        defaultColDef={defaultColDef}
-        rowSelection="multiple"
-        animateRows
-        stopEditingWhenCellsLoseFocus
-        localeText={localeText}
-        quickFilterText={quickFilter}
-        onCellValueChanged={handleCellValueChanged}
-        onDragStopped={handleDragStopped}
-        getRowId={(params) => params.data.id}
-      />
-    </div>
+    <>
+      {selectedIds.length > 0 && (
+        <div className="grid-selection-bar">
+          <span>已选中 {selectedIds.length} 行</span>
+          <button className="danger-button compact" type="button" onClick={handleBatchDelete}>
+            <Trash2 size={14} />
+            批量删除
+          </button>
+        </div>
+      )}
+      <div className="grid-shell">
+        <AgGridReact
+          ref={gridRef}
+          theme={gridTheme}
+          rowData={filteredRows}
+          columnDefs={columnDefs}
+          defaultColDef={defaultColDef}
+          context={gridContext}
+          rowSelection="multiple"
+          animateRows
+          stopEditingWhenCellsLoseFocus
+          localeText={localeText}
+          quickFilterText={quickFilter}
+          onCellValueChanged={handleCellValueChanged}
+          onDragStopped={handleDragStopped}
+          onCellMouseDown={handleCellMouseDown}
+          onCellMouseOver={handleCellMouseOver}
+          onSelectionChanged={handleSelectionChanged}
+          getRowId={(params) => params.data.id}
+        />
+      </div>
+      {filterPopup && (
+        <ColumnValueFilter
+          popup={filterPopup}
+          rows={rows}
+          appliedValues={columnFilters[filterPopup.field]}
+          onApply={applyColumnFilter}
+          onClear={clearColumnFilter}
+          onClose={closeColumnFilter}
+        />
+      )}
+    </>
   );
 }
 
@@ -1086,6 +1150,8 @@ function toGridColumn(column) {
     flex: column.flex,
     minWidth: column.minWidth,
     editable: true,
+    filter: false,
+    headerComponent: ColumnHeader,
     cellClass: column.required ? "required-cell" : undefined,
   };
 
@@ -1111,6 +1177,114 @@ function toGridColumn(column) {
   }
 
   return gridColumn;
+}
+
+function ColumnHeader(props) {
+  const isFiltered = props.context?.activeFilterFields?.has(props.column.getColId());
+
+  const openFilter = (event) => {
+    event.stopPropagation();
+    props.context?.openColumnFilter(
+      props.column.getColId(),
+      props.displayName,
+      event.currentTarget.getBoundingClientRect(),
+    );
+  };
+
+  return (
+    <div className="column-header">
+      <button
+        className="column-header-label"
+        type="button"
+        onClick={() => props.progressSort?.()}
+        title={props.displayName}
+      >
+        {props.displayName}
+      </button>
+      <button
+        className={`column-filter-button ${isFiltered ? "is-active" : ""}`}
+        type="button"
+        onClick={openFilter}
+        title="筛选"
+      >
+        ▾
+      </button>
+    </div>
+  );
+}
+
+function ColumnValueFilter({ popup, rows, appliedValues, onApply, onClear, onClose }) {
+  const values = useMemo(() => {
+    const seen = new Set();
+    const result = [];
+    for (const row of rows) {
+      const value = filterValue(row[popup.field]);
+      if (seen.has(value.key)) continue;
+      seen.add(value.key);
+      result.push(value);
+    }
+    return result.sort((a, b) => a.label.localeCompare(b.label, "zh-CN", { numeric: true }));
+  }, [popup.field, rows]);
+
+  const [draftValues, setDraftValues] = useState(() =>
+    new Set(appliedValues ? Array.from(appliedValues) : values.map(value => value.key)),
+  );
+
+  useEffect(() => {
+    setDraftValues(new Set(appliedValues ? Array.from(appliedValues) : values.map(value => value.key)));
+  }, [appliedValues, values]);
+
+  useEffect(() => {
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onClose]);
+
+  const toggleValue = (key, checked) => {
+    setDraftValues(current => {
+      const next = new Set(current);
+      if (checked) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+  };
+
+  return (
+    <div className="column-filter-popover" style={{ left: popup.left, top: popup.top }}>
+      <div className="column-filter-title">{popup.headerName}</div>
+      <div className="column-filter-actions">
+        <button type="button" onClick={() => setDraftValues(new Set(values.map(value => value.key)))}>全选</button>
+        <button type="button" onClick={() => setDraftValues(new Set())}>清空</button>
+      </div>
+      <div className="column-filter-options">
+        {values.map(value => (
+          <label className="column-filter-option" key={value.key}>
+            <input
+              type="checkbox"
+              checked={draftValues.has(value.key)}
+              onChange={(event) => toggleValue(value.key, event.target.checked)}
+            />
+            <span title={value.label}>{value.label}</span>
+          </label>
+        ))}
+      </div>
+      <div className="column-filter-footer">
+        <button type="button" onClick={() => onClear(popup.field)}>重置</button>
+        <button type="button" onClick={onClose}>取消</button>
+        <button className="is-primary" type="button" onClick={() => onApply(popup.field, draftValues, values)}>确定</button>
+      </div>
+    </div>
+  );
+}
+
+function filterValue(value) {
+  const raw = value == null || value === "" ? "" : String(value);
+  return {
+    key: raw,
+    label: raw || "(空白)",
+  };
 }
 
 function statusClass(value = "") {
