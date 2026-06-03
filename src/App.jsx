@@ -32,6 +32,13 @@ import {
   AlertTriangle,
   Archive,
   Printer,
+  Copy,
+  ClipboardPaste,
+  Eraser,
+  ArrowDown,
+  ArrowRight,
+  ArrowUp,
+  RotateCcw,
 } from "lucide-react";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
@@ -39,6 +46,8 @@ ModuleRegistry.registerModules([AllCommunityModule]);
 const statusOptions = ["待确认", "生产中", "待发货", "已发货", "已完成", "异常"];
 const deliveryStatusOptions = ["待装车", "配送中", "已签收", "回单异常"];
 const customerLevelOptions = ["重点客户", "稳定客户", "新客户", "暂停合作"];
+const materialOptions = ["EPS", "EPE", "EPP", "珍珠棉", "海绵", "其他"];
+const unitOptions = ["件", "套", "箱", "个", "㎡", "m³", "kg"];
 
 const tableConfigs = {
   products: {
@@ -48,8 +57,8 @@ const tableConfigs = {
     defaultColumns: [
       { field: "name", headerName: "产品名称", width: 150, required: true },
       { field: "spec", headerName: "规格尺寸", width: 150 },
-      { field: "material", headerName: "泡沫材质", width: 130 },
-      { field: "unit", headerName: "单位", width: 90 },
+      { field: "material", headerName: "泡沫材质", width: 130, type: "select", options: materialOptions },
+      { field: "unit", headerName: "单位", width: 90, type: "select", options: unitOptions },
       {
         field: "unitPrice",
         headerName: "单价",
@@ -286,6 +295,120 @@ const localeText = {
 };
 
 
+const MAX_UNDO_STEPS = 50;
+
+function cloneData(data) {
+  if (typeof structuredClone === "function") {
+    return structuredClone(data);
+  }
+  return JSON.parse(JSON.stringify(data));
+}
+
+function uniqueRowId(tableKey, usedIds) {
+  let id = makeId(tableKey);
+  while (usedIds.has(id)) {
+    id = makeId(tableKey);
+  }
+  usedIds.add(id);
+  return id;
+}
+
+function ensureUniqueRowIds(rows, tableKey, customers, currentCustomerId) {
+  const usedIds = new Set();
+
+  for (const customer of customers || []) {
+    if (customer.id === currentCustomerId) continue;
+    for (const row of customer[tableKey] || []) {
+      if (row.id) usedIds.add(row.id);
+    }
+  }
+
+  return (rows || []).map((row) => {
+    const id = row.id;
+    if (!id || usedIds.has(id)) {
+      return { ...row, id: uniqueRowId(tableKey, usedIds) };
+    }
+    usedIds.add(id);
+    return row;
+  });
+}
+
+function ensureUniqueCustomerRowIds(customers) {
+  const usedIdsByTable = Object.keys(tableConfigs).reduce((acc, tableKey) => {
+    acc[tableKey] = new Set();
+    return acc;
+  }, {});
+
+  return (customers || []).map((customer) => {
+    const nextCustomer = { ...customer };
+
+    for (const tableKey of Object.keys(tableConfigs)) {
+      nextCustomer[tableKey] = (customer[tableKey] || []).map((row) => {
+        const usedIds = usedIdsByTable[tableKey];
+        const id = row.id;
+        if (!id || usedIds.has(id)) {
+          return { ...row, id: uniqueRowId(tableKey, usedIds) };
+        }
+        usedIds.add(id);
+        return row;
+      });
+    }
+
+    return nextCustomer;
+  });
+}
+
+function encodeClipboardCell(value) {
+  const text = String(value ?? "");
+  if (!/["\t\r\n]/.test(text)) return text;
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
+function parseClipboardTable(text) {
+  const rows = [];
+  let row = [];
+  let cell = "";
+  let quoted = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    const next = text[i + 1];
+
+    if (quoted) {
+      if (char === '"' && next === '"') {
+        cell += '"';
+        i++;
+      } else if (char === '"') {
+        quoted = false;
+      } else {
+        cell += char;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      quoted = true;
+    } else if (char === "\t") {
+      row.push(cell);
+      cell = "";
+    } else if (char === "\n") {
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = "";
+    } else if (char !== "\r") {
+      cell += char;
+    }
+  }
+
+  row.push(cell);
+  if (row.length > 1 || row[0] !== "" || text.endsWith("\t")) {
+    rows.push(row);
+  }
+
+  return rows;
+}
+
 const formatCurrency = (value) => {
   const number = Number(value || 0);
   return number.toLocaleString("zh-CN", {
@@ -315,6 +438,133 @@ function App() {
   const backupInputRef = useRef();
   const [printDelivery, setPrintDelivery] = useState(null);
   const [showKanban, setShowKanban] = useState(false);
+  const customersRef = useRef(customers);
+  const selectedCustomerIdRef = useRef(selectedCustomerId);
+  const activeTableRef = useRef(activeTable);
+  const undoStackRef = useRef([]);
+  const undoingRef = useRef(false);
+  const rowSaveQueueRef = useRef(new Map());
+  const rowSaveRevisionRef = useRef(new Map());
+  const fullDataSyncRevisionRef = useRef(0);
+
+  useEffect(() => {
+    customersRef.current = customers;
+  }, [customers]);
+
+  useEffect(() => {
+    selectedCustomerIdRef.current = selectedCustomerId;
+  }, [selectedCustomerId]);
+
+  useEffect(() => {
+    activeTableRef.current = activeTable;
+  }, [activeTable]);
+
+  const takeUndoSnapshot = useCallback(() => ({
+    customers: cloneData(customersRef.current),
+    selectedCustomerId: selectedCustomerIdRef.current,
+    activeTable: activeTableRef.current,
+  }), []);
+
+  const pushUndoSnapshot = useCallback((snapshot = takeUndoSnapshot()) => {
+    if (loading || undoingRef.current) return;
+    undoStackRef.current = [...undoStackRef.current, snapshot].slice(-MAX_UNDO_STEPS);
+  }, [loading, takeUndoSnapshot]);
+
+  const saveRowsQueued = useCallback((customerId, tableKey, rows) => {
+    const key = `${customerId}:${tableKey}`;
+    const previous = rowSaveQueueRef.current.get(key) || Promise.resolve();
+    const next = previous
+      .catch(() => {})
+      .then(() => api.setRows(customerId, tableKey, rows));
+
+    const queued = next.finally(() => {
+      if (rowSaveQueueRef.current.get(key) === queued) {
+        rowSaveQueueRef.current.delete(key);
+      }
+    });
+
+    rowSaveQueueRef.current.set(key, queued);
+
+    return next;
+  }, []);
+
+  const nextRowSaveRevision = useCallback((customerId, tableKey) => {
+    const key = `${customerId}:${tableKey}`;
+    const revision = (rowSaveRevisionRef.current.get(key) || 0) + 1;
+    rowSaveRevisionRef.current.set(key, revision);
+    return revision;
+  }, []);
+
+  const isLatestRowSaveRevision = useCallback((customerId, tableKey, revision) => (
+    rowSaveRevisionRef.current.get(`${customerId}:${tableKey}`) === revision
+  ), []);
+
+  const invalidateRowSaveRevisions = useCallback(() => {
+    rowSaveRevisionRef.current = new Map(
+      Array.from(rowSaveRevisionRef.current.entries(), ([key, revision]) => [key, revision + 1]),
+    );
+  }, []);
+
+  const syncCustomersInBackground = useCallback((customersToSync) => {
+    const revision = fullDataSyncRevisionRef.current + 1;
+    fullDataSyncRevisionRef.current = revision;
+
+    const run = async () => {
+      const pendingRowSaves = Array.from(rowSaveQueueRef.current.values());
+      if (pendingRowSaves.length) {
+        await Promise.allSettled(pendingRowSaves);
+      }
+      if (fullDataSyncRevisionRef.current !== revision) return;
+
+      try {
+        await api.replaceAll(customersToSync);
+      } catch (err) {
+        if (fullDataSyncRevisionRef.current === revision) {
+          alert(`撤销已在界面完成，但同步数据库失败：${err.message}`);
+        }
+      }
+    };
+
+    run();
+  }, []);
+
+  const restoreLastUndoSnapshot = useCallback(() => {
+    if (undoingRef.current || !undoStackRef.current.length) return;
+
+    const snapshot = undoStackRef.current[undoStackRef.current.length - 1];
+    const snapshotCustomers = ensureUniqueCustomerRowIds(snapshot.customers);
+    undoStackRef.current = undoStackRef.current.slice(0, -1);
+    undoingRef.current = true;
+    invalidateRowSaveRevisions();
+
+    customersRef.current = snapshotCustomers;
+    selectedCustomerIdRef.current = snapshot.selectedCustomerId;
+    activeTableRef.current = snapshot.activeTable;
+    setCustomers(snapshotCustomers);
+    setSelectedCustomerId(snapshot.selectedCustomerId);
+    setActiveTable(snapshot.activeTable);
+    undoingRef.current = false;
+    syncCustomersInBackground(snapshotCustomers);
+  }, [invalidateRowSaveRevisions, syncCustomersInBackground]);
+
+  useEffect(() => {
+    const handleUndoKeyDown = (event) => {
+      const key = event.key?.toLowerCase();
+      const isUndo = (event.ctrlKey || event.metaKey) && key === "z" && !event.shiftKey;
+      if (!isUndo) return;
+
+      const target = event.target;
+      const isTextInput = target?.matches?.("input, textarea, [contenteditable='true']");
+      const isGridEditor = Boolean(target?.closest?.(".ag-root"));
+      if (isTextInput && !isGridEditor) return;
+
+      event.preventDefault();
+      restoreLastUndoSnapshot();
+    };
+
+    window.addEventListener("keydown", handleUndoKeyDown, true);
+    return () => window.removeEventListener("keydown", handleUndoKeyDown, true);
+  }, [restoreLastUndoSnapshot]);
 
   useEffect(() => {
     api.getCustomers()
@@ -404,39 +654,66 @@ function App() {
   };
 
   const handleRowsChange = async (tableKey, rows) => {
-    updateSelectedCustomer(c => ({ ...c, [tableKey]: rows }));
+    const safeRows = ensureUniqueRowIds(rows, tableKey, customersRef.current, selectedCustomerId);
+    updateSelectedCustomer(c => ({ ...c, [tableKey]: safeRows }));
+    const revision = nextRowSaveRevision(selectedCustomerId, tableKey);
     try {
-      await api.setRows(selectedCustomerId, tableKey, rows);
+      const result = await saveRowsQueued(selectedCustomerId, tableKey, safeRows);
+      if (result?.rows && isLatestRowSaveRevision(selectedCustomerId, tableKey, revision)) {
+        updateSelectedCustomer(c => ({ ...c, [tableKey]: result.rows }));
+      }
     } catch (err) {
       alert(`保存失败：${err.message}`);
     }
   };
 
   const addRow = async (tableKey) => {
+    pushUndoSnapshot();
     const config = tableConfigs[tableKey];
     const newRow = { id: makeId(tableKey), ...config.emptyRow, date: today() };
-    const newRows = [newRow, ...(selectedCustomer?.[tableKey] || [])];
+    const newRows = ensureUniqueRowIds(
+      [newRow, ...(selectedCustomer?.[tableKey] || [])],
+      tableKey,
+      customersRef.current,
+      selectedCustomerId,
+    );
     updateSelectedCustomer(c => ({ ...c, [tableKey]: newRows }));
+    const revision = nextRowSaveRevision(selectedCustomerId, tableKey);
     try {
-      await api.setRows(selectedCustomerId, tableKey, newRows);
+      const result = await saveRowsQueued(selectedCustomerId, tableKey, newRows);
+      if (result?.rows && isLatestRowSaveRevision(selectedCustomerId, tableKey, revision)) {
+        updateSelectedCustomer(c => ({ ...c, [tableKey]: result.rows }));
+      }
     } catch (err) {
       alert(`保存失败：${err.message}`);
     }
   };
 
   const deleteRows = async (tableKey, ids) => {
+    pushUndoSnapshot();
+    const nextRows = ensureUniqueRowIds(
+      (selectedCustomer?.[tableKey] || []).filter(r => !ids.includes(r.id)),
+      tableKey,
+      customersRef.current,
+      selectedCustomerId,
+    );
     updateSelectedCustomer(c => ({
       ...c,
-      [tableKey]: (c[tableKey] || []).filter(r => !ids.includes(r.id)),
+      [tableKey]: nextRows,
     }));
+    const revision = nextRowSaveRevision(selectedCustomerId, tableKey);
     try {
-      await api.deleteRows(selectedCustomerId, tableKey, ids);
+      const result = await saveRowsQueued(selectedCustomerId, tableKey, nextRows);
+      if (result?.rows && isLatestRowSaveRevision(selectedCustomerId, tableKey, revision)) {
+        updateSelectedCustomer(c => ({ ...c, [tableKey]: result.rows }));
+      }
     } catch (err) {
       alert(`删除失败：${err.message}`);
     }
   };
 
   const addCustomColumn = async (tableKey, column) => {
+    pushUndoSnapshot();
     const newCustomColumns = {
       ...selectedCustomer.customColumns,
       [tableKey]: [...(selectedCustomer.customColumns?.[tableKey] || []), column],
@@ -449,28 +726,51 @@ function App() {
     }
   };
 
-  const removeCustomColumn = async (tableKey, field) => {
+  const removeCustomColumns = async (tableKey, fields) => {
+    const fieldsToRemove = new Set(fields);
+    if (!fieldsToRemove.size) return;
+
+    pushUndoSnapshot();
     const cleanedRows = (selectedCustomer[tableKey] || []).map(row => {
-      const next = { ...row };
-      delete next[field];
+      let next = row;
+      for (const field of fieldsToRemove) {
+        if (!(field in next)) continue;
+        if (next === row) next = { ...row };
+        delete next[field];
+      }
       return next;
     });
+    const safeRows = ensureUniqueRowIds(cleanedRows, tableKey, customersRef.current, selectedCustomerId);
     const newCustomColumns = {
       ...selectedCustomer.customColumns,
-      [tableKey]: (selectedCustomer.customColumns?.[tableKey] || []).filter(c => c.field !== field),
+      [tableKey]: (selectedCustomer.customColumns?.[tableKey] || []).filter(c => !fieldsToRemove.has(c.field)),
+      columnOrder: {
+        ...(selectedCustomer.customColumns?.columnOrder || {}),
+        [tableKey]: (selectedCustomer.customColumns?.columnOrder?.[tableKey] || [])
+          .filter(field => !fieldsToRemove.has(field)),
+      },
     };
-    updateSelectedCustomer(c => ({ ...c, [tableKey]: cleanedRows, customColumns: newCustomColumns }));
+    updateSelectedCustomer(c => ({ ...c, [tableKey]: safeRows, customColumns: newCustomColumns }));
+    const revision = nextRowSaveRevision(selectedCustomerId, tableKey);
     try {
-      await Promise.all([
+      const [, rowsResult] = await Promise.all([
         api.updateCustomer(selectedCustomerId, { ...selectedCustomer, customColumns: newCustomColumns }),
-        api.setRows(selectedCustomerId, tableKey, cleanedRows),
+        saveRowsQueued(selectedCustomerId, tableKey, safeRows),
       ]);
+      if (rowsResult?.rows && isLatestRowSaveRevision(selectedCustomerId, tableKey, revision)) {
+        updateSelectedCustomer(c => ({ ...c, [tableKey]: rowsResult.rows }));
+      }
     } catch (err) {
       alert(`保存失败：${err.message}`);
     }
   };
 
+  const removeCustomColumn = async (tableKey, field) => {
+    await removeCustomColumns(tableKey, [field]);
+  };
+
   const upsertCustomer = async (customerInput) => {
+    pushUndoSnapshot();
     if (customerInput.id) {
       setCustomers(current =>
         current.map(c => c.id === customerInput.id ? { ...c, ...customerInput } : c),
@@ -507,6 +807,7 @@ function App() {
   };
 
   const handleOrderImport = async (rows, extraColumns = []) => {
+    pushUndoSnapshot();
     const existingColumns = selectedCustomer.customColumns?.orders || [];
     const existingFields = new Set([
       ...tableConfigs.orders.defaultColumns.map(column => column.field),
@@ -517,24 +818,33 @@ function App() {
       ...selectedCustomer.customColumns,
       orders: [...existingColumns, ...newExtraColumns],
     };
-    const newRows = [
-      ...(selectedCustomer.orders || []),
-      ...rows.map(row => ({
-        ...tableConfigs.orders.emptyRow,
-        id: makeId("orders"),
-        ...row,
-        status: row.status || tableConfigs.orders.emptyRow.status,
-      })),
-    ];
+    const newRows = ensureUniqueRowIds(
+      [
+        ...(selectedCustomer.orders || []),
+        ...rows.map(row => ({
+          ...tableConfigs.orders.emptyRow,
+          id: makeId("orders"),
+          ...row,
+          status: row.status || tableConfigs.orders.emptyRow.status,
+        })),
+      ],
+      "orders",
+      customersRef.current,
+      selectedCustomerId,
+    );
 
     updateSelectedCustomer(c => ({ ...c, orders: newRows, customColumns }));
+    const revision = nextRowSaveRevision(selectedCustomerId, "orders");
     try {
-      await Promise.all([
+      const [, rowsResult] = await Promise.all([
         newExtraColumns.length
           ? api.updateCustomer(selectedCustomerId, { ...selectedCustomer, customColumns })
           : Promise.resolve(),
-        api.setRows(selectedCustomerId, "orders", newRows),
+        saveRowsQueued(selectedCustomerId, "orders", newRows),
       ]);
+      if (rowsResult?.rows && isLatestRowSaveRevision(selectedCustomerId, "orders", revision)) {
+        updateSelectedCustomer(c => ({ ...c, orders: rowsResult.rows }));
+      }
     } catch (err) {
       alert(`保存失败：${err.message}`);
     }
@@ -547,9 +857,11 @@ function App() {
     try {
       const data = await importBackup(file);
       if (window.confirm(`恢复备份将覆盖当前所有数据（共 ${data.length} 个客户）。确认继续？`)) {
-        await api.replaceAll(data);
-        setCustomers(data);
-        setSelectedCustomerId(data[0]?.id);
+        const safeData = ensureUniqueCustomerRowIds(data);
+        pushUndoSnapshot();
+        const result = await api.replaceAll(safeData);
+        setCustomers(result?.customers || safeData);
+        setSelectedCustomerId((result?.customers || safeData)[0]?.id);
       }
     } catch (err) {
       alert(`恢复失败：${err.message}`);
@@ -557,6 +869,7 @@ function App() {
   };
 
   const handleColumnOrderChange = useCallback(async (tableKey, order) => {
+    pushUndoSnapshot();
     const newCustomColumns = {
       ...selectedCustomer.customColumns,
       columnOrder: {
@@ -570,10 +883,11 @@ function App() {
     } catch (err) {
       alert(`保存失败：${err.message}`);
     }
-  }, [selectedCustomer, selectedCustomerId]);
+  }, [pushUndoSnapshot, selectedCustomer, selectedCustomerId]);
 
   const deleteCustomer = async (id) => {
     if (!window.confirm('确认删除该客户？此操作不可恢复，包括所有订单和送货记录。')) return;
+    pushUndoSnapshot();
     setCustomers(current => current.filter(c => c.id !== id));
     if (selectedCustomerId === id) {
       const remaining = customers.filter(c => c.id !== id);
@@ -588,9 +902,11 @@ function App() {
 
   const resetDemoData = async () => {
     try {
-      await api.replaceAll(initialCustomers);
-      setCustomers(initialCustomers);
-      setSelectedCustomerId(initialCustomers[0]?.id);
+      const safeInitialCustomers = ensureUniqueCustomerRowIds(initialCustomers);
+      pushUndoSnapshot();
+      const result = await api.replaceAll(safeInitialCustomers);
+      setCustomers(result?.customers || safeInitialCustomers);
+      setSelectedCustomerId((result?.customers || safeInitialCustomers)[0]?.id);
       setActiveTable("orders");
     } catch (err) {
       alert(`重置失败：${err.message}`);
@@ -850,6 +1166,9 @@ function App() {
                   onDeleteRows={deleteRows}
                   onPrintRow={activeTable === "deliveries" ? setPrintDelivery : null}
                   onColumnOrderChange={handleColumnOrderChange}
+                  onRemoveColumns={removeCustomColumns}
+                  onBeforeDataChange={pushUndoSnapshot}
+                  onCreateUndoSnapshot={takeUndoSnapshot}
                 />
               ) : (
                 <div className="empty-state">请先新增或选择一个客户。</div>
@@ -916,12 +1235,23 @@ function BusinessGrid({
   onDeleteRows,
   onPrintRow = null,
   onColumnOrderChange,
+  onRemoveColumns,
+  onBeforeDataChange,
+  onCreateUndoSnapshot,
 }) {
   const gridRef = useRef(null);
-  const dragSelectingRef = useRef(false);
+  const gridShellRef = useRef(null);
+  const dragSelectionRef = useRef(null);
+  const fillSelectedCellsRef = useRef(null);
+  const pendingEditSnapshotRef = useRef(null);
+  const selectionRangeRef = useRef(null);
+  const selectableColumnFieldsRef = useRef([]);
   const [selectedIds, setSelectedIds] = useState([]);
+  const [selectionRange, setSelectionRange] = useState(null);
   const [columnFilters, setColumnFilters] = useState({});
   const [filterPopup, setFilterPopup] = useState(null);
+  const [contextMenu, setContextMenu] = useState(null);
+  const [insertRowCounts, setInsertRowCounts] = useState({ above: "", below: "" });
   const config = tableConfigs[tableKey];
   const rows = customer[tableKey] || [];
   const customColumns = customer.customColumns?.[tableKey] || [];
@@ -937,6 +1267,23 @@ function BusinessGrid({
   }, [rows, columnFilters]);
 
   const columnDefs = useMemo(() => {
+    const rowNumberColumn = {
+      field: "__rowNumber",
+      headerName: "#",
+      width: 54,
+      pinned: "left",
+      lockPinned: true,
+      lockPosition: "left",
+      suppressMovable: true,
+      sortable: false,
+      filter: false,
+      resizable: false,
+      editable: false,
+      valueGetter: (params) => (params.node?.rowPinned ? "合计" : (params.node?.rowIndex ?? 0) + 1),
+      cellClass: "row-number-cell",
+      cellClassRules: selectionCellClassRules,
+    };
+
     const actionColumn = {
       field: "__actions",
       headerName: "",
@@ -983,27 +1330,105 @@ function BusinessGrid({
       });
     }
 
-    return [...allCols, actionColumn];
+    return [rowNumberColumn, ...allCols, actionColumn];
   }, [config.defaultColumns, customColumns, onDeleteRows, tableKey, savedOrder]);
+
+  const selectableColumnFields = useMemo(
+    () => columnDefs
+      .map(column => column.field)
+      .filter(field => field && !field.startsWith("__")),
+    [columnDefs],
+  );
+
+  const selectedColumnFields = useMemo(() => {
+    if (selectionRange?.mode !== "columns") return [];
+
+    const minCol = Math.min(selectionRange.startColIndex ?? 0, selectionRange.endColIndex ?? 0);
+    const maxCol = Math.max(selectionRange.startColIndex ?? 0, selectionRange.endColIndex ?? 0);
+    return selectableColumnFields.filter((_, index) => index >= minCol && index <= maxCol);
+  }, [selectableColumnFields, selectionRange]);
+
+  const customColumnFieldSet = useMemo(
+    () => new Set(customColumns.map(column => column.field)),
+    [customColumns],
+  );
+
+  const removableSelectedColumnFields = useMemo(
+    () => selectedColumnFields.filter(field => customColumnFieldSet.has(field)),
+    [customColumnFieldSet, selectedColumnFields],
+  );
+
+  const tableColumns = useMemo(
+    () => [...config.defaultColumns, ...customColumns],
+    [config.defaultColumns, customColumns],
+  );
+
+  const columnHeaderByField = useMemo(
+    () => new Map(tableColumns.map(column => [column.field, column.headerName])),
+    [tableColumns],
+  );
+
+  const summaryRowData = useMemo(() => {
+    if (!selectableColumnFields.length) return [];
+
+    const summary = {};
+    const firstField = selectableColumnFields[0];
+    summary[firstField] = `合计 ${filteredRows.length} 行`;
+
+    for (const column of tableColumns) {
+      if (column.type !== "number") continue;
+
+      summary[column.field] = filteredRows.reduce((total, row) => {
+        const value = Number(row[column.field]);
+        return Number.isFinite(value) ? total + value : total;
+      }, 0);
+    }
+
+    return [summary];
+  }, [filteredRows, selectableColumnFields, tableColumns]);
+
+  const canFillDown = selectionRange?.mode === "cells"
+    && Math.min(selectionRange.startRowIndex ?? 0, selectionRange.endRowIndex ?? 0)
+      < Math.max(selectionRange.startRowIndex ?? 0, selectionRange.endRowIndex ?? 0);
+  const canFillRight = selectionRange?.mode === "cells"
+    && Math.min(selectionRange.startColIndex ?? 0, selectionRange.endColIndex ?? 0)
+      < Math.max(selectionRange.startColIndex ?? 0, selectionRange.endColIndex ?? 0);
 
   const defaultColDef = useMemo(
     () => ({
-      editable: true,
+      editable: (params) => !params.node?.rowPinned,
       sortable: true,
       filter: false,
       resizable: true,
       minWidth: 90,
-      singleClickEdit: true,
+      singleClickEdit: false,
     }),
     [],
   );
 
   const handleCellValueChanged = (event) => {
+    if (pendingEditSnapshotRef.current) {
+      onBeforeDataChange?.(pendingEditSnapshotRef.current);
+      pendingEditSnapshotRef.current = null;
+    } else {
+      onBeforeDataChange?.();
+    }
+
     const updatedRows = rows.map((row) =>
       row.id === event.data.id ? { ...event.data } : row,
     );
     onRowsChange(tableKey, updatedRows);
   };
+
+  const handleCellEditingStarted = useCallback(() => {
+    pendingEditSnapshotRef.current = onCreateUndoSnapshot?.() || null;
+  }, [onCreateUndoSnapshot]);
+
+  const handleCellEditingStopped = useCallback(() => {
+    setTimeout(() => {
+      pendingEditSnapshotRef.current = null;
+    }, 0);
+  }, []);
 
   useEffect(() => {
     const rowIds = new Set(rows.map(row => row.id));
@@ -1012,34 +1437,291 @@ function BusinessGrid({
 
   useEffect(() => {
     const stopDragSelection = () => {
-      dragSelectingRef.current = false;
+      const drag = dragSelectionRef.current;
+      if (drag?.mode === "fill" && drag.fillDirection) {
+        fillSelectedCellsRef.current?.(drag.fillDirection);
+      }
+      dragSelectionRef.current = null;
     };
     document.addEventListener("mouseup", stopDragSelection);
     return () => document.removeEventListener("mouseup", stopDragSelection);
   }, []);
 
+  useEffect(() => {
+    selectionRangeRef.current = selectionRange;
+    gridRef.current?.api?.refreshCells({ force: true });
+  }, [selectionRange]);
+
+  useEffect(() => {
+    selectableColumnFieldsRef.current = selectableColumnFields;
+    gridRef.current?.api?.refreshCells({ force: true });
+  }, [selectableColumnFields]);
+
   const isInteractiveTarget = (target) =>
     Boolean(target?.closest?.("button,input,textarea,select,[role='button']"));
 
-  const selectDraggedRow = useCallback((event) => {
-    if (!event.node || isInteractiveTarget(event.event?.target)) return;
-    event.node.setSelected(true, false);
+  const isFillHandleHit = (mouseEvent) => {
+    const cell = mouseEvent.target?.closest?.(".ag-cell");
+    if (!cell) return false;
+
+    const rect = cell.getBoundingClientRect();
+    return rect.right - mouseEvent.clientX <= 10 && rect.bottom - mouseEvent.clientY <= 10;
+  };
+
+  const suppressNativeGridContextMenu = useCallback((event) => {
+    if (event.target?.closest?.(".grid-context-menu")) return;
+    event.preventDefault();
+  }, []);
+
+  useEffect(() => {
+    const gridShell = gridShellRef.current;
+    if (!gridShell) return undefined;
+
+    const blockNativeContextMenu = (event) => {
+      event.preventDefault();
+    };
+
+    gridShell.addEventListener("contextmenu", blockNativeContextMenu, true);
+    return () => gridShell.removeEventListener("contextmenu", blockNativeContextMenu, true);
+  }, []);
+
+  const positionContextMenu = useCallback((event) => {
+    const width = 220;
+    const height = 520;
+    setInsertRowCounts({ above: "", below: "" });
+    setContextMenu({
+      left: Math.min(event.clientX, window.innerWidth - width - 8),
+      top: Math.min(event.clientY, window.innerHeight - height - 8),
+    });
+  }, []);
+
+  const isCellInsideSelection = useCallback((rowIndex, colIndex) => {
+    const selection = selectionRangeRef.current;
+    if (!selection) return false;
+
+    const minRow = Math.min(selection.startRowIndex ?? 0, selection.endRowIndex ?? 0);
+    const maxRow = Math.max(selection.startRowIndex ?? 0, selection.endRowIndex ?? 0);
+    const minCol = Math.min(selection.startColIndex ?? 0, selection.endColIndex ?? 0);
+    const maxCol = Math.max(selection.startColIndex ?? 0, selection.endColIndex ?? 0);
+
+    if (selection.mode === "rows") return rowIndex >= minRow && rowIndex <= maxRow;
+    if (selection.mode === "columns") return colIndex >= minCol && colIndex <= maxCol;
+    return rowIndex >= minRow && rowIndex <= maxRow && colIndex >= minCol && colIndex <= maxCol;
+  }, []);
+
+  const getVisibleNodeAtRowIndex = useCallback((rowIndex) => {
+    let result = null;
+    gridRef.current?.api?.forEachNodeAfterFilterAndSort((node) => {
+      if (node.rowIndex === rowIndex) result = node;
+    });
+    return result;
+  }, []);
+
+  const getVisibleRowIdsInRange = useCallback((startRowIndex, endRowIndex) => {
+    const minRow = Math.min(startRowIndex, endRowIndex);
+    const maxRow = Math.max(startRowIndex, endRowIndex);
+    const ids = [];
+
+    gridRef.current?.api?.forEachNodeAfterFilterAndSort((node) => {
+      if (node.rowIndex < minRow || node.rowIndex > maxRow || !node.data?.id) return;
+      ids.push(node.data.id);
+    });
+
+    return ids;
+  }, []);
+
+  const selectRowsByRange = useCallback((startRowIndex, endRowIndex) => {
+    const nextSelection = { mode: "rows", startRowIndex, endRowIndex };
+    selectionRangeRef.current = nextSelection;
+    setSelectionRange(nextSelection);
+    setSelectedIds(getVisibleRowIdsInRange(startRowIndex, endRowIndex));
+  }, [getVisibleRowIdsInRange]);
+
+  const selectCellsByRange = useCallback((startRowIndex, endRowIndex, startColIndex, endColIndex) => {
+    const nextSelection = {
+      mode: "cells",
+      startRowIndex,
+      endRowIndex,
+      startColIndex,
+      endColIndex,
+    };
+    selectionRangeRef.current = nextSelection;
+    setSelectionRange(nextSelection);
+    setSelectedIds([]);
+    gridRef.current?.api?.deselectAll();
+  }, []);
+
+  const selectColumnsByRange = useCallback((startColIndex, endColIndex) => {
+    const nextSelection = { mode: "columns", startColIndex, endColIndex };
+    selectionRangeRef.current = nextSelection;
+    setSelectionRange(nextSelection);
+    setSelectedIds([]);
+    gridRef.current?.api?.deselectAll();
   }, []);
 
   const handleCellMouseDown = useCallback((event) => {
-    if (!event.node || isInteractiveTarget(event.event?.target)) return;
-    dragSelectingRef.current = true;
-    event.node.setSelected(true, false);
-  }, []);
+    if (event.event?.button !== 0 || !event.node || event.node.rowPinned || isInteractiveTarget(event.event?.target)) return;
+
+    const field = event.column?.getColId();
+    if (field === "__actions") return;
+
+    event.event.preventDefault();
+
+    if (field === "__rowNumber") {
+      dragSelectionRef.current = {
+        mode: "rows",
+        startRowIndex: event.node.rowIndex,
+      };
+      selectRowsByRange(event.node.rowIndex, event.node.rowIndex);
+      return;
+    }
+
+    const colIndex = selectableColumnFields.indexOf(field);
+    if (colIndex === -1) return;
+
+    const selection = selectionRangeRef.current;
+    if (selection?.mode === "cells" && isFillHandleHit(event.event)) {
+      const minRow = Math.min(selection.startRowIndex ?? 0, selection.endRowIndex ?? 0);
+      const maxRow = Math.max(selection.startRowIndex ?? 0, selection.endRowIndex ?? 0);
+      const minCol = Math.min(selection.startColIndex ?? 0, selection.endColIndex ?? 0);
+      const maxCol = Math.max(selection.startColIndex ?? 0, selection.endColIndex ?? 0);
+
+      if (event.node.rowIndex === maxRow && colIndex === maxCol) {
+        dragSelectionRef.current = {
+          mode: "fill",
+          minRow,
+          maxRow,
+          minCol,
+          maxCol,
+          fillDirection: null,
+        };
+        return;
+      }
+    }
+
+    dragSelectionRef.current = {
+      mode: "cells",
+      startRowIndex: event.node.rowIndex,
+      startColIndex: colIndex,
+    };
+    selectCellsByRange(event.node.rowIndex, event.node.rowIndex, colIndex, colIndex);
+  }, [selectableColumnFields, selectCellsByRange, selectRowsByRange]);
 
   const handleCellMouseOver = useCallback((event) => {
-    if (!dragSelectingRef.current) return;
-    selectDraggedRow(event);
-  }, [selectDraggedRow]);
+    const drag = dragSelectionRef.current;
+    if (!drag || !event.node || event.node.rowPinned) return;
+
+    if (drag.mode === "rows") {
+      selectRowsByRange(drag.startRowIndex, event.node.rowIndex);
+      return;
+    }
+
+    if (drag.mode === "cells") {
+      const colIndex = selectableColumnFields.indexOf(event.column?.getColId());
+      if (colIndex === -1) return;
+      selectCellsByRange(drag.startRowIndex, event.node.rowIndex, drag.startColIndex, colIndex);
+      return;
+    }
+
+    if (drag.mode === "fill") {
+      const colIndex = selectableColumnFields.indexOf(event.column?.getColId());
+      if (colIndex === -1) return;
+
+      if (
+        event.node.rowIndex > drag.maxRow &&
+        colIndex >= drag.minCol &&
+        colIndex <= drag.maxCol
+      ) {
+        drag.fillDirection = "down";
+        selectCellsByRange(drag.minRow, event.node.rowIndex, drag.minCol, drag.maxCol);
+        return;
+      }
+
+      if (
+        colIndex > drag.maxCol &&
+        event.node.rowIndex >= drag.minRow &&
+        event.node.rowIndex <= drag.maxRow
+      ) {
+        drag.fillDirection = "right";
+        selectCellsByRange(drag.minRow, drag.maxRow, drag.minCol, colIndex);
+        return;
+      }
+
+      drag.fillDirection = null;
+      selectCellsByRange(drag.minRow, drag.maxRow, drag.minCol, drag.maxCol);
+    }
+  }, [selectableColumnFields, selectCellsByRange, selectRowsByRange]);
+
+  const handleCellContextMenu = useCallback((event) => {
+    if (!event.node || event.node.rowPinned || isInteractiveTarget(event.event?.target)) return;
+
+    const mouseEvent = event.event;
+    mouseEvent?.preventDefault();
+
+    const field = event.column?.getColId();
+    if (field === "__actions") return;
+
+    if (field === "__rowNumber") {
+      if (!isCellInsideSelection(event.node.rowIndex, 0)) {
+        selectRowsByRange(event.node.rowIndex, event.node.rowIndex);
+      }
+      positionContextMenu(mouseEvent);
+      return;
+    }
+
+    const colIndex = selectableColumnFields.indexOf(field);
+    if (colIndex === -1) return;
+
+    if (!isCellInsideSelection(event.node.rowIndex, colIndex)) {
+      selectCellsByRange(event.node.rowIndex, event.node.rowIndex, colIndex, colIndex);
+    }
+    positionContextMenu(mouseEvent);
+  }, [
+    isCellInsideSelection,
+    positionContextMenu,
+    selectCellsByRange,
+    selectableColumnFields,
+    selectRowsByRange,
+  ]);
 
   const handleSelectionChanged = useCallback((event) => {
     setSelectedIds(event.api.getSelectedRows().map(row => row.id));
   }, []);
+
+  const startColumnSelection = useCallback((field, mouseEvent) => {
+    if (mouseEvent.button !== 0) return;
+
+    const colIndex = selectableColumnFields.indexOf(field);
+    if (colIndex === -1) return;
+
+    mouseEvent.preventDefault();
+    dragSelectionRef.current = {
+      mode: "columns",
+      startColIndex: colIndex,
+    };
+    selectColumnsByRange(colIndex, colIndex);
+  }, [selectableColumnFields, selectColumnsByRange]);
+
+  const updateColumnSelection = useCallback((field, mouseEvent) => {
+    const drag = dragSelectionRef.current;
+    if (!drag || drag.mode !== "columns" || mouseEvent.buttons !== 1) return;
+
+    const colIndex = selectableColumnFields.indexOf(field);
+    if (colIndex === -1) return;
+
+    selectColumnsByRange(drag.startColIndex, colIndex);
+  }, [selectableColumnFields, selectColumnsByRange]);
+
+  const openHeaderContextMenu = useCallback((field, mouseEvent) => {
+    const colIndex = selectableColumnFields.indexOf(field);
+    if (colIndex === -1) return;
+
+    mouseEvent.preventDefault();
+    if (!isCellInsideSelection(0, colIndex)) {
+      selectColumnsByRange(colIndex, colIndex);
+    }
+    positionContextMenu(mouseEvent);
+  }, [isCellInsideSelection, positionContextMenu, selectableColumnFields, selectColumnsByRange]);
 
   const handleDragStopped = useCallback((event) => {
     if (!onColumnOrderChange) return;
@@ -1055,7 +1737,656 @@ function BusinessGrid({
     onDeleteRows(tableKey, selectedIds);
     setSelectedIds([]);
     gridRef.current?.api?.deselectAll();
+    setSelectionRange(null);
   };
+
+  const deleteSelectedArea = useCallback(() => {
+    const selection = selectionRangeRef.current;
+    if (!selection) return;
+
+    if (selection.mode === "rows") {
+      const rowIds = getVisibleRowIdsInRange(selection.startRowIndex, selection.endRowIndex);
+      if (!rowIds.length) return;
+      if (!window.confirm(`确认删除选中的 ${rowIds.length} 行？此操作不可恢复。`)) return;
+      onDeleteRows(tableKey, rowIds);
+      setSelectedIds([]);
+      gridRef.current?.api?.deselectAll();
+      setSelectionRange(null);
+      return;
+    }
+
+    const fields = selectableColumnFieldsRef.current;
+    const minCol = Math.min(selection.startColIndex ?? 0, selection.endColIndex ?? 0);
+    const maxCol = Math.max(selection.startColIndex ?? 0, selection.endColIndex ?? 0);
+    const fieldsToClear = fields.filter((_, index) => index >= minCol && index <= maxCol);
+    if (!fieldsToClear.length) return;
+
+    const targetRowIds = new Set();
+    const minRow = Math.min(selection.startRowIndex ?? 0, selection.endRowIndex ?? 0);
+    const maxRow = Math.max(selection.startRowIndex ?? 0, selection.endRowIndex ?? 0);
+
+    gridRef.current?.api?.forEachNodeAfterFilterAndSort((node) => {
+      if (!node.data?.id) return;
+      if (selection.mode === "cells" && (node.rowIndex < minRow || node.rowIndex > maxRow)) return;
+      targetRowIds.add(node.data.id);
+    });
+
+    if (!targetRowIds.size) return;
+
+    let changed = false;
+    const clearedRows = rows.map((row) => {
+      if (!targetRowIds.has(row.id)) return row;
+
+      let next = row;
+      for (const field of fieldsToClear) {
+        if (next[field] === "") continue;
+        if (next === row) next = { ...row };
+        next[field] = "";
+        changed = true;
+      }
+      return next;
+    });
+
+    if (!changed) return;
+    onBeforeDataChange?.();
+    onRowsChange(tableKey, clearedRows);
+  }, [getVisibleRowIdsInRange, onBeforeDataChange, onDeleteRows, onRowsChange, rows, tableKey]);
+
+  const getSelectedAreaForCopy = useCallback(() => {
+    const selection = selectionRangeRef.current;
+    if (!selection) return null;
+
+    const fields = selectableColumnFieldsRef.current;
+    const minCol = Math.min(selection.startColIndex ?? 0, selection.endColIndex ?? 0);
+    const maxCol = Math.max(selection.startColIndex ?? 0, selection.endColIndex ?? 0);
+    const selectedFields = selection.mode === "rows"
+      ? fields
+      : fields.filter((_, index) => index >= minCol && index <= maxCol);
+    if (!selectedFields.length) return null;
+
+    const minRow = Math.min(selection.startRowIndex ?? 0, selection.endRowIndex ?? 0);
+    const maxRow = Math.max(selection.startRowIndex ?? 0, selection.endRowIndex ?? 0);
+    const rowNodes = [];
+
+    gridRef.current?.api?.forEachNodeAfterFilterAndSort((node) => {
+      if (!node.data?.id) return;
+      if (selection.mode !== "columns" && (node.rowIndex < minRow || node.rowIndex > maxRow)) return;
+      rowNodes.push(node);
+    });
+
+    if (!rowNodes.length) return null;
+    return { rowNodes, fields: selectedFields };
+  }, []);
+
+  const getSelectedAreaText = useCallback((includeHeaders = false) => {
+    const area = getSelectedAreaForCopy();
+    if (!area) return "";
+
+    const body = area.rowNodes
+      .map(node => area.fields
+        .map(field => encodeClipboardCell(node.data?.[field]))
+        .join("\t"))
+      .join("\r\n");
+    if (!includeHeaders) return body;
+
+    const headers = area.fields
+      .map(field => encodeClipboardCell(columnHeaderByField.get(field) || field))
+      .join("\t");
+    return body ? `${headers}\r\n${body}` : headers;
+  }, [columnHeaderByField, getSelectedAreaForCopy]);
+
+  const copySelectedArea = useCallback((clipboardData) => {
+    if (!clipboardData) return false;
+    const text = getSelectedAreaText();
+    if (!text) return false;
+
+    clipboardData.setData("text/plain", text);
+    return true;
+  }, [getSelectedAreaText]);
+
+  const pasteClipboardData = useCallback((text) => {
+    const selection = selectionRangeRef.current;
+    if (!selection || !text) return false;
+
+    const table = parseClipboardTable(text);
+    if (!table.length) return false;
+
+    const fields = selectableColumnFieldsRef.current;
+    const minCol = Math.min(selection.startColIndex ?? 0, selection.endColIndex ?? 0);
+    const startColIndex = selection.mode === "rows" ? 0 : minCol;
+    if (startColIndex >= fields.length) return false;
+
+    const minRow = Math.min(selection.startRowIndex ?? 0, selection.endRowIndex ?? 0);
+    const anchorRowIndex = selection.mode === "columns" ? 0 : minRow;
+    const visibleNodes = [];
+
+    gridRef.current?.api?.forEachNodeAfterFilterAndSort((node) => {
+      if (node.data?.id) visibleNodes.push(node);
+    });
+
+    const startRowPosition = visibleNodes.findIndex(node => node.rowIndex === anchorRowIndex);
+    if (startRowPosition === -1) return false;
+
+    const updatedRowsById = new Map();
+
+    for (let rowOffset = 0; rowOffset < table.length; rowOffset++) {
+      const node = visibleNodes[startRowPosition + rowOffset];
+      if (!node?.data?.id) break;
+
+      let next = node.data;
+      for (let colOffset = 0; colOffset < table[rowOffset].length; colOffset++) {
+        const field = fields[startColIndex + colOffset];
+        if (!field) break;
+
+        const value = table[rowOffset][colOffset];
+        if (next[field] === value) continue;
+        if (next === node.data) next = { ...node.data };
+        next[field] = value;
+      }
+
+      if (next !== node.data) {
+        updatedRowsById.set(node.data.id, next);
+      }
+    }
+
+    if (!updatedRowsById.size) return false;
+
+    gridRef.current?.api?.stopEditing();
+    onBeforeDataChange?.();
+    onRowsChange(
+      tableKey,
+      rows.map(row => updatedRowsById.get(row.id) || row),
+    );
+    return true;
+  }, [onBeforeDataChange, onRowsChange, rows, tableKey]);
+
+  const fillSelectedCells = useCallback((direction) => {
+    const selection = selectionRangeRef.current;
+    if (!selection || selection.mode !== "cells") return false;
+
+    const fields = selectableColumnFieldsRef.current;
+    const minCol = Math.min(selection.startColIndex ?? 0, selection.endColIndex ?? 0);
+    const maxCol = Math.max(selection.startColIndex ?? 0, selection.endColIndex ?? 0);
+    const minRow = Math.min(selection.startRowIndex ?? 0, selection.endRowIndex ?? 0);
+    const maxRow = Math.max(selection.startRowIndex ?? 0, selection.endRowIndex ?? 0);
+    const selectedFields = fields.filter((_, index) => index >= minCol && index <= maxCol);
+    if (!selectedFields.length) return false;
+    if (direction === "down" && minRow >= maxRow) return false;
+    if (direction === "right" && minCol >= maxCol) return false;
+
+    const selectedNodes = [];
+    gridRef.current?.api?.forEachNodeAfterFilterAndSort((node) => {
+      if (!node.data?.id) return;
+      if (node.rowIndex < minRow || node.rowIndex > maxRow) return;
+      selectedNodes.push(node);
+    });
+    if (!selectedNodes.length) return false;
+
+    const updatedRowsById = new Map();
+
+    if (direction === "down") {
+      const sourceNode = selectedNodes.find(node => node.rowIndex === minRow);
+      if (!sourceNode?.data) return false;
+
+      for (const node of selectedNodes) {
+        if (node.rowIndex === minRow) continue;
+
+        let next = node.data;
+        for (const field of selectedFields) {
+          const value = sourceNode.data[field];
+          if (next[field] === value) continue;
+          if (next === node.data) next = { ...node.data };
+          next[field] = value;
+        }
+        if (next !== node.data) updatedRowsById.set(node.data.id, next);
+      }
+    }
+
+    if (direction === "right") {
+      const sourceField = fields[minCol];
+      if (!sourceField) return false;
+
+      for (const node of selectedNodes) {
+        let next = node.data;
+        const value = node.data[sourceField];
+
+        for (let colIndex = minCol + 1; colIndex <= maxCol; colIndex++) {
+          const field = fields[colIndex];
+          if (!field || next[field] === value) continue;
+          if (next === node.data) next = { ...node.data };
+          next[field] = value;
+        }
+        if (next !== node.data) updatedRowsById.set(node.data.id, next);
+      }
+    }
+
+    if (!updatedRowsById.size) return false;
+
+    gridRef.current?.api?.stopEditing();
+    onBeforeDataChange?.();
+    onRowsChange(
+      tableKey,
+      rows.map(row => updatedRowsById.get(row.id) || row),
+    );
+    return true;
+  }, [onBeforeDataChange, onRowsChange, rows, tableKey]);
+
+  useEffect(() => {
+    fillSelectedCellsRef.current = fillSelectedCells;
+  }, [fillSelectedCells]);
+
+  const clearSelectedContents = useCallback(() => {
+    const selection = selectionRangeRef.current;
+    if (!selection) return false;
+
+    const fields = selectableColumnFieldsRef.current;
+    const minCol = Math.min(selection.startColIndex ?? 0, selection.endColIndex ?? 0);
+    const maxCol = Math.max(selection.startColIndex ?? 0, selection.endColIndex ?? 0);
+    const fieldsToClear = selection.mode === "rows"
+      ? fields
+      : fields.filter((_, index) => index >= minCol && index <= maxCol);
+    if (!fieldsToClear.length) return false;
+
+    const minRow = Math.min(selection.startRowIndex ?? 0, selection.endRowIndex ?? 0);
+    const maxRow = Math.max(selection.startRowIndex ?? 0, selection.endRowIndex ?? 0);
+    const targetRowIds = new Set();
+
+    gridRef.current?.api?.forEachNodeAfterFilterAndSort((node) => {
+      if (!node.data?.id) return;
+      if (selection.mode !== "columns" && (node.rowIndex < minRow || node.rowIndex > maxRow)) return;
+      targetRowIds.add(node.data.id);
+    });
+
+    if (!targetRowIds.size) return false;
+
+    let changed = false;
+    const clearedRows = rows.map((row) => {
+      if (!targetRowIds.has(row.id)) return row;
+
+      let next = row;
+      for (const field of fieldsToClear) {
+        if (next[field] === "") continue;
+        if (next === row) next = { ...row };
+        next[field] = "";
+        changed = true;
+      }
+      return next;
+    });
+
+    if (!changed) return false;
+    onBeforeDataChange?.();
+    onRowsChange(tableKey, clearedRows);
+    return true;
+  }, [onBeforeDataChange, onRowsChange, rows, tableKey]);
+
+  const setSelectedAreaValue = useCallback((value) => {
+    const selection = selectionRangeRef.current;
+    if (!selection) return false;
+
+    const fields = selectableColumnFieldsRef.current;
+    const minCol = Math.min(selection.startColIndex ?? 0, selection.endColIndex ?? 0);
+    const maxCol = Math.max(selection.startColIndex ?? 0, selection.endColIndex ?? 0);
+    const fieldsToUpdate = selection.mode === "rows"
+      ? fields
+      : fields.filter((_, index) => index >= minCol && index <= maxCol);
+    if (!fieldsToUpdate.length) return false;
+
+    const minRow = Math.min(selection.startRowIndex ?? 0, selection.endRowIndex ?? 0);
+    const maxRow = Math.max(selection.startRowIndex ?? 0, selection.endRowIndex ?? 0);
+    const targetRowIds = new Set();
+
+    gridRef.current?.api?.forEachNodeAfterFilterAndSort((node) => {
+      if (!node.data?.id) return;
+      if (selection.mode !== "columns" && (node.rowIndex < minRow || node.rowIndex > maxRow)) return;
+      targetRowIds.add(node.data.id);
+    });
+
+    if (!targetRowIds.size) return false;
+
+    let changed = false;
+    const updatedRows = rows.map((row) => {
+      if (!targetRowIds.has(row.id)) return row;
+
+      let next = row;
+      for (const field of fieldsToUpdate) {
+        if (next[field] === value) continue;
+        if (next === row) next = { ...row };
+        next[field] = value;
+        changed = true;
+      }
+      return next;
+    });
+
+    if (!changed) return false;
+    onBeforeDataChange?.();
+    onRowsChange(tableKey, updatedRows);
+    return true;
+  }, [onBeforeDataChange, onRowsChange, rows, tableKey]);
+
+  const batchModifySelectedArea = useCallback(() => {
+    if (!selectionRangeRef.current) return;
+
+    const value = window.prompt("批量修改选区为：");
+    if (value === null) return;
+    setSelectedAreaValue(value);
+  }, [setSelectedAreaValue]);
+
+  const findInTable = useCallback(() => {
+    const query = window.prompt("查找内容：");
+    if (!query) return;
+
+    const fields = selectableColumnFieldsRef.current;
+    let match = null;
+
+    gridRef.current?.api?.forEachNodeAfterFilterAndSort((node) => {
+      if (match || !node.data?.id) return;
+
+      for (let colIndex = 0; colIndex < fields.length; colIndex++) {
+        const field = fields[colIndex];
+        if (String(node.data[field] ?? "").includes(query)) {
+          match = { rowIndex: node.rowIndex, colIndex, field };
+          break;
+        }
+      }
+    });
+
+    if (!match) {
+      alert("未找到匹配内容。");
+      return;
+    }
+
+    selectCellsByRange(match.rowIndex, match.rowIndex, match.colIndex, match.colIndex);
+    gridRef.current?.api?.ensureIndexVisible(match.rowIndex, "middle");
+    gridRef.current?.api?.ensureColumnVisible(match.field);
+  }, [selectCellsByRange]);
+
+  const replaceInTable = useCallback(() => {
+    const findText = window.prompt("查找内容：");
+    if (!findText) return;
+
+    const replacement = window.prompt("替换为：");
+    if (replacement === null) return;
+
+    const selection = selectionRangeRef.current;
+    const fields = selectableColumnFieldsRef.current;
+    const minCol = Math.min(selection?.startColIndex ?? 0, selection?.endColIndex ?? 0);
+    const maxCol = Math.max(selection?.startColIndex ?? fields.length - 1, selection?.endColIndex ?? fields.length - 1);
+    const fieldsToReplace = !selection || selection.mode === "rows"
+      ? fields
+      : fields.filter((_, index) => index >= minCol && index <= maxCol);
+    if (!fieldsToReplace.length) return;
+
+    const minRow = Math.min(selection?.startRowIndex ?? 0, selection?.endRowIndex ?? Number.MAX_SAFE_INTEGER);
+    const maxRow = Math.max(selection?.startRowIndex ?? 0, selection?.endRowIndex ?? Number.MAX_SAFE_INTEGER);
+    const targetRowIds = new Set();
+
+    gridRef.current?.api?.forEachNodeAfterFilterAndSort((node) => {
+      if (!node.data?.id) return;
+      if (selection && selection.mode !== "columns" && (node.rowIndex < minRow || node.rowIndex > maxRow)) return;
+      targetRowIds.add(node.data.id);
+    });
+
+    let replaceCount = 0;
+    const updatedRows = rows.map((row) => {
+      if (!targetRowIds.has(row.id)) return row;
+
+      let next = row;
+      for (const field of fieldsToReplace) {
+        const original = String(next[field] ?? "");
+        if (!original.includes(findText)) continue;
+        if (next === row) next = { ...row };
+        next[field] = original.split(findText).join(replacement);
+        replaceCount += 1;
+      }
+      return next;
+    });
+
+    if (!replaceCount) {
+      alert("未找到可替换内容。");
+      return;
+    }
+
+    onBeforeDataChange?.();
+    onRowsChange(tableKey, updatedRows);
+    alert(`已替换 ${replaceCount} 个单元格。`);
+  }, [onBeforeDataChange, onRowsChange, rows, tableKey]);
+
+  const duplicateSelectedRows = useCallback(() => {
+    const selection = selectionRangeRef.current;
+    if (!selection || selection.mode !== "rows") return false;
+
+    const rowIds = getVisibleRowIdsInRange(selection.startRowIndex, selection.endRowIndex);
+    if (!rowIds.length) return false;
+
+    const selectedRowById = new Map(rows.map(row => [row.id, row]));
+    const clonedRows = rowIds
+      .map(id => selectedRowById.get(id))
+      .filter(Boolean)
+      .map(row => ({ ...row, id: makeId(tableKey) }));
+    if (!clonedRows.length) return false;
+
+    const maxRow = Math.max(selection.startRowIndex ?? 0, selection.endRowIndex ?? 0);
+    const targetNode = getVisibleNodeAtRowIndex(maxRow);
+    const originalIndex = targetNode?.data?.id
+      ? rows.findIndex(row => row.id === targetNode.data.id)
+      : -1;
+    const insertIndex = originalIndex === -1 ? rows.length : originalIndex + 1;
+    const nextRows = [...rows];
+    nextRows.splice(insertIndex, 0, ...clonedRows);
+
+    onBeforeDataChange?.();
+    onRowsChange(tableKey, nextRows);
+    return true;
+  }, [getVisibleNodeAtRowIndex, getVisibleRowIdsInRange, onBeforeDataChange, onRowsChange, rows, tableKey]);
+
+  const getInsertRowCount = useCallback((placement) => {
+    const parsed = Number.parseInt(insertRowCounts[placement], 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+  }, [insertRowCounts]);
+
+  const insertRowAtSelection = useCallback((placement, count = 1) => {
+    const selection = selectionRangeRef.current;
+    const minRow = Math.min(selection?.startRowIndex ?? 0, selection?.endRowIndex ?? 0);
+    const maxRow = Math.max(selection?.startRowIndex ?? 0, selection?.endRowIndex ?? 0);
+    const targetNode = getVisibleNodeAtRowIndex(placement === "above" ? minRow : maxRow);
+    const originalIndex = targetNode?.data?.id
+      ? rows.findIndex(row => row.id === targetNode.data.id)
+      : -1;
+    const insertIndex = originalIndex === -1
+      ? (placement === "above" ? 0 : rows.length)
+      : originalIndex + (placement === "below" ? 1 : 0);
+    const normalizedCount = Math.floor(count);
+    const rowCount = Number.isFinite(normalizedCount) && normalizedCount > 0 ? normalizedCount : 1;
+    const newRows = Array.from({ length: rowCount }, () => ({
+      id: makeId(tableKey),
+      ...config.emptyRow,
+      date: today(),
+    }));
+    const nextRows = [...rows];
+    nextRows.splice(insertIndex, 0, ...newRows);
+
+    onBeforeDataChange?.();
+    onRowsChange(tableKey, nextRows);
+  }, [config.emptyRow, getVisibleNodeAtRowIndex, onBeforeDataChange, onRowsChange, rows, tableKey]);
+
+  const submitInsertRows = useCallback((event, placement) => {
+    event.preventDefault();
+    insertRowAtSelection(placement, getInsertRowCount(placement));
+    setContextMenu(null);
+  }, [getInsertRowCount, insertRowAtSelection]);
+
+  const getSelectedRowIdsForMenu = useCallback(() => {
+    const selection = selectionRangeRef.current;
+    if (!selection || selection.mode !== "rows") return [];
+
+    return getVisibleRowIdsInRange(selection.startRowIndex, selection.endRowIndex);
+  }, [getVisibleRowIdsInRange]);
+
+  const deleteRowsFromMenu = useCallback(() => {
+    const rowIds = getSelectedRowIdsForMenu();
+    if (!rowIds.length) return;
+    if (!window.confirm(`确认删除选中的 ${rowIds.length} 行？此操作不可恢复。`)) return;
+
+    onDeleteRows(tableKey, rowIds);
+    setSelectedIds([]);
+    gridRef.current?.api?.deselectAll();
+    setSelectionRange(null);
+  }, [getSelectedRowIdsForMenu, onDeleteRows, tableKey]);
+
+  const deleteSelectedColumnsFromMenu = useCallback(() => {
+    if (!onRemoveColumns || !removableSelectedColumnFields.length) return;
+
+    const columnNames = removableSelectedColumnFields
+      .map(field => columnHeaderByField.get(field) || field)
+      .join("、");
+    const lockedCount = selectedColumnFields.length - removableSelectedColumnFields.length;
+    const lockedMessage = lockedCount > 0
+      ? `\n其中 ${lockedCount} 个默认表头不会删除。`
+      : "";
+
+    if (!window.confirm(`确认删除选中的 ${removableSelectedColumnFields.length} 个自定义表头？\n${columnNames}${lockedMessage}`)) return;
+
+    onRemoveColumns(tableKey, removableSelectedColumnFields);
+    setSelectionRange(null);
+  }, [
+    columnHeaderByField,
+    onRemoveColumns,
+    removableSelectedColumnFields,
+    selectedColumnFields.length,
+    tableKey,
+  ]);
+
+  const sortSelectedColumnFromMenu = useCallback((sort) => {
+    const field = selectedColumnFields[0];
+    if (!field) return;
+
+    gridRef.current?.api?.applyColumnState({
+      defaultState: { sort: null },
+      state: [{ colId: field, sort }],
+    });
+  }, [selectedColumnFields]);
+
+  const clearSortFromMenu = useCallback(() => {
+    gridRef.current?.api?.applyColumnState({
+      defaultState: { sort: null },
+    });
+  }, []);
+
+  const copyFromMenu = useCallback(async (includeHeaders = false) => {
+    const text = getSelectedAreaText(includeHeaders);
+    if (!text) return;
+
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (err) {
+      alert(`复制失败：${err.message}`);
+    }
+  }, [getSelectedAreaText]);
+
+  const pasteFromMenu = useCallback(async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      pasteClipboardData(text);
+    } catch (err) {
+      alert(`粘贴失败：${err.message}`);
+    }
+  }, [pasteClipboardData]);
+
+  useEffect(() => {
+    const handleCopy = (event) => {
+      if (!selectionRangeRef.current || isInteractiveTarget(event.target)) return;
+      if (!copySelectedArea(event.clipboardData)) return;
+
+      event.preventDefault();
+    };
+
+    const handlePaste = (event) => {
+      if (!selectionRangeRef.current || isInteractiveTarget(event.target)) return;
+      const text = event.clipboardData?.getData("text/plain");
+      if (!pasteClipboardData(text)) return;
+
+      event.preventDefault();
+    };
+
+    document.addEventListener("copy", handleCopy, true);
+    document.addEventListener("paste", handlePaste, true);
+    return () => {
+      document.removeEventListener("copy", handleCopy, true);
+      document.removeEventListener("paste", handlePaste, true);
+    };
+  }, [copySelectedArea, pasteClipboardData]);
+
+  useEffect(() => {
+    const handleDeleteKeyDown = (event) => {
+      if (event.key !== "Delete" || !selectionRangeRef.current) return;
+      if (isInteractiveTarget(event.target)) return;
+
+      event.preventDefault();
+      deleteSelectedArea();
+    };
+
+    document.addEventListener("keydown", handleDeleteKeyDown, true);
+    return () => document.removeEventListener("keydown", handleDeleteKeyDown, true);
+  }, [deleteSelectedArea]);
+
+  useEffect(() => {
+    const handleFillKeyDown = (event) => {
+      const key = event.key?.toLowerCase();
+      const isShortcut = event.ctrlKey || event.metaKey;
+      const direction = isShortcut && key === "d"
+        ? "down"
+        : isShortcut && key === "r"
+          ? "right"
+          : null;
+      if (!direction || !selectionRangeRef.current) return;
+      if (isInteractiveTarget(event.target)) return;
+
+      event.preventDefault();
+      fillSelectedCells(direction);
+    };
+
+    document.addEventListener("keydown", handleFillKeyDown, true);
+    return () => document.removeEventListener("keydown", handleFillKeyDown, true);
+  }, [fillSelectedCells]);
+
+  useEffect(() => {
+    const handleFindReplaceKeyDown = (event) => {
+      const key = event.key?.toLowerCase();
+      const isShortcut = event.ctrlKey || event.metaKey;
+      if (!isShortcut || !["f", "h"].includes(key)) return;
+      if (isInteractiveTarget(event.target)) return;
+
+      event.preventDefault();
+      if (key === "f") findInTable();
+      if (key === "h") replaceInTable();
+    };
+
+    document.addEventListener("keydown", handleFindReplaceKeyDown, true);
+    return () => document.removeEventListener("keydown", handleFindReplaceKeyDown, true);
+  }, [findInTable, replaceInTable]);
+
+  useEffect(() => {
+    if (!contextMenu) return undefined;
+
+    const closeContextMenu = (event) => {
+      if (event.target?.closest?.(".grid-context-menu")) return;
+      setContextMenu(null);
+    };
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") setContextMenu(null);
+    };
+
+    document.addEventListener("mousedown", closeContextMenu);
+    document.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("scroll", closeContextMenu, true);
+    window.addEventListener("resize", closeContextMenu);
+    return () => {
+      document.removeEventListener("mousedown", closeContextMenu);
+      document.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("scroll", closeContextMenu, true);
+      window.removeEventListener("resize", closeContextMenu);
+    };
+  }, [contextMenu]);
 
   const openColumnFilter = useCallback((field, headerName, anchorRect) => {
     setFilterPopup({
@@ -1080,6 +2411,7 @@ function BusinessGrid({
     setFilterPopup(null);
     gridRef.current?.api?.deselectAll();
     setSelectedIds([]);
+    setSelectionRange(null);
   }, []);
 
   const clearColumnFilter = useCallback((field) => {
@@ -1094,7 +2426,18 @@ function BusinessGrid({
   const gridContext = useMemo(() => ({
     openColumnFilter,
     activeFilterFields: new Set(Object.keys(columnFilters)),
-  }), [columnFilters, openColumnFilter]);
+    selectionRangeRef,
+    selectableColumnFieldsRef,
+    startColumnSelection,
+    updateColumnSelection,
+    openHeaderContextMenu,
+  }), [
+    columnFilters,
+    openHeaderContextMenu,
+    openColumnFilter,
+    startColumnSelection,
+    updateColumnSelection,
+  ]);
 
   return (
     <>
@@ -1107,27 +2450,204 @@ function BusinessGrid({
           </button>
         </div>
       )}
-      <div className="grid-shell">
+      <div
+        ref={gridShellRef}
+        className="grid-shell"
+        onContextMenuCapture={suppressNativeGridContextMenu}
+      >
         <AgGridReact
           ref={gridRef}
           theme={gridTheme}
           rowData={filteredRows}
+          pinnedBottomRowData={summaryRowData}
           columnDefs={columnDefs}
           defaultColDef={defaultColDef}
           context={gridContext}
           rowSelection="multiple"
+          suppressRowClickSelection
           animateRows
           stopEditingWhenCellsLoseFocus
           localeText={localeText}
           quickFilterText={quickFilter}
           onCellValueChanged={handleCellValueChanged}
+          onCellEditingStarted={handleCellEditingStarted}
+          onCellEditingStopped={handleCellEditingStopped}
           onDragStopped={handleDragStopped}
           onCellMouseDown={handleCellMouseDown}
           onCellMouseOver={handleCellMouseOver}
+          onCellContextMenu={handleCellContextMenu}
           onSelectionChanged={handleSelectionChanged}
           getRowId={(params) => params.data.id}
         />
       </div>
+      {contextMenu && (
+        <div
+          className="grid-context-menu"
+          style={{ left: contextMenu.left, top: contextMenu.top }}
+          role="menu"
+          onContextMenu={(event) => event.preventDefault()}
+        >
+          <button type="button" role="menuitem" onClick={() => { findInTable(); setContextMenu(null); }}>
+            <Search size={14} />
+            查找
+          </button>
+          <button type="button" role="menuitem" onClick={() => { replaceInTable(); setContextMenu(null); }}>
+            <SquarePen size={14} />
+            替换
+          </button>
+          <button type="button" role="menuitem" onClick={() => { copyFromMenu(); setContextMenu(null); }}>
+            <Copy size={14} />
+            复制
+          </button>
+          <button type="button" role="menuitem" onClick={() => { copyFromMenu(true); setContextMenu(null); }}>
+            <ClipboardList size={14} />
+            复制带表头
+          </button>
+          <button type="button" role="menuitem" onClick={() => { pasteFromMenu(); setContextMenu(null); }}>
+            <ClipboardPaste size={14} />
+            粘贴
+          </button>
+          <button type="button" role="menuitem" onClick={() => { clearSelectedContents(); setContextMenu(null); }}>
+            <Eraser size={14} />
+            清空内容
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            disabled={!selectionRange}
+            onClick={() => { batchModifySelectedArea(); setContextMenu(null); }}
+          >
+            <SquarePen size={14} />
+            批量修改选区
+          </button>
+          {selectionRange?.mode === "cells" && (
+            <>
+              <button
+                type="button"
+                role="menuitem"
+                disabled={!canFillDown}
+                onClick={() => { fillSelectedCells("down"); setContextMenu(null); }}
+              >
+                <ArrowDown size={14} />
+                向下填充
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                disabled={!canFillRight}
+                onClick={() => { fillSelectedCells("right"); setContextMenu(null); }}
+              >
+                <ArrowRight size={14} />
+                向右填充
+              </button>
+            </>
+          )}
+          {selectionRange?.mode === "columns" ? (
+            <>
+              <div className="grid-context-menu-separator" />
+              <button
+                type="button"
+                role="menuitem"
+                disabled={!selectedColumnFields.length}
+                onClick={() => { sortSelectedColumnFromMenu("asc"); setContextMenu(null); }}
+              >
+                <ArrowUp size={14} />
+                升序排序
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                disabled={!selectedColumnFields.length}
+                onClick={() => { sortSelectedColumnFromMenu("desc"); setContextMenu(null); }}
+              >
+                <ArrowDown size={14} />
+                降序排序
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => { clearSortFromMenu(); setContextMenu(null); }}
+              >
+                <RotateCcw size={14} />
+                清除排序
+              </button>
+              <div className="grid-context-menu-separator" />
+              <button
+                className="is-danger"
+                type="button"
+                role="menuitem"
+                disabled={!removableSelectedColumnFields.length}
+                title={removableSelectedColumnFields.length ? "删除选中的自定义表头" : "默认表头不可删除"}
+                onClick={() => { deleteSelectedColumnsFromMenu(); setContextMenu(null); }}
+              >
+                <Trash2 size={14} />
+                删除选中列（表头）
+              </button>
+            </>
+          ) : (
+            <>
+              <div className="grid-context-menu-separator" />
+              <button
+                type="button"
+                role="menuitem"
+                disabled={selectionRange?.mode !== "rows"}
+                onClick={() => { duplicateSelectedRows(); setContextMenu(null); }}
+              >
+                <Copy size={14} />
+                复制选中行为新行
+              </button>
+              <form className="grid-context-menu-insert" onSubmit={(event) => submitInsertRows(event, "above")}>
+                <button type="submit" role="menuitem">
+                  <Plus size={14} />
+                  在上方插入
+                </button>
+                <input
+                  aria-label="上方插入行数"
+                  inputMode="numeric"
+                  min="1"
+                  placeholder="1"
+                  type="number"
+                  value={insertRowCounts.above}
+                  onChange={(event) => setInsertRowCounts(current => ({
+                    ...current,
+                    above: event.target.value,
+                  }))}
+                />
+                <span>行</span>
+              </form>
+              <form className="grid-context-menu-insert" onSubmit={(event) => submitInsertRows(event, "below")}>
+                <button type="submit" role="menuitem">
+                  <Plus size={14} />
+                  在下方插入
+                </button>
+                <input
+                  aria-label="下方插入行数"
+                  inputMode="numeric"
+                  min="1"
+                  placeholder="1"
+                  type="number"
+                  value={insertRowCounts.below}
+                  onChange={(event) => setInsertRowCounts(current => ({
+                    ...current,
+                    below: event.target.value,
+                  }))}
+                />
+                <span>行</span>
+              </form>
+              <button
+                className="is-danger"
+                type="button"
+                role="menuitem"
+                disabled={selectionRange?.mode !== "rows"}
+                onClick={() => { deleteRowsFromMenu(); setContextMenu(null); }}
+              >
+                <Trash2 size={14} />
+                删除选中行
+              </button>
+            </>
+          )}
+        </div>
+      )}
       {filterPopup && (
         <ColumnValueFilter
           popup={filterPopup}
@@ -1142,24 +2662,85 @@ function BusinessGrid({
   );
 }
 
+const selectionCellClassRules = {
+  "grid-cell-selected": (params) => {
+    const selection = params.context?.selectionRangeRef?.current ?? params.context?.selectionRange;
+    if (!selection || params.node?.rowPinned || params.node?.rowIndex == null) return false;
+
+    const field = params.column?.getColId();
+    if (field === "__actions") return false;
+
+    const rowIndex = params.node.rowIndex;
+    const minRow = Math.min(selection.startRowIndex ?? 0, selection.endRowIndex ?? 0);
+    const maxRow = Math.max(selection.startRowIndex ?? 0, selection.endRowIndex ?? 0);
+
+    if (selection.mode === "rows") {
+      return rowIndex >= minRow && rowIndex <= maxRow;
+    }
+
+    const selectableColumnFields = params.context?.selectableColumnFieldsRef?.current
+      ?? params.context?.selectableColumnFields
+      ?? [];
+    const colIndex = selectableColumnFields.indexOf(field);
+    if (colIndex === -1) return false;
+
+    const minCol = Math.min(selection.startColIndex ?? 0, selection.endColIndex ?? 0);
+    const maxCol = Math.max(selection.startColIndex ?? 0, selection.endColIndex ?? 0);
+
+    if (selection.mode === "columns") {
+      return colIndex >= minCol && colIndex <= maxCol;
+    }
+
+    return (
+      selection.mode === "cells" &&
+      rowIndex >= minRow &&
+      rowIndex <= maxRow &&
+      colIndex >= minCol &&
+      colIndex <= maxCol
+    );
+  },
+  "grid-fill-handle-cell": (params) => {
+    const selection = params.context?.selectionRangeRef?.current ?? params.context?.selectionRange;
+    if (!selection || selection.mode !== "cells" || params.node?.rowPinned || params.node?.rowIndex == null) {
+      return false;
+    }
+
+    const selectableColumnFields = params.context?.selectableColumnFieldsRef?.current
+      ?? params.context?.selectableColumnFields
+      ?? [];
+    const field = params.column?.getColId();
+    const colIndex = selectableColumnFields.indexOf(field);
+    if (colIndex === -1) return false;
+
+    const maxRow = Math.max(selection.startRowIndex ?? 0, selection.endRowIndex ?? 0);
+    const maxCol = Math.max(selection.startColIndex ?? 0, selection.endColIndex ?? 0);
+    return params.node.rowIndex === maxRow && colIndex === maxCol;
+  },
+};
+
 function toGridColumn(column) {
+  const cellClasses = [
+    column.required ? "required-cell" : null,
+    column.type === "number" ? "number-cell" : null,
+  ].filter(Boolean);
+
   const gridColumn = {
     field: column.field,
     headerName: column.headerName,
     width: column.width,
     flex: column.flex,
     minWidth: column.minWidth,
-    editable: true,
+    editable: (params) => !params.node?.rowPinned,
     filter: false,
     headerComponent: ColumnHeader,
-    cellClass: column.required ? "required-cell" : undefined,
+    cellClass: cellClasses.length ? cellClasses : undefined,
+    cellClassRules: selectionCellClassRules,
   };
 
   if (column.type === "number") {
     gridColumn.valueParser = (params) => Number(params.newValue || 0);
     gridColumn.valueFormatter = (params) =>
       params.value === "" || params.value == null ? "" : Number(params.value).toString();
-    gridColumn.cellClass = "number-cell";
   }
 
   if (column.type === "date") {
@@ -1181,6 +2762,7 @@ function toGridColumn(column) {
 
 function ColumnHeader(props) {
   const isFiltered = props.context?.activeFilterFields?.has(props.column.getColId());
+  const field = props.column.getColId();
 
   const openFilter = (event) => {
     event.stopPropagation();
@@ -1191,12 +2773,30 @@ function ColumnHeader(props) {
     );
   };
 
+  const startColumnSelection = (event) => {
+    props.context?.startColumnSelection?.(field, event);
+  };
+
+  const updateColumnSelection = (event) => {
+    props.context?.updateColumnSelection?.(field, event);
+  };
+
+  const openHeaderContextMenu = (event) => {
+    event.preventDefault();
+    props.context?.openHeaderContextMenu?.(field, event);
+  };
+
   return (
-    <div className="column-header">
+    <div
+      className="column-header"
+      onMouseDown={startColumnSelection}
+      onMouseEnter={updateColumnSelection}
+      onContextMenu={openHeaderContextMenu}
+    >
       <button
         className="column-header-label"
         type="button"
-        onClick={() => props.progressSort?.()}
+        onClick={(event) => event.preventDefault()}
         title={props.displayName}
       >
         {props.displayName}
@@ -1204,6 +2804,7 @@ function ColumnHeader(props) {
       <button
         className={`column-filter-button ${isFiltered ? "is-active" : ""}`}
         type="button"
+        onMouseDown={(event) => event.stopPropagation()}
         onClick={openFilter}
         title="筛选"
       >

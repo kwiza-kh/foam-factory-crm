@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { randomUUID } from 'crypto';
 import { prisma } from '../db.js';
 
 const router = Router();
@@ -11,6 +12,35 @@ const TABLE_DELEGATES = {
 
 function defaultCustomColumns() {
   return { products: [], orders: [], deliveries: [] };
+}
+
+function makeRowId(tableKey) {
+  return `${tableKey}-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
+}
+
+function uniqueRows(rows = [], tableKey, usedIds = new Set()) {
+  return rows.map(row => {
+    let id = row?.id;
+    while (!id || usedIds.has(id)) {
+      id = makeRowId(tableKey);
+    }
+    usedIds.add(id);
+    return id === row?.id ? row : { ...row, id };
+  });
+}
+
+function normalizeIncomingCustomers(customers = []) {
+  const usedIdsByTable = Object.fromEntries(
+    Object.keys(TABLE_DELEGATES).map(tableKey => [tableKey, new Set()]),
+  );
+
+  return customers.map(customer => {
+    const next = { ...customer };
+    for (const tableKey of Object.keys(TABLE_DELEGATES)) {
+      next[tableKey] = uniqueRows(customer[tableKey] || [], tableKey, usedIdsByTable[tableKey]);
+    }
+    return next;
+  });
 }
 
 function normalize(row) {
@@ -50,7 +80,7 @@ router.get('/', async (req, res) => {
 
 // POST /api/customers/replace-all  (must be before /:id)
 router.post('/replace-all', async (req, res) => {
-  const { customers } = req.body;
+  const customers = normalizeIncomingCustomers(req.body.customers || []);
   try {
     await prisma.$transaction(async (tx) => {
       await tx.delivery.deleteMany();
@@ -90,7 +120,7 @@ router.post('/replace-all', async (req, res) => {
         }
       }
     });
-    res.json({ ok: true });
+    res.json({ ok: true, customers });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -167,21 +197,45 @@ router.put('/:id/:tableKey', async (req, res) => {
   const { rows } = req.body;
   try {
     const delegate = TABLE_DELEGATES[tableKey];
+    let savedRows = [];
     await prisma.$transaction(async (tx) => {
-      await tx[delegate].deleteMany({ where: { customerId: id } });
+      const existingRows = await tx[delegate].findMany({
+        where: { customerId: { not: id } },
+        select: { id: true },
+      });
+      const usedIds = new Set(existingRows.map(row => row.id));
+      savedRows = uniqueRows(rows || [], tableKey, usedIds);
+      const savedIds = savedRows.map(row => row.id);
 
-      for (let i = 0; i < rows.length; i++) {
-        await tx[delegate].create({
-          data: {
-            id: rows[i].id,
+      if (savedIds.length) {
+        await tx[delegate].deleteMany({
+          where: {
+            customerId: id,
+            id: { notIn: savedIds },
+          },
+        });
+      } else {
+        await tx[delegate].deleteMany({ where: { customerId: id } });
+      }
+
+      for (let i = 0; i < savedRows.length; i++) {
+        await tx[delegate].upsert({
+          where: { id: savedRows[i].id },
+          update: {
             customerId: id,
             sortOrder: i,
-            data: rows[i],
+            data: savedRows[i],
+          },
+          create: {
+            id: savedRows[i].id,
+            customerId: id,
+            sortOrder: i,
+            data: savedRows[i],
           },
         });
       }
     });
-    res.json({ ok: true });
+    res.json({ ok: true, rows: savedRows });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
