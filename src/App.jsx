@@ -1490,8 +1490,8 @@ function BusinessGrid({
     const height = 520;
     setInsertRowCounts({ above: "", below: "" });
     setContextMenu({
-      left: Math.min(event.clientX, window.innerWidth - width - 8),
-      top: Math.min(event.clientY, window.innerHeight - height - 8),
+      left: Math.max(8, Math.min(event.clientX, window.innerWidth - width - 8)),
+      top: Math.max(8, Math.min(event.clientY, window.innerHeight - height - 8)),
     });
   }, []);
 
@@ -1975,36 +1975,40 @@ function BusinessGrid({
     fillSelectedCellsRef.current = fillSelectedCells;
   }, [fillSelectedCells]);
 
-  const clearSelectedContents = useCallback(() => {
-    const selection = selectionRangeRef.current;
-    if (!selection) return false;
+  const getSelectedAreaScope = useCallback((selection = selectionRangeRef.current) => {
+    if (!selection) return null;
 
     const fields = selectableColumnFieldsRef.current;
     const minCol = Math.min(selection.startColIndex ?? 0, selection.endColIndex ?? 0);
     const maxCol = Math.max(selection.startColIndex ?? 0, selection.endColIndex ?? 0);
-    const fieldsToClear = selection.mode === "rows"
+    const selectedFields = selection.mode === "rows"
       ? fields
       : fields.filter((_, index) => index >= minCol && index <= maxCol);
-    if (!fieldsToClear.length) return false;
+    if (!selectedFields.length) return null;
 
     const minRow = Math.min(selection.startRowIndex ?? 0, selection.endRowIndex ?? 0);
     const maxRow = Math.max(selection.startRowIndex ?? 0, selection.endRowIndex ?? 0);
-    const targetRowIds = new Set();
+    const rowIds = new Set();
 
     gridRef.current?.api?.forEachNodeAfterFilterAndSort((node) => {
       if (!node.data?.id) return;
       if (selection.mode !== "columns" && (node.rowIndex < minRow || node.rowIndex > maxRow)) return;
-      targetRowIds.add(node.data.id);
+      rowIds.add(node.data.id);
     });
 
-    if (!targetRowIds.size) return false;
+    return rowIds.size ? { fields: selectedFields, rowIds } : null;
+  }, []);
+
+  const clearSelectedContents = useCallback(() => {
+    const scope = getSelectedAreaScope();
+    if (!scope) return false;
 
     let changed = false;
     const clearedRows = rows.map((row) => {
-      if (!targetRowIds.has(row.id)) return row;
+      if (!scope.rowIds.has(row.id)) return row;
 
       let next = row;
-      for (const field of fieldsToClear) {
+      for (const field of scope.fields) {
         if (next[field] === "") continue;
         if (next === row) next = { ...row };
         next[field] = "";
@@ -2017,38 +2021,18 @@ function BusinessGrid({
     onBeforeDataChange?.();
     onRowsChange(tableKey, clearedRows);
     return true;
-  }, [onBeforeDataChange, onRowsChange, rows, tableKey]);
+  }, [getSelectedAreaScope, onBeforeDataChange, onRowsChange, rows, tableKey]);
 
   const setSelectedAreaValue = useCallback((value) => {
-    const selection = selectionRangeRef.current;
-    if (!selection) return false;
-
-    const fields = selectableColumnFieldsRef.current;
-    const minCol = Math.min(selection.startColIndex ?? 0, selection.endColIndex ?? 0);
-    const maxCol = Math.max(selection.startColIndex ?? 0, selection.endColIndex ?? 0);
-    const fieldsToUpdate = selection.mode === "rows"
-      ? fields
-      : fields.filter((_, index) => index >= minCol && index <= maxCol);
-    if (!fieldsToUpdate.length) return false;
-
-    const minRow = Math.min(selection.startRowIndex ?? 0, selection.endRowIndex ?? 0);
-    const maxRow = Math.max(selection.startRowIndex ?? 0, selection.endRowIndex ?? 0);
-    const targetRowIds = new Set();
-
-    gridRef.current?.api?.forEachNodeAfterFilterAndSort((node) => {
-      if (!node.data?.id) return;
-      if (selection.mode !== "columns" && (node.rowIndex < minRow || node.rowIndex > maxRow)) return;
-      targetRowIds.add(node.data.id);
-    });
-
-    if (!targetRowIds.size) return false;
+    const scope = getSelectedAreaScope();
+    if (!scope) return false;
 
     let changed = false;
     const updatedRows = rows.map((row) => {
-      if (!targetRowIds.has(row.id)) return row;
+      if (!scope.rowIds.has(row.id)) return row;
 
       let next = row;
-      for (const field of fieldsToUpdate) {
+      for (const field of scope.fields) {
         if (next[field] === value) continue;
         if (next === row) next = { ...row };
         next[field] = value;
@@ -2061,7 +2045,7 @@ function BusinessGrid({
     onBeforeDataChange?.();
     onRowsChange(tableKey, updatedRows);
     return true;
-  }, [onBeforeDataChange, onRowsChange, rows, tableKey]);
+  }, [getSelectedAreaScope, onBeforeDataChange, onRowsChange, rows, tableKey]);
 
   const batchModifySelectedArea = useCallback(() => {
     if (!selectionRangeRef.current) return;
