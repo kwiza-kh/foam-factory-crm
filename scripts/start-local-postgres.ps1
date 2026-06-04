@@ -58,11 +58,16 @@ if ($confText -notmatch "(?m)^listen_addresses\s*=\s*'localhost'") {
   Add-Content -LiteralPath $conf -Value "listen_addresses = 'localhost'"
 }
 
-& $PgCtl -D $DataDir -l $LogPath -o "-p $Port" -w start
-if ($LASTEXITCODE -ne 0) {
-  $status = & $PgCtl -D $DataDir status
-  if ($status -notmatch 'server is running') {
-    throw 'pg_ctl start failed'
+$status = & $PgCtl -D $DataDir status 2>&1
+$statusText = $status -join "`n"
+if ($LASTEXITCODE -ne 0 -or $statusText -notmatch 'server is running') {
+  & $PgCtl -D $DataDir -l $LogPath -o "-p $Port" -w start
+  if ($LASTEXITCODE -ne 0) {
+    $status = & $PgCtl -D $DataDir status 2>&1
+    $statusText = $status -join "`n"
+    if ($statusText -notmatch 'server is running') {
+      throw 'pg_ctl start failed'
+    }
   }
 }
 

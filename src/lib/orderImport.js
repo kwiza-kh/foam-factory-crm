@@ -1,6 +1,3 @@
-import Papa from 'papaparse';
-import ExcelJS from 'exceljs';
-
 const HEADER_ALIASES = {
   orderNo: ['订单号', '订单编号', '订单 no', '客户订单号', '单号', 'po', 'po号', 'po no', 'pono', 'order no', 'orderno'],
   date: ['下单日期', '订单日期', '接单日期', '日期', 'date', 'order date'],
@@ -76,6 +73,7 @@ export async function parseOrderFile(file) {
 }
 
 async function parseCSV(file) {
+  const { default: Papa } = await import('papaparse');
   let text = await file.text();
   if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
 
@@ -93,6 +91,7 @@ async function parseCSV(file) {
 }
 
 async function parseExcel(file) {
+  const { default: ExcelJS } = await import('exceljs');
   const ab = await file.arrayBuffer();
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(ab);

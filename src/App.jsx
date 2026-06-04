@@ -7,8 +7,25 @@ import { exportBackup, importBackup } from "./lib/backup.js";
 import { DeliveryPrintModal } from "./components/DeliveryPrintModal.jsx";
 import { AgGridReact } from "ag-grid-react";
 import {
-  AllCommunityModule,
+  CellStyleModule,
+  ClientSideRowModelApiModule,
+  ClientSideRowModelModule,
+  ColumnApiModule,
+  ColumnAutoSizeModule,
+  DateEditorModule,
+  DragAndDropModule,
   ModuleRegistry,
+  NumberEditorModule,
+  PinnedRowModule,
+  QuickFilterModule,
+  RenderApiModule,
+  RowApiModule,
+  RowSelectionModule,
+  ScrollApiModule,
+  SelectEditorModule,
+  TextEditorModule,
+  _ColumnMoveModule as ColumnMoveModule,
+  _SortModule as SortModule,
   themeQuartz,
 } from "ag-grid-community";
 import {
@@ -41,13 +58,48 @@ import {
   RotateCcw,
 } from "lucide-react";
 
-ModuleRegistry.registerModules([AllCommunityModule]);
+ModuleRegistry.registerModules([
+  CellStyleModule,
+  ClientSideRowModelApiModule,
+  ClientSideRowModelModule,
+  ColumnApiModule,
+  ColumnAutoSizeModule,
+  ColumnMoveModule,
+  DateEditorModule,
+  DragAndDropModule,
+  NumberEditorModule,
+  PinnedRowModule,
+  QuickFilterModule,
+  RenderApiModule,
+  RowApiModule,
+  RowSelectionModule,
+  ScrollApiModule,
+  SelectEditorModule,
+  SortModule,
+  TextEditorModule,
+]);
 
-const statusOptions = ["待确认", "生产中", "待发货", "已发货", "已完成", "异常"];
+const statusOptions = ["未完成", "已完成", "已送货", "已开对账单", "已付款"];
+const closedOrderStatuses = new Set(["已完成", "已送货", "已开对账单", "已付款", "已发货"]);
+const isOpenOrder = (status = "") => !closedOrderStatuses.has(status) && status !== "异常";
+const normalizeOrderStatus = (status = "") => {
+  if (statusOptions.includes(status)) return status;
+  if (status === "已发货") return "已送货";
+  return "未完成";
+};
 const deliveryStatusOptions = ["待装车", "配送中", "已签收", "回单异常"];
 const customerLevelOptions = ["重点客户", "稳定客户", "新客户", "暂停合作"];
 const materialOptions = ["EPS", "EPE", "EPP", "珍珠棉", "海绵", "其他"];
 const unitOptions = ["件", "套", "箱", "个", "㎡", "m³", "kg"];
+const orderDefaultColumns = [
+  {
+    field: "status",
+    headerName: "进度",
+    width: 130,
+    type: "select",
+    options: statusOptions,
+  },
+];
 
 const tableConfigs = {
   products: {
@@ -82,7 +134,7 @@ const tableConfigs = {
     label: "订单录入 / 跟进",
     icon: ClipboardList,
     rowLabel: "订单",
-    defaultColumns: [],
+    defaultColumns: orderDefaultColumns,
     emptyRow: {
       orderNo: "",
       date: "",
@@ -90,9 +142,18 @@ const tableConfigs = {
       quantity: 0,
       amount: 0,
       dueDate: "",
-      status: "待确认",
+      status: "未完成",
       followUp: "",
     },
+  },
+  historyOrders: {
+    label: "历史订单",
+    icon: ClipboardList,
+    rowLabel: "历史订单",
+    defaultColumns: orderDefaultColumns,
+    emptyRow: {},
+    sourceTableKey: "orders",
+    readOnly: true,
   },
   deliveries: {
     label: "送货单录入",
@@ -187,7 +248,7 @@ const initialCustomers = [
         quantity: 1200,
         amount: 22200,
         dueDate: "2026-05-30",
-        status: "生产中",
+        status: "未完成",
         salesOwner: "陈峰",
         followUp: "已排产，待 5 月 28 日质检。",
       },
@@ -248,7 +309,7 @@ const initialCustomers = [
         quantity: 24000,
         amount: 17280,
         dueDate: "2026-05-27",
-        status: "待发货",
+        status: "未完成",
         poNo: "PO-886132",
         followUp: "客户要求 5 月 26 日上午装车。",
       },
@@ -334,7 +395,8 @@ function ensureUniqueRowIds(rows, tableKey, customers, currentCustomerId) {
 }
 
 function ensureUniqueCustomerRowIds(customers) {
-  const usedIdsByTable = Object.keys(tableConfigs).reduce((acc, tableKey) => {
+  const tableKeys = Object.keys(tableConfigs).filter(tableKey => !tableConfigs[tableKey].sourceTableKey);
+  const usedIdsByTable = tableKeys.reduce((acc, tableKey) => {
     acc[tableKey] = new Set();
     return acc;
   }, {});
@@ -342,7 +404,7 @@ function ensureUniqueCustomerRowIds(customers) {
   return (customers || []).map((customer) => {
     const nextCustomer = { ...customer };
 
-    for (const tableKey of Object.keys(tableConfigs)) {
+    for (const tableKey of tableKeys) {
       nextCustomer[tableKey] = (customer[tableKey] || []).map((row) => {
         const usedIds = usedIdsByTable[tableKey];
         const id = row.id;
@@ -356,6 +418,16 @@ function ensureUniqueCustomerRowIds(customers) {
 
     return nextCustomer;
   });
+}
+
+function normalizeCustomerOrderStatuses(customers) {
+  return (customers || []).map(customer => ({
+    ...customer,
+    orders: (customer.orders || []).map(order => ({
+      ...order,
+      status: normalizeOrderStatus(order.status),
+    })),
+  }));
 }
 
 function encodeClipboardCell(value) {
@@ -688,6 +760,13 @@ function App() {
       const isGridEditor = Boolean(target?.closest?.(".ag-root"));
       if (isTextInput && !isGridEditor) return;
 
+      const filterUndoEvent = new CustomEvent("crm:undo-filter", { cancelable: true });
+      window.dispatchEvent(filterUndoEvent);
+      if (filterUndoEvent.defaultPrevented) {
+        event.preventDefault();
+        return;
+      }
+
       event.preventDefault();
       restoreLastUndoSnapshot();
     };
@@ -699,8 +778,9 @@ function App() {
   useEffect(() => {
     api.getCustomers()
       .then(data => {
-        setCustomers(data);
-        if (data.length) setSelectedCustomerId(data[0].id);
+        const normalizedData = normalizeCustomerOrderStatuses(data);
+        setCustomers(normalizedData);
+        if (normalizedData.length) setSelectedCustomerId(normalizedData[0].id);
       })
       .catch(err => dialogs.alert(`加载失败：${err.message}`, { title: "加载失败" }))
       .finally(() => setLoading(false));
@@ -734,7 +814,7 @@ function App() {
     for (const customer of customers) {
       let severity = null;
       for (const order of customer.orders || []) {
-        if (["已完成", "异常"].includes(order.status) || !order.dueDate) continue;
+        if (!isOpenOrder(order.status) || !order.dueDate) continue;
         const dueTs = new Date(order.dueDate).setHours(0, 0, 0, 0);
         if (dueTs < todayTs) { severity = "danger"; break; }
         if (dueTs <= warnTs && severity !== "danger") severity = "warning";
@@ -747,9 +827,7 @@ function App() {
   const metrics = useMemo(() => {
     const allOrders = customers.flatMap((customer) => customer.orders || []);
     const allDeliveries = customers.flatMap((customer) => customer.deliveries || []);
-    const activeOrders = allOrders.filter(
-      (order) => !["已完成", "异常"].includes(order.status),
-    );
+    const activeOrders = allOrders.filter((order) => isOpenOrder(order.status));
     const amount = allOrders.reduce((sum, order) => sum + Number(order.amount || 0), 0);
     return [
       {
@@ -760,7 +838,7 @@ function App() {
       {
         label: "进行中订单",
         value: activeOrders.length,
-        detail: "生产、待发货、配送前跟进",
+        detail: "未完成订单跟进",
       },
       {
         label: "订单金额",
@@ -955,7 +1033,7 @@ function App() {
           ...tableConfigs.orders.emptyRow,
           id: makeId("orders"),
           ...row,
-          status: row.status || tableConfigs.orders.emptyRow.status,
+          status: normalizeOrderStatus(row.status || tableConfigs.orders.emptyRow.status),
         })),
       ],
       "orders",
@@ -990,11 +1068,12 @@ function App() {
         title: "恢复备份",
         tone: "danger",
       })) {
-        const safeData = ensureUniqueCustomerRowIds(data);
+        const safeData = normalizeCustomerOrderStatuses(ensureUniqueCustomerRowIds(data));
         pushUndoSnapshot();
         const result = await api.replaceAll(safeData);
-        setCustomers(result?.customers || safeData);
-        setSelectedCustomerId((result?.customers || safeData)[0]?.id);
+        const restoredCustomers = normalizeCustomerOrderStatuses(result?.customers || safeData);
+        setCustomers(restoredCustomers);
+        setSelectedCustomerId(restoredCustomers[0]?.id);
       }
     } catch (err) {
       await dialogs.alert(`恢复失败：${err.message}`, { title: "恢复失败" });
@@ -1038,11 +1117,12 @@ function App() {
 
   const resetDemoData = async () => {
     try {
-      const safeInitialCustomers = ensureUniqueCustomerRowIds(initialCustomers);
+      const safeInitialCustomers = normalizeCustomerOrderStatuses(ensureUniqueCustomerRowIds(initialCustomers));
       pushUndoSnapshot();
       const result = await api.replaceAll(safeInitialCustomers);
-      setCustomers(result?.customers || safeInitialCustomers);
-      setSelectedCustomerId((result?.customers || safeInitialCustomers)[0]?.id);
+      const restoredCustomers = normalizeCustomerOrderStatuses(result?.customers || safeInitialCustomers);
+      setCustomers(restoredCustomers);
+      setSelectedCustomerId(restoredCustomers[0]?.id);
       setActiveTable("orders");
     } catch (err) {
       await dialogs.alert(`重置失败：${err.message}`, { title: "重置失败" });
@@ -1056,6 +1136,17 @@ function App() {
       </div>
     );
   }
+
+  const activeConfig = tableConfigs[activeTable];
+  const activeSourceTable = activeConfig.sourceTableKey || activeTable;
+  const isHistoryOrders = activeTable === "historyOrders";
+  const activeCustomColumns = selectedCustomer?.customColumns?.[activeSourceTable] || [];
+  const exportCustomer = isHistoryOrders
+    ? {
+      ...selectedCustomer,
+      historyOrders: (selectedCustomer?.orders || []).filter(order => normalizeOrderStatus(order.status) === "已付款"),
+    }
+    : selectedCustomer;
 
   return (
     <div className="app-shell">
@@ -1262,9 +1353,9 @@ function App() {
                       type="button"
                       title="导出当前表格为 Excel"
                       onClick={() =>
-                        exportTableToExcel(selectedCustomer, activeTable, [
-                          ...tableConfigs[activeTable].defaultColumns,
-                          ...(selectedCustomer.customColumns?.[activeTable] || []),
+                        exportTableToExcel(exportCustomer, activeTable, [
+                          ...activeConfig.defaultColumns,
+                          ...activeCustomColumns,
                         ])
                       }
                     >
@@ -1272,24 +1363,28 @@ function App() {
                       导出 Excel
                     </button>
                   )}
-                  <button
-                    className="secondary-button"
-                    type="button"
-                    onClick={() => setShowColumnModal(true)}
-                    disabled={!selectedCustomer}
-                  >
-                    <Settings2 size={17} />
-                    自定义表头
-                  </button>
-                  <button
-                    className="primary-action compact"
-                    type="button"
-                    onClick={() => addRow(activeTable)}
-                    disabled={!selectedCustomer}
-                  >
-                    <Plus size={17} />
-                    新增{tableConfigs[activeTable].rowLabel}
-                  </button>
+                  {!isHistoryOrders && (
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={() => setShowColumnModal(true)}
+                      disabled={!selectedCustomer}
+                    >
+                      <Settings2 size={17} />
+                      自定义表头
+                    </button>
+                  )}
+                  {!isHistoryOrders && (
+                    <button
+                      className="primary-action compact"
+                      type="button"
+                      onClick={() => addRow(activeSourceTable)}
+                      disabled={!selectedCustomer}
+                    >
+                      <Plus size={17} />
+                      新增{activeConfig.rowLabel}
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -1297,7 +1392,8 @@ function App() {
                 <BusinessGrid
                   key={`${selectedCustomer.id}-${activeTable}`}
                   customer={selectedCustomer}
-                  tableKey={activeTable}
+                  tableKey={activeSourceTable}
+                  viewKey={activeTable}
                   quickFilter={quickFilter}
                   onRowsChange={handleRowsChange}
                   onDeleteRows={deleteRows}
@@ -1306,6 +1402,7 @@ function App() {
                   onRemoveColumns={removeCustomColumns}
                   onBeforeDataChange={pushUndoSnapshot}
                   onCreateUndoSnapshot={takeUndoSnapshot}
+                  readOnly={isHistoryOrders}
                   dialogs={dialogs}
                 />
               ) : (
@@ -1345,7 +1442,7 @@ function App() {
 
       {showColumnModal && selectedCustomer && (
         <ColumnModal
-          tableKey={activeTable}
+          tableKey={activeSourceTable}
           customer={selectedCustomer}
           onClose={() => setShowColumnModal(false)}
           onAddColumn={addCustomColumn}
@@ -1370,6 +1467,7 @@ function App() {
 function BusinessGrid({
   customer,
   tableKey,
+  viewKey = tableKey,
   quickFilter,
   onRowsChange,
   onDeleteRows,
@@ -1378,6 +1476,7 @@ function BusinessGrid({
   onRemoveColumns,
   onBeforeDataChange,
   onCreateUndoSnapshot,
+  readOnly = false,
   dialogs,
 }) {
   const gridRef = useRef(null);
@@ -1387,25 +1486,38 @@ function BusinessGrid({
   const pendingEditSnapshotRef = useRef(null);
   const selectionRangeRef = useRef(null);
   const selectableColumnFieldsRef = useRef([]);
+  const filterUndoStackRef = useRef([]);
   const [selectedIds, setSelectedIds] = useState([]);
   const [selectionRange, setSelectionRange] = useState(null);
   const [columnFilters, setColumnFilters] = useState({});
   const [filterPopup, setFilterPopup] = useState(null);
   const [contextMenu, setContextMenu] = useState(null);
   const [insertRowCounts, setInsertRowCounts] = useState({ above: "", below: "" });
-  const config = tableConfigs[tableKey];
-  const rows = customer[tableKey] || [];
+  const config = tableConfigs[viewKey];
+  const sourceRows = customer[tableKey] || [];
+  const rows = useMemo(() => {
+    if (viewKey === "orders") {
+      return sourceRows.filter(row => normalizeOrderStatus(row.status) !== "已付款");
+    }
+    if (viewKey === "historyOrders") {
+      return sourceRows.filter(row => normalizeOrderStatus(row.status) === "已付款");
+    }
+    return sourceRows;
+  }, [sourceRows, viewKey]);
   const customColumns = customer.customColumns?.[tableKey] || [];
   const savedOrder = customer.customColumns?.columnOrder?.[tableKey];
   const filteredRows = useMemo(() => {
     const activeFilters = Object.entries(columnFilters);
     if (!activeFilters.length) return rows;
     return rows.filter(row =>
-      activeFilters.every(([field, allowedValues]) =>
-        allowedValues.has(filterValue(row[field]).key),
-      ),
+      activeFilters.every(([field, allowedValues]) => {
+        const value = tableKey === "orders" && field === "status"
+          ? normalizeOrderStatus(row[field])
+          : row[field];
+        return allowedValues.has(filterValue(value).key);
+      }),
     );
-  }, [rows, columnFilters]);
+  }, [rows, columnFilters, tableKey]);
 
   const columnDefs = useMemo(() => {
     const rowNumberColumn = {
@@ -1420,6 +1532,7 @@ function BusinessGrid({
       filter: false,
       resizable: false,
       editable: false,
+      headerComponent: RowNumberHeader,
       valueGetter: (params) => (params.node?.rowPinned ? "合计" : (params.node?.rowIndex ?? 0) + 1),
       cellClass: "row-number-cell",
       cellClassRules: selectionCellClassRules,
@@ -1428,7 +1541,7 @@ function BusinessGrid({
     const actionColumn = {
       field: "__actions",
       headerName: "",
-      width: onPrintRow ? 100 : 68,
+      width: 52,
       pinned: "right",
       sortable: false,
       filter: false,
@@ -1436,31 +1549,24 @@ function BusinessGrid({
       editable: false,
       cellRenderer: (params) => (
         <div style={{ display: "flex", gap: 4, alignItems: "center", height: "100%" }}>
-          {onPrintRow && (
-            <button
-              className="grid-delete"
-              type="button"
-              title="打印送货单"
-              onClick={() => onPrintRow(params.data)}
-            >
-              <Printer size={14} />
-            </button>
-          )}
           <button
             className="grid-delete"
             type="button"
-            title="删除该行"
-            onClick={() => onDeleteRows(tableKey, [params.data.id])}
+            title="打印送货单"
+            onClick={() => onPrintRow(params.data)}
           >
-            <X size={15} />
+            <Printer size={14} />
           </button>
         </div>
       ),
     };
 
+    const defaultFields = new Set(config.defaultColumns.map(column => column.field));
     const allCols = [
       ...config.defaultColumns.map(toGridColumn),
-      ...customColumns.map(toGridColumn),
+      ...customColumns
+        .filter(column => !defaultFields.has(column.field))
+        .map(toGridColumn),
     ];
 
     if (savedOrder?.length) {
@@ -1471,8 +1577,18 @@ function BusinessGrid({
       });
     }
 
-    return [rowNumberColumn, ...allCols, actionColumn];
-  }, [config.defaultColumns, customColumns, onDeleteRows, tableKey, savedOrder]);
+    const orderedCols = tableKey === "orders"
+      ? [
+        ...allCols.filter(column => column.field !== "status"),
+        ...allCols.filter(column => column.field === "status"),
+      ]
+      : allCols;
+    const visibleCols = readOnly
+      ? orderedCols.map(column => ({ ...column, editable: false }))
+      : orderedCols;
+
+    return onPrintRow ? [rowNumberColumn, ...visibleCols, actionColumn] : [rowNumberColumn, ...visibleCols];
+  }, [config.defaultColumns, customColumns, onPrintRow, readOnly, savedOrder, tableKey]);
 
   const selectableColumnFields = useMemo(
     () => columnDefs
@@ -1537,14 +1653,14 @@ function BusinessGrid({
 
   const defaultColDef = useMemo(
     () => ({
-      editable: (params) => !params.node?.rowPinned,
+      editable: (params) => !readOnly && !params.node?.rowPinned,
       sortable: true,
       filter: false,
       resizable: true,
       minWidth: 90,
       singleClickEdit: false,
     }),
-    [],
+    [readOnly],
   );
 
   const handleCellValueChanged = (event) => {
@@ -1555,7 +1671,7 @@ function BusinessGrid({
       onBeforeDataChange?.();
     }
 
-    const updatedRows = rows.map((row) =>
+    const updatedRows = sourceRows.map((row) =>
       row.id === event.data.id ? { ...event.data } : row,
     );
     onRowsChange(tableKey, updatedRows);
@@ -1597,6 +1713,10 @@ function BusinessGrid({
     selectableColumnFieldsRef.current = selectableColumnFields;
     gridRef.current?.api?.refreshCells({ force: true });
   }, [selectableColumnFields]);
+
+  useEffect(() => {
+    gridRef.current?.api?.refreshHeader();
+  }, [columnFilters]);
 
   const isInteractiveTarget = (target) =>
     Boolean(target?.closest?.("button,input,textarea,select,[role='button']"));
@@ -1669,6 +1789,28 @@ function BusinessGrid({
     });
 
     return ids;
+  }, []);
+
+  const selectAllVisibleRows = useCallback(() => {
+    const ids = [];
+    let firstRowIndex = null;
+    let lastRowIndex = null;
+
+    gridRef.current?.api?.deselectAll();
+    gridRef.current?.api?.forEachNodeAfterFilterAndSort((node) => {
+      if (node.rowPinned || node.rowIndex == null || !node.data?.id) return;
+      ids.push(node.data.id);
+      firstRowIndex ??= node.rowIndex;
+      lastRowIndex = node.rowIndex;
+      node.setSelected(true);
+    });
+
+    const nextSelection = ids.length
+      ? { mode: "rows", startRowIndex: firstRowIndex, endRowIndex: lastRowIndex }
+      : null;
+    selectionRangeRef.current = nextSelection;
+    setSelectionRange(nextSelection);
+    setSelectedIds(ids);
   }, []);
 
   const selectRowsByRange = useCallback((startRowIndex, endRowIndex) => {
@@ -1921,7 +2063,7 @@ function BusinessGrid({
     if (!targetRowIds.size) return;
 
     let changed = false;
-    const clearedRows = rows.map((row) => {
+    const clearedRows = sourceRows.map((row) => {
       if (!targetRowIds.has(row.id)) return row;
 
       let next = row;
@@ -1937,7 +2079,7 @@ function BusinessGrid({
     if (!changed) return;
     onBeforeDataChange?.();
     onRowsChange(tableKey, clearedRows);
-  }, [dialogs.confirm, getVisibleRowIdsInRange, onBeforeDataChange, onDeleteRows, onRowsChange, rows, tableKey]);
+  }, [dialogs.confirm, getVisibleRowIdsInRange, onBeforeDataChange, onDeleteRows, onRowsChange, sourceRows, tableKey]);
 
   const getSelectedAreaForCopy = useCallback(() => {
     const selection = selectionRangeRef.current;
@@ -2042,10 +2184,10 @@ function BusinessGrid({
     onBeforeDataChange?.();
     onRowsChange(
       tableKey,
-      rows.map(row => updatedRowsById.get(row.id) || row),
+      sourceRows.map(row => updatedRowsById.get(row.id) || row),
     );
     return true;
-  }, [onBeforeDataChange, onRowsChange, rows, tableKey]);
+  }, [onBeforeDataChange, onRowsChange, sourceRows, tableKey]);
 
   const fillSelectedCells = useCallback((direction) => {
     const selection = selectionRangeRef.current;
@@ -2113,10 +2255,10 @@ function BusinessGrid({
     onBeforeDataChange?.();
     onRowsChange(
       tableKey,
-      rows.map(row => updatedRowsById.get(row.id) || row),
+      sourceRows.map(row => updatedRowsById.get(row.id) || row),
     );
     return true;
-  }, [onBeforeDataChange, onRowsChange, rows, tableKey]);
+  }, [onBeforeDataChange, onRowsChange, sourceRows, tableKey]);
 
   useEffect(() => {
     fillSelectedCellsRef.current = fillSelectedCells;
@@ -2151,7 +2293,7 @@ function BusinessGrid({
     if (!scope) return false;
 
     let changed = false;
-    const clearedRows = rows.map((row) => {
+    const clearedRows = sourceRows.map((row) => {
       if (!scope.rowIds.has(row.id)) return row;
 
       let next = row;
@@ -2168,14 +2310,14 @@ function BusinessGrid({
     onBeforeDataChange?.();
     onRowsChange(tableKey, clearedRows);
     return true;
-  }, [getSelectedAreaScope, onBeforeDataChange, onRowsChange, rows, tableKey]);
+  }, [getSelectedAreaScope, onBeforeDataChange, onRowsChange, sourceRows, tableKey]);
 
   const setSelectedAreaValue = useCallback((value) => {
     const scope = getSelectedAreaScope();
     if (!scope) return false;
 
     let changed = false;
-    const updatedRows = rows.map((row) => {
+    const updatedRows = sourceRows.map((row) => {
       if (!scope.rowIds.has(row.id)) return row;
 
       let next = row;
@@ -2192,7 +2334,7 @@ function BusinessGrid({
     onBeforeDataChange?.();
     onRowsChange(tableKey, updatedRows);
     return true;
-  }, [getSelectedAreaScope, onBeforeDataChange, onRowsChange, rows, tableKey]);
+  }, [getSelectedAreaScope, onBeforeDataChange, onRowsChange, sourceRows, tableKey]);
 
   const batchModifySelectedArea = useCallback(async () => {
     if (!selectionRangeRef.current) return;
@@ -2270,7 +2412,7 @@ function BusinessGrid({
     });
 
     let replaceCount = 0;
-    const updatedRows = rows.map((row) => {
+    const updatedRows = sourceRows.map((row) => {
       if (!targetRowIds.has(row.id)) return row;
 
       let next = row;
@@ -2292,7 +2434,7 @@ function BusinessGrid({
     onBeforeDataChange?.();
     onRowsChange(tableKey, updatedRows);
     await dialogs.alert(`已替换 ${replaceCount} 个单元格。`, { title: "替换完成" });
-  }, [dialogs.alert, dialogs.prompt, onBeforeDataChange, onRowsChange, rows, tableKey]);
+  }, [dialogs.alert, dialogs.prompt, onBeforeDataChange, onRowsChange, sourceRows, tableKey]);
 
   const duplicateSelectedRows = useCallback(() => {
     const selection = selectionRangeRef.current;
@@ -2301,7 +2443,7 @@ function BusinessGrid({
     const rowIds = getVisibleRowIdsInRange(selection.startRowIndex, selection.endRowIndex);
     if (!rowIds.length) return false;
 
-    const selectedRowById = new Map(rows.map(row => [row.id, row]));
+    const selectedRowById = new Map(sourceRows.map(row => [row.id, row]));
     const clonedRows = rowIds
       .map(id => selectedRowById.get(id))
       .filter(Boolean)
@@ -2311,16 +2453,16 @@ function BusinessGrid({
     const maxRow = Math.max(selection.startRowIndex ?? 0, selection.endRowIndex ?? 0);
     const targetNode = getVisibleNodeAtRowIndex(maxRow);
     const originalIndex = targetNode?.data?.id
-      ? rows.findIndex(row => row.id === targetNode.data.id)
+      ? sourceRows.findIndex(row => row.id === targetNode.data.id)
       : -1;
-    const insertIndex = originalIndex === -1 ? rows.length : originalIndex + 1;
-    const nextRows = [...rows];
+    const insertIndex = originalIndex === -1 ? sourceRows.length : originalIndex + 1;
+    const nextRows = [...sourceRows];
     nextRows.splice(insertIndex, 0, ...clonedRows);
 
     onBeforeDataChange?.();
     onRowsChange(tableKey, nextRows);
     return true;
-  }, [getVisibleNodeAtRowIndex, getVisibleRowIdsInRange, onBeforeDataChange, onRowsChange, rows, tableKey]);
+  }, [getVisibleNodeAtRowIndex, getVisibleRowIdsInRange, onBeforeDataChange, onRowsChange, sourceRows, tableKey]);
 
   const getInsertRowCount = useCallback((placement) => {
     const parsed = Number.parseInt(insertRowCounts[placement], 10);
@@ -2333,10 +2475,10 @@ function BusinessGrid({
     const maxRow = Math.max(selection?.startRowIndex ?? 0, selection?.endRowIndex ?? 0);
     const targetNode = getVisibleNodeAtRowIndex(placement === "above" ? minRow : maxRow);
     const originalIndex = targetNode?.data?.id
-      ? rows.findIndex(row => row.id === targetNode.data.id)
+      ? sourceRows.findIndex(row => row.id === targetNode.data.id)
       : -1;
     const insertIndex = originalIndex === -1
-      ? (placement === "above" ? 0 : rows.length)
+      ? (placement === "above" ? 0 : sourceRows.length)
       : originalIndex + (placement === "below" ? 1 : 0);
     const normalizedCount = Math.floor(count);
     const rowCount = Number.isFinite(normalizedCount) && normalizedCount > 0 ? normalizedCount : 1;
@@ -2345,12 +2487,12 @@ function BusinessGrid({
       ...config.emptyRow,
       date: today(),
     }));
-    const nextRows = [...rows];
+    const nextRows = [...sourceRows];
     nextRows.splice(insertIndex, 0, ...newRows);
 
     onBeforeDataChange?.();
     onRowsChange(tableKey, nextRows);
-  }, [config.emptyRow, getVisibleNodeAtRowIndex, onBeforeDataChange, onRowsChange, rows, tableKey]);
+  }, [config.emptyRow, getVisibleNodeAtRowIndex, onBeforeDataChange, onRowsChange, sourceRows, tableKey]);
 
   const submitInsertRows = useCallback((event, placement) => {
     event.preventDefault();
@@ -2538,10 +2680,11 @@ function BusinessGrid({
     };
   }, [contextMenu]);
 
-  const openColumnFilter = useCallback((field, headerName, anchorRect) => {
+  const openColumnFilter = useCallback((field, headerName, anchorRect, optionValues = null) => {
     setFilterPopup({
       field,
       headerName,
+      optionValues,
       left: Math.min(anchorRect.left, window.innerWidth - 270),
       top: Math.max(12, Math.min(anchorRect.bottom + 6, window.innerHeight - 390)),
     });
@@ -2551,7 +2694,21 @@ function BusinessGrid({
     setFilterPopup(null);
   }, []);
 
+  const cloneColumnFilters = useCallback((filters) => (
+    Object.fromEntries(
+      Object.entries(filters).map(([field, values]) => [field, new Set(values)]),
+    )
+  ), []);
+
+  const pushColumnFilterUndo = useCallback(() => {
+    filterUndoStackRef.current = [
+      ...filterUndoStackRef.current,
+      cloneColumnFilters(columnFilters),
+    ].slice(-MAX_UNDO_STEPS);
+  }, [cloneColumnFilters, columnFilters]);
+
   const applyColumnFilter = useCallback((field, selectedValues, allValues) => {
+    pushColumnFilterUndo();
     setColumnFilters(current => {
       const next = { ...current };
       if (selectedValues.size === allValues.length) delete next[field];
@@ -2562,22 +2719,47 @@ function BusinessGrid({
     gridRef.current?.api?.deselectAll();
     setSelectedIds([]);
     setSelectionRange(null);
-  }, []);
+  }, [pushColumnFilterUndo]);
 
   const clearColumnFilter = useCallback((field) => {
+    pushColumnFilterUndo();
     setColumnFilters(current => {
       const next = { ...current };
       delete next[field];
       return next;
     });
     setFilterPopup(null);
+  }, [pushColumnFilterUndo]);
+
+  const restoreLastColumnFilter = useCallback(() => {
+    if (!filterUndoStackRef.current.length) return false;
+    const previousFilters = filterUndoStackRef.current[filterUndoStackRef.current.length - 1];
+    filterUndoStackRef.current = filterUndoStackRef.current.slice(0, -1);
+    setColumnFilters(previousFilters);
+    setFilterPopup(null);
+    gridRef.current?.api?.deselectAll();
+    setSelectedIds([]);
+    setSelectionRange(null);
+    return true;
   }, []);
+
+  useEffect(() => {
+    const handleFilterUndo = (event) => {
+      if (restoreLastColumnFilter()) {
+        event.preventDefault();
+      }
+    };
+
+    window.addEventListener("crm:undo-filter", handleFilterUndo);
+    return () => window.removeEventListener("crm:undo-filter", handleFilterUndo);
+  }, [restoreLastColumnFilter]);
 
   const gridContext = useMemo(() => ({
     openColumnFilter,
     activeFilterFields: new Set(Object.keys(columnFilters)),
     selectionRangeRef,
     selectableColumnFieldsRef,
+    selectAllRows: selectAllVisibleRows,
     startColumnSelection,
     updateColumnSelection,
     openHeaderContextMenu,
@@ -2585,6 +2767,7 @@ function BusinessGrid({
     columnFilters,
     openHeaderContextMenu,
     openColumnFilter,
+    selectAllVisibleRows,
     startColumnSelection,
     updateColumnSelection,
   ]);
@@ -2872,6 +3055,7 @@ function toGridColumn(column) {
   const cellClasses = [
     column.required ? "required-cell" : null,
     column.type === "number" ? "number-cell" : null,
+    column.field === "status" ? "status-cell" : null,
   ].filter(Boolean);
 
   const gridColumn = {
@@ -2900,11 +3084,16 @@ function toGridColumn(column) {
   if (column.type === "select") {
     gridColumn.cellEditor = "agSelectCellEditor";
     gridColumn.cellEditorParams = { values: column.options || [] };
-    gridColumn.cellRenderer = (params) => (
-      <span className={`status-chip ${statusClass(params.value)}`}>
-        {params.value || "未设置"}
-      </span>
-    );
+    gridColumn.cellRenderer = (params) => {
+      const value = column.options === statusOptions
+        ? normalizeOrderStatus(params.value)
+        : params.value;
+      return (
+        <span className={`status-chip ${statusClass(value)}`}>
+          {value || "未设置"}
+        </span>
+      );
+    };
   }
 
   return gridColumn;
@@ -2916,10 +3105,12 @@ function ColumnHeader(props) {
 
   const openFilter = (event) => {
     event.stopPropagation();
+    const optionValues = props.column.getColDef?.()?.cellEditorParams?.values;
     props.context?.openColumnFilter(
       props.column.getColId(),
       props.displayName,
       event.currentTarget.getBoundingClientRect(),
+      Array.isArray(optionValues) ? optionValues : null,
     );
   };
 
@@ -2938,7 +3129,7 @@ function ColumnHeader(props) {
 
   return (
     <div
-      className="column-header"
+      className={`column-header ${isFiltered ? "is-filtered" : ""}`}
       onMouseDown={startColumnSelection}
       onMouseEnter={updateColumnSelection}
       onContextMenu={openHeaderContextMenu}
@@ -2947,7 +3138,7 @@ function ColumnHeader(props) {
         className="column-header-label"
         type="button"
         onClick={(event) => event.preventDefault()}
-        title={props.displayName}
+        title={`${props.displayName}${isFiltered ? "（已筛选）" : ""}`}
       >
         {props.displayName}
       </button>
@@ -2956,7 +3147,7 @@ function ColumnHeader(props) {
         type="button"
         onMouseDown={(event) => event.stopPropagation()}
         onClick={openFilter}
-        title="筛选"
+        title={isFiltered ? "已筛选，点击修改筛选" : "筛选"}
       >
         ▾
       </button>
@@ -2964,18 +3155,51 @@ function ColumnHeader(props) {
   );
 }
 
+function RowNumberHeader(props) {
+  const selectAllRows = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    props.context?.selectAllRows?.();
+  };
+
+  return (
+    <button
+      className="row-number-header-button"
+      type="button"
+      onMouseDown={(event) => event.stopPropagation()}
+      onClick={selectAllRows}
+      title="选中所有可见行"
+    >
+      #
+    </button>
+  );
+}
+
 function ColumnValueFilter({ popup, rows, appliedValues, onApply, onClear, onClose }) {
   const values = useMemo(() => {
     const seen = new Set();
     const result = [];
-    for (const row of rows) {
-      const value = filterValue(row[popup.field]);
-      if (seen.has(value.key)) continue;
+    const addValue = (rawValue) => {
+      const normalizedValue = popup.field === "status" && popup.optionValues?.includes("未完成")
+        ? normalizeOrderStatus(rawValue)
+        : rawValue;
+      const value = filterValue(normalizedValue);
+      if (seen.has(value.key)) return;
       seen.add(value.key);
       result.push(value);
+    };
+
+    if (popup.optionValues?.length) {
+      popup.optionValues.forEach(addValue);
     }
-    return result.sort((a, b) => a.label.localeCompare(b.label, "zh-CN", { numeric: true }));
-  }, [popup.field, rows]);
+
+    for (const row of rows) {
+      addValue(row[popup.field]);
+    }
+    return popup.optionValues?.length
+      ? result
+      : result.sort((a, b) => a.label.localeCompare(b.label, "zh-CN", { numeric: true }));
+  }, [popup.field, popup.optionValues, rows]);
 
   const [draftValues, setDraftValues] = useState(() =>
     new Set(appliedValues ? Array.from(appliedValues) : values.map(value => value.key)),
@@ -3039,14 +3263,19 @@ function filterValue(value) {
 }
 
 function statusClass(value = "") {
-  if (value.includes("完成") || value.includes("签收")) return "is-done";
+  if (value === "未完成" || value === "待确认" || value === "生产中" || value === "待发货") return "is-unfinished";
+  if (value === "已完成") return "is-completed";
+  if (value === "已送货" || value === "已发货" || value.includes("签收")) return "is-delivered";
+  if (value === "已开对账单") return "is-reconciled";
+  if (value === "已付款") return "is-paid";
   if (value.includes("异常")) return "is-risk";
-  if (value.includes("生产") || value.includes("配送")) return "is-live";
-  if (value.includes("发货") || value.includes("装车")) return "is-waiting";
+  if (value.includes("配送")) return "is-live";
+  if (value.includes("装车")) return "is-waiting";
+  if (value.includes("完成")) return "is-completed";
   return "";
 }
 
-const KANBAN_COLS = ["待确认", "生产中", "待发货", "已发货"];
+const KANBAN_COLS = statusOptions;
 
 function OrderKanban({ customers, onSelectCustomer }) {
   const cards = useMemo(() => {
@@ -3117,7 +3346,7 @@ function SummaryList({ customer }) {
     ["送货单", customer?.deliveries?.length || 0],
     [
       "待跟进",
-      customer?.orders?.filter((order) => !["已完成", "异常"].includes(order.status))
+      customer?.orders?.filter((order) => isOpenOrder(order.status))
         .length || 0,
     ],
     ["客户等级", customer?.level || "未设置"],

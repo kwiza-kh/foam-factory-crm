@@ -1,10 +1,15 @@
 import { useMemo, useState } from 'react';
 import { AgGridReact } from 'ag-grid-react';
-import { AllCommunityModule, ModuleRegistry, themeQuartz } from 'ag-grid-community';
+import {
+  ClientSideRowModelModule,
+  ModuleRegistry,
+  TextEditorModule,
+  themeQuartz,
+} from 'ag-grid-community';
 import { Check, X } from 'lucide-react';
 import { makeId } from '../lib/utils.js';
 
-ModuleRegistry.registerModules([AllCommunityModule]);
+ModuleRegistry.registerModules([ClientSideRowModelModule, TextEditorModule]);
 
 const gridTheme = themeQuartz.withParams({
   accentColor: '#42e8ff',

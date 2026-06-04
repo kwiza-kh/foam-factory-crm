@@ -1,6 +1,5 @@
-import ExcelJS from 'exceljs';
-
 export async function exportTableToExcel(customer, tableKey, columns) {
+  const { default: ExcelJS } = await import('exceljs');
   const rows = customer[tableKey] || [];
   const cols = columns.filter(c => c.field !== '__actions' && c.field !== 'id');
   const headers = cols.map(c => c.headerName);
