@@ -3,7 +3,7 @@ import { FileUp } from 'lucide-react';
 import { parseOrderFile } from '../lib/orderImport.js';
 import { OrderImportPreviewModal } from './OrderImportPreviewModal.jsx';
 
-export function OrderImportButton({ onImport, disabled }) {
+export function OrderImportButton({ onImport, disabled, dialogs }) {
   const inputRef = useRef(null);
   const [parsed, setParsed] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -17,12 +17,12 @@ export function OrderImportButton({ onImport, disabled }) {
     try {
       const result = await parseOrderFile(file);
       if (!result.rows.length) {
-        alert('没有识别到可导入的订单数据。');
+        await dialogs.alert('没有识别到可导入的订单数据。', { title: '导入订单' });
         return;
       }
       setParsed(result);
     } catch (err) {
-      alert(`导入失败：${err.message}`);
+      await dialogs.alert(`导入失败：${err.message}`, { title: '导入失败' });
     } finally {
       setBusy(false);
     }

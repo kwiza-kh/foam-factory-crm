@@ -425,7 +425,137 @@ const toFieldKey = (label) =>
     .replace(/[^a-z0-9\u4e00-\u9fa5]+/gi, "_")
     .replace(/^_+|_+$/g, "")}_${Math.random().toString(36).slice(2, 5)}`;
 
+function useDialogController() {
+  const [dialog, setDialog] = useState(null);
+  const resolverRef = useRef(null);
+
+  const openDialog = useCallback((config) => new Promise((resolve) => {
+    resolverRef.current = resolve;
+    setDialog(config);
+  }), []);
+
+  const resolveDialog = useCallback((value) => {
+    const resolve = resolverRef.current;
+    resolverRef.current = null;
+    setDialog(null);
+    resolve?.(value);
+  }, []);
+
+  const showAlert = useCallback((message, options = {}) => (
+    openDialog({
+      type: "alert",
+      title: options.title || "提示",
+      message,
+      tone: options.tone,
+    }).then(() => true)
+  ), [openDialog]);
+
+  const showConfirm = useCallback((message, options = {}) => (
+    openDialog({
+      type: "confirm",
+      title: options.title || "确认操作",
+      message,
+      tone: options.tone,
+    })
+  ), [openDialog]);
+
+  const showPrompt = useCallback((message, options = {}) => (
+    openDialog({
+      type: "prompt",
+      title: options.title || "输入内容",
+      message,
+      defaultValue: options.defaultValue || "",
+      placeholder: options.placeholder || "",
+      tone: options.tone,
+    })
+  ), [openDialog]);
+
+  return useMemo(() => ({
+    dialog,
+    alert: showAlert,
+    confirm: showConfirm,
+    prompt: showPrompt,
+    resolve: resolveDialog,
+  }), [dialog, resolveDialog, showAlert, showConfirm, showPrompt]);
+}
+
+function AppDialog({ dialog, onResolve }) {
+  const [inputValue, setInputValue] = useState("");
+
+  useEffect(() => {
+    if (dialog?.type === "prompt") {
+      setInputValue(dialog.defaultValue || "");
+    }
+  }, [dialog]);
+
+  useEffect(() => {
+    if (!dialog) return undefined;
+
+    const handleKeyDown = (event) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      onResolve(dialog.type === "prompt" ? null : false);
+    };
+
+    document.addEventListener("keydown", handleKeyDown, true);
+    return () => document.removeEventListener("keydown", handleKeyDown, true);
+  }, [dialog, onResolve]);
+
+  if (!dialog) return null;
+
+  const isPrompt = dialog.type === "prompt";
+  const isConfirm = dialog.type === "confirm";
+  const cancelValue = isPrompt ? null : false;
+  const confirmValue = isPrompt ? inputValue : true;
+
+  const titleId = "app-dialog-title";
+
+  return (
+    <div className="app-dialog-backdrop" role="presentation">
+      <form
+        aria-labelledby={titleId}
+        aria-modal="true"
+        className={`app-dialog-card ${dialog.tone === "danger" ? "is-danger" : ""}`}
+        role="dialog"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onResolve(confirmValue);
+        }}
+      >
+        <div className="app-dialog-head">
+          <span id={titleId}>{dialog.title}</span>
+        </div>
+        <p className="app-dialog-message">{dialog.message}</p>
+        {isPrompt && (
+          <input
+            autoFocus
+            className="app-dialog-input"
+            value={inputValue}
+            placeholder={dialog.placeholder}
+            onChange={(event) => setInputValue(event.target.value)}
+          />
+        )}
+        <div className="app-dialog-actions">
+          {(isPrompt || isConfirm) && (
+            <button type="button" className="secondary-button compact" onClick={() => onResolve(cancelValue)}>
+              取消
+            </button>
+          )}
+          <button
+            autoFocus={!isPrompt}
+            type="submit"
+            className={`primary-action compact ${dialog.tone === "danger" ? "danger-confirm" : ""}`}
+          >
+            {isConfirm ? "确认" : "确定"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 function App() {
+  const dialogs = useDialogController();
   const [customers, setCustomers] = useState([]);
   const [selectedCustomerId, setSelectedCustomerId] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -520,13 +650,13 @@ function App() {
         await api.replaceAll(customersToSync);
       } catch (err) {
         if (fullDataSyncRevisionRef.current === revision) {
-          alert(`撤销已在界面完成，但同步数据库失败：${err.message}`);
+          void dialogs.alert(`撤销已在界面完成，但同步数据库失败：${err.message}`, { title: "同步失败" });
         }
       }
     };
 
     run();
-  }, []);
+  }, [dialogs.alert]);
 
   const restoreLastUndoSnapshot = useCallback(() => {
     if (undoingRef.current || !undoStackRef.current.length) return;
@@ -572,9 +702,9 @@ function App() {
         setCustomers(data);
         if (data.length) setSelectedCustomerId(data[0].id);
       })
-      .catch(err => alert(`加载失败：${err.message}`))
+      .catch(err => dialogs.alert(`加载失败：${err.message}`, { title: "加载失败" }))
       .finally(() => setLoading(false));
-  }, []);
+  }, [dialogs.alert]);
 
   const selectedCustomer = useMemo(
     () => customers.find((customer) => customer.id === selectedCustomerId),
@@ -663,7 +793,7 @@ function App() {
         updateSelectedCustomer(c => ({ ...c, [tableKey]: result.rows }));
       }
     } catch (err) {
-      alert(`保存失败：${err.message}`);
+      await dialogs.alert(`保存失败：${err.message}`, { title: "保存失败" });
     }
   };
 
@@ -685,7 +815,7 @@ function App() {
         updateSelectedCustomer(c => ({ ...c, [tableKey]: result.rows }));
       }
     } catch (err) {
-      alert(`保存失败：${err.message}`);
+      await dialogs.alert(`保存失败：${err.message}`, { title: "保存失败" });
     }
   };
 
@@ -708,7 +838,7 @@ function App() {
         updateSelectedCustomer(c => ({ ...c, [tableKey]: result.rows }));
       }
     } catch (err) {
-      alert(`删除失败：${err.message}`);
+      await dialogs.alert(`删除失败：${err.message}`, { title: "删除失败" });
     }
   };
 
@@ -722,7 +852,7 @@ function App() {
     try {
       await api.updateCustomer(selectedCustomerId, { ...selectedCustomer, customColumns: newCustomColumns });
     } catch (err) {
-      alert(`保存失败：${err.message}`);
+      await dialogs.alert(`保存失败：${err.message}`, { title: "保存失败" });
     }
   };
 
@@ -761,7 +891,7 @@ function App() {
         updateSelectedCustomer(c => ({ ...c, [tableKey]: rowsResult.rows }));
       }
     } catch (err) {
-      alert(`保存失败：${err.message}`);
+      await dialogs.alert(`保存失败：${err.message}`, { title: "保存失败" });
     }
   };
 
@@ -778,7 +908,7 @@ function App() {
       try {
         await api.updateCustomer(customerInput.id, customerInput);
       } catch (err) {
-        alert(`保存失败：${err.message}`);
+        await dialogs.alert(`保存失败：${err.message}`, { title: "保存失败" });
       }
       return;
     }
@@ -802,7 +932,7 @@ function App() {
     try {
       await api.createCustomer(newCustomer);
     } catch (err) {
-      alert(`保存失败：${err.message}`);
+      await dialogs.alert(`保存失败：${err.message}`, { title: "保存失败" });
     }
   };
 
@@ -846,7 +976,7 @@ function App() {
         updateSelectedCustomer(c => ({ ...c, orders: rowsResult.rows }));
       }
     } catch (err) {
-      alert(`保存失败：${err.message}`);
+      await dialogs.alert(`保存失败：${err.message}`, { title: "保存失败" });
     }
   };
 
@@ -856,7 +986,10 @@ function App() {
     e.target.value = "";
     try {
       const data = await importBackup(file);
-      if (window.confirm(`恢复备份将覆盖当前所有数据（共 ${data.length} 个客户）。确认继续？`)) {
+      if (await dialogs.confirm(`恢复备份将覆盖当前所有数据（共 ${data.length} 个客户）。确认继续？`, {
+        title: "恢复备份",
+        tone: "danger",
+      })) {
         const safeData = ensureUniqueCustomerRowIds(data);
         pushUndoSnapshot();
         const result = await api.replaceAll(safeData);
@@ -864,7 +997,7 @@ function App() {
         setSelectedCustomerId((result?.customers || safeData)[0]?.id);
       }
     } catch (err) {
-      alert(`恢复失败：${err.message}`);
+      await dialogs.alert(`恢复失败：${err.message}`, { title: "恢复失败" });
     }
   };
 
@@ -881,12 +1014,15 @@ function App() {
     try {
       await api.updateCustomer(selectedCustomerId, { ...selectedCustomer, customColumns: newCustomColumns });
     } catch (err) {
-      alert(`保存失败：${err.message}`);
+      await dialogs.alert(`保存失败：${err.message}`, { title: "保存失败" });
     }
-  }, [pushUndoSnapshot, selectedCustomer, selectedCustomerId]);
+  }, [dialogs.alert, pushUndoSnapshot, selectedCustomer, selectedCustomerId]);
 
   const deleteCustomer = async (id) => {
-    if (!window.confirm('确认删除该客户？此操作不可恢复，包括所有订单和送货记录。')) return;
+    if (!(await dialogs.confirm("确认删除该客户？此操作不可恢复，包括所有订单和送货记录。", {
+      title: "删除客户",
+      tone: "danger",
+    }))) return;
     pushUndoSnapshot();
     setCustomers(current => current.filter(c => c.id !== id));
     if (selectedCustomerId === id) {
@@ -896,7 +1032,7 @@ function App() {
     try {
       await api.deleteCustomer(id);
     } catch (err) {
-      alert(`删除失败：${err.message}`);
+      await dialogs.alert(`删除失败：${err.message}`, { title: "删除失败" });
     }
   };
 
@@ -909,7 +1045,7 @@ function App() {
       setSelectedCustomerId((result?.customers || safeInitialCustomers)[0]?.id);
       setActiveTable("orders");
     } catch (err) {
-      alert(`重置失败：${err.message}`);
+      await dialogs.alert(`重置失败：${err.message}`, { title: "重置失败" });
     }
   };
 
@@ -1116,6 +1252,7 @@ function App() {
                   {selectedCustomer && activeTable === "orders" && (
                     <OrderImportButton
                       disabled={!selectedCustomer}
+                      dialogs={dialogs}
                       onImport={handleOrderImport}
                     />
                   )}
@@ -1169,6 +1306,7 @@ function App() {
                   onRemoveColumns={removeCustomColumns}
                   onBeforeDataChange={pushUndoSnapshot}
                   onCreateUndoSnapshot={takeUndoSnapshot}
+                  dialogs={dialogs}
                 />
               ) : (
                 <div className="empty-state">请先新增或选择一个客户。</div>
@@ -1223,6 +1361,8 @@ function App() {
           onClose={() => setPrintDelivery(null)}
         />
       )}
+
+      <AppDialog dialog={dialogs.dialog} onResolve={dialogs.resolve} />
     </div>
   );
 }
@@ -1238,6 +1378,7 @@ function BusinessGrid({
   onRemoveColumns,
   onBeforeDataChange,
   onCreateUndoSnapshot,
+  dialogs,
 }) {
   const gridRef = useRef(null);
   const gridShellRef = useRef(null);
@@ -1731,23 +1872,29 @@ function BusinessGrid({
     onColumnOrderChange(tableKey, order);
   }, [onColumnOrderChange, tableKey]);
 
-  const handleBatchDelete = () => {
+  const handleBatchDelete = async () => {
     if (!selectedIds.length) return;
-    if (!window.confirm(`确认删除选中的 ${selectedIds.length} 行？此操作不可恢复。`)) return;
+    if (!(await dialogs.confirm(`确认删除选中的 ${selectedIds.length} 行？此操作不可恢复。`, {
+      title: "删除选中行",
+      tone: "danger",
+    }))) return;
     onDeleteRows(tableKey, selectedIds);
     setSelectedIds([]);
     gridRef.current?.api?.deselectAll();
     setSelectionRange(null);
   };
 
-  const deleteSelectedArea = useCallback(() => {
+  const deleteSelectedArea = useCallback(async () => {
     const selection = selectionRangeRef.current;
     if (!selection) return;
 
     if (selection.mode === "rows") {
       const rowIds = getVisibleRowIdsInRange(selection.startRowIndex, selection.endRowIndex);
       if (!rowIds.length) return;
-      if (!window.confirm(`确认删除选中的 ${rowIds.length} 行？此操作不可恢复。`)) return;
+      if (!(await dialogs.confirm(`确认删除选中的 ${rowIds.length} 行？此操作不可恢复。`, {
+        title: "删除选中行",
+        tone: "danger",
+      }))) return;
       onDeleteRows(tableKey, rowIds);
       setSelectedIds([]);
       gridRef.current?.api?.deselectAll();
@@ -1790,7 +1937,7 @@ function BusinessGrid({
     if (!changed) return;
     onBeforeDataChange?.();
     onRowsChange(tableKey, clearedRows);
-  }, [getVisibleRowIdsInRange, onBeforeDataChange, onDeleteRows, onRowsChange, rows, tableKey]);
+  }, [dialogs.confirm, getVisibleRowIdsInRange, onBeforeDataChange, onDeleteRows, onRowsChange, rows, tableKey]);
 
   const getSelectedAreaForCopy = useCallback(() => {
     const selection = selectionRangeRef.current;
@@ -2047,16 +2194,22 @@ function BusinessGrid({
     return true;
   }, [getSelectedAreaScope, onBeforeDataChange, onRowsChange, rows, tableKey]);
 
-  const batchModifySelectedArea = useCallback(() => {
+  const batchModifySelectedArea = useCallback(async () => {
     if (!selectionRangeRef.current) return;
 
-    const value = window.prompt("批量修改选区为：");
+    const value = await dialogs.prompt("批量修改选区为：", {
+      title: "批量修改选区",
+      placeholder: "输入要写入选区的值",
+    });
     if (value === null) return;
     setSelectedAreaValue(value);
-  }, [setSelectedAreaValue]);
+  }, [dialogs.prompt, setSelectedAreaValue]);
 
-  const findInTable = useCallback(() => {
-    const query = window.prompt("查找内容：");
+  const findInTable = useCallback(async () => {
+    const query = await dialogs.prompt("查找内容：", {
+      title: "查找",
+      placeholder: "输入要查找的内容",
+    });
     if (!query) return;
 
     const fields = selectableColumnFieldsRef.current;
@@ -2075,20 +2228,26 @@ function BusinessGrid({
     });
 
     if (!match) {
-      alert("未找到匹配内容。");
+      await dialogs.alert("未找到匹配内容。", { title: "查找结果" });
       return;
     }
 
     selectCellsByRange(match.rowIndex, match.rowIndex, match.colIndex, match.colIndex);
     gridRef.current?.api?.ensureIndexVisible(match.rowIndex, "middle");
     gridRef.current?.api?.ensureColumnVisible(match.field);
-  }, [selectCellsByRange]);
+  }, [dialogs.alert, dialogs.prompt, selectCellsByRange]);
 
-  const replaceInTable = useCallback(() => {
-    const findText = window.prompt("查找内容：");
+  const replaceInTable = useCallback(async () => {
+    const findText = await dialogs.prompt("查找内容：", {
+      title: "替换",
+      placeholder: "输入要替换的原内容",
+    });
     if (!findText) return;
 
-    const replacement = window.prompt("替换为：");
+    const replacement = await dialogs.prompt("替换为：", {
+      title: "替换",
+      placeholder: "输入新的内容；留空则清除",
+    });
     if (replacement === null) return;
 
     const selection = selectionRangeRef.current;
@@ -2126,14 +2285,14 @@ function BusinessGrid({
     });
 
     if (!replaceCount) {
-      alert("未找到可替换内容。");
+      await dialogs.alert("未找到可替换内容。", { title: "替换结果" });
       return;
     }
 
     onBeforeDataChange?.();
     onRowsChange(tableKey, updatedRows);
-    alert(`已替换 ${replaceCount} 个单元格。`);
-  }, [onBeforeDataChange, onRowsChange, rows, tableKey]);
+    await dialogs.alert(`已替换 ${replaceCount} 个单元格。`, { title: "替换完成" });
+  }, [dialogs.alert, dialogs.prompt, onBeforeDataChange, onRowsChange, rows, tableKey]);
 
   const duplicateSelectedRows = useCallback(() => {
     const selection = selectionRangeRef.current;
@@ -2206,18 +2365,21 @@ function BusinessGrid({
     return getVisibleRowIdsInRange(selection.startRowIndex, selection.endRowIndex);
   }, [getVisibleRowIdsInRange]);
 
-  const deleteRowsFromMenu = useCallback(() => {
+  const deleteRowsFromMenu = useCallback(async () => {
     const rowIds = getSelectedRowIdsForMenu();
     if (!rowIds.length) return;
-    if (!window.confirm(`确认删除选中的 ${rowIds.length} 行？此操作不可恢复。`)) return;
+    if (!(await dialogs.confirm(`确认删除选中的 ${rowIds.length} 行？此操作不可恢复。`, {
+      title: "删除选中行",
+      tone: "danger",
+    }))) return;
 
     onDeleteRows(tableKey, rowIds);
     setSelectedIds([]);
     gridRef.current?.api?.deselectAll();
     setSelectionRange(null);
-  }, [getSelectedRowIdsForMenu, onDeleteRows, tableKey]);
+  }, [dialogs.confirm, getSelectedRowIdsForMenu, onDeleteRows, tableKey]);
 
-  const deleteSelectedColumnsFromMenu = useCallback(() => {
+  const deleteSelectedColumnsFromMenu = useCallback(async () => {
     if (!onRemoveColumns || !removableSelectedColumnFields.length) return;
 
     const columnNames = removableSelectedColumnFields
@@ -2228,12 +2390,16 @@ function BusinessGrid({
       ? `\n其中 ${lockedCount} 个默认表头不会删除。`
       : "";
 
-    if (!window.confirm(`确认删除选中的 ${removableSelectedColumnFields.length} 个自定义表头？\n${columnNames}${lockedMessage}`)) return;
+    if (!(await dialogs.confirm(`确认删除选中的 ${removableSelectedColumnFields.length} 个自定义表头？\n${columnNames}${lockedMessage}`, {
+      title: "删除表头",
+      tone: "danger",
+    }))) return;
 
     onRemoveColumns(tableKey, removableSelectedColumnFields);
     setSelectionRange(null);
   }, [
     columnHeaderByField,
+    dialogs.confirm,
     onRemoveColumns,
     removableSelectedColumnFields,
     selectedColumnFields.length,
@@ -2263,18 +2429,18 @@ function BusinessGrid({
     try {
       await navigator.clipboard.writeText(text);
     } catch (err) {
-      alert(`复制失败：${err.message}`);
+      await dialogs.alert(`复制失败：${err.message}`, { title: "复制失败" });
     }
-  }, [getSelectedAreaText]);
+  }, [dialogs.alert, getSelectedAreaText]);
 
   const pasteFromMenu = useCallback(async () => {
     try {
       const text = await navigator.clipboard.readText();
       pasteClipboardData(text);
     } catch (err) {
-      alert(`粘贴失败：${err.message}`);
+      await dialogs.alert(`粘贴失败：${err.message}`, { title: "粘贴失败" });
     }
-  }, [pasteClipboardData]);
+  }, [dialogs.alert, pasteClipboardData]);
 
   useEffect(() => {
     const handleCopy = (event) => {
