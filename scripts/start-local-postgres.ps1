@@ -32,7 +32,7 @@ if ($dbUser -ne 'postgres') {
   throw "Local PostgreSQL script expects DATABASE_URL user postgres, found $dbUser"
 }
 
-$PgRoot = Join-Path $Root '.postgres'
+$PgRoot = Join-Path $env:USERPROFILE '.foam-crm-pg'
 $DataDir = Join-Path $PgRoot 'data'
 $LogPath = Join-Path $PgRoot 'postgres.log'
 $PwFile = Join-Path $PgRoot 'pwfile.tmp'

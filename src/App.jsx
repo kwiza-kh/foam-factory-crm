@@ -14,6 +14,7 @@ import {
   ColumnAutoSizeModule,
   DateEditorModule,
   DragAndDropModule,
+  LocaleModule,
   ModuleRegistry,
   NumberEditorModule,
   PinnedRowModule,
@@ -21,6 +22,7 @@ import {
   RenderApiModule,
   RowApiModule,
   RowSelectionModule,
+  RowStyleModule,
   ScrollApiModule,
   SelectEditorModule,
   TextEditorModule,
@@ -55,6 +57,7 @@ import {
   ArrowRight,
   ArrowUp,
   RotateCcw,
+  Pencil,
 } from "lucide-react";
 
 ModuleRegistry.registerModules([
@@ -66,12 +69,14 @@ ModuleRegistry.registerModules([
   ColumnMoveModule,
   DateEditorModule,
   DragAndDropModule,
+  LocaleModule,
   NumberEditorModule,
   PinnedRowModule,
   QuickFilterModule,
   RenderApiModule,
   RowApiModule,
   RowSelectionModule,
+  RowStyleModule,
   ScrollApiModule,
   SelectEditorModule,
   SortModule,
@@ -85,6 +90,19 @@ const normalizeOrderStatus = (status = "") => {
   if (statusOptions.includes(status)) return status;
   if (status === "已发货") return "已送货";
   return "未完成";
+};
+const statusTransitions = {
+  "未完成": ["已排产", "已完成"],
+  "已排产": ["生产中"],
+  "生产中": ["已完成"],
+  "已完成": ["已送货", "已开对账单"],
+  "已送货": ["已开对账单"],
+  "已开对账单": ["已付款"],
+  "已付款": [],
+};
+const getNextStatuses = (currentStatus) => {
+  const normalized = normalizeOrderStatus(currentStatus);
+  return statusTransitions[normalized] || [];
 };
 const deliveryStatusOptions = ["待装车", "配送中", "已签收", "回单异常"];
 const customerLevelOptions = ["重点客户", "稳定客户", "新客户", "暂停合作"];
@@ -1424,16 +1442,24 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [activeTable, setActiveTable] = useState("orders");
   const [searchText, setSearchText] = useState("");
+  const [viewMode, setViewMode] = useState("grid");
   const [quickFilter, setQuickFilter] = useState("");
+  const [globalSearchQuery, setGlobalSearchQuery] = useState("");
+  const [showGlobalSearchResults, setShowGlobalSearchResults] = useState(false);
   const [showCustomerModal, setShowCustomerModal] = useState(false);
   const [showColumnModal, setShowColumnModal] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState(null);
   const backupInputRef = useRef();
   const [printDelivery, setPrintDelivery] = useState(null);
   const [productionScheduleOrders, setProductionScheduleOrders] = useState([]);
+  const [showSettings, setShowSettings] = useState(false);
+  const [systemSettings, setSystemSettings] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("foam-crm-settings") || "{}"); } catch { return {}; }
+  });
   const customersRef = useRef(customers);
   const selectedCustomerIdRef = useRef(selectedCustomerId);
   const activeTableRef = useRef(activeTable);
+  const lastTableByCustomerRef = useRef({});
   const undoStackRef = useRef([]);
   const undoingRef = useRef(false);
   const rowSaveQueueRef = useRef(new Map());
@@ -1644,6 +1670,44 @@ function App() {
     ];
   }, [customers]);
 
+  // 全局搜索：搜索订单号、产品名、送货单号、客户名
+  const globalSearchResults = useMemo(() => {
+    const q = globalSearchQuery.trim().toLowerCase();
+    if (!q || q.length < 2) return [];
+    const results = [];
+    for (const customer of customers) {
+      if (customer.name.toLowerCase().includes(q) || customer.contact?.toLowerCase().includes(q)) {
+        results.push({ type: "customer", customerId: customer.id, customerName: customer.name, label: `客户 · ${customer.name}`, detail: customer.contact || "" });
+      }
+      for (const order of customer.orders || []) {
+        if ((order.orderNo || "").toLowerCase().includes(q) || (order.product || "").toLowerCase().includes(q)) {
+          results.push({ type: "order", customerId: customer.id, customerName: customer.name, label: `订单 · ${order.orderNo || order.product}`, detail: `${order.product || ""} · ${order.status || ""}`, orderId: order.id });
+        }
+      }
+      for (const delivery of customer.deliveries || []) {
+        if ((delivery.deliveryNo || "").toLowerCase().includes(q)) {
+          results.push({ type: "delivery", customerId: customer.id, customerName: customer.name, label: `送货单 · ${delivery.deliveryNo}`, detail: delivery.status || "", deliveryId: delivery.id });
+        }
+      }
+    }
+    return results.slice(0, 20);
+  }, [customers, globalSearchQuery]);
+
+  const navigateToSearchResult = useCallback((result) => {
+    // 保存当前客户的上下文
+    if (selectedCustomerId) {
+      lastTableByCustomerRef.current[selectedCustomerId] = activeTable;
+    }
+    // 恢复目标客户的上下文
+    const lastTable = lastTableByCustomerRef.current[result.customerId];
+    setSelectedCustomerId(result.customerId);
+    if (lastTable) setActiveTable(lastTable);
+    if (result.type === "delivery") setActiveTable("finalDeliveries");
+    else if (result.type === "order") setActiveTable("orders");
+    setGlobalSearchQuery("");
+    setShowGlobalSearchResults(false);
+  }, [activeTable, selectedCustomerId]);
+
   const updateSelectedCustomer = (updater) => {
     setCustomers((current) =>
       current.map((customer) =>
@@ -1727,7 +1791,25 @@ function App() {
     pushUndoSnapshot();
     const config = tableConfigs[tableKey];
     const currentCustomer = customersRef.current.find(customer => customer.id === selectedCustomerId) || selectedCustomer;
-    const newRow = { id: makeId(tableKey), ...config.emptyRow, date: today() };
+
+    // 订单号自动生成
+    const generatedOrderNo = tableKey === "orders" && systemSettings.orderNoPrefix
+      ? `${systemSettings.orderNoPrefix}${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${String((currentCustomer?.orders?.length || 0) + 1).padStart(3, "0")}`
+      : "";
+
+    // 默认交期 = 今天 + 默认天数
+    const defaultDueDate = tableKey === "orders" && systemSettings.defaultDueDays
+      ? new Date(Date.now() + Number(systemSettings.defaultDueDays) * 86400000).toISOString().slice(0, 10)
+      : "";
+
+    const newRow = {
+      id: makeId(tableKey),
+      ...config.emptyRow,
+      date: tableKey === "orders" ? today() : "",
+      orderNo: generatedOrderNo || "",
+      dueDate: defaultDueDate || "",
+      status: tableKey === "orders" ? "未完成" : config.emptyRow.status || "",
+    };
     let newRows = ensureUniqueRowIds(
       applyCustomerTableFormulas(
         currentCustomer,
@@ -2408,6 +2490,30 @@ function App() {
           </div>
         </div>
 
+        <div className="global-search-wrap">
+          <label className="search-box global-search">
+            <Search size={16} />
+            <input
+              value={globalSearchQuery}
+              onChange={(e) => { setGlobalSearchQuery(e.target.value); setShowGlobalSearchResults(true); }}
+              onFocus={() => setShowGlobalSearchResults(true)}
+              onBlur={() => setTimeout(() => setShowGlobalSearchResults(false), 200)}
+              placeholder="搜索订单号 / 产品 / 送货单…"
+            />
+          </label>
+          {showGlobalSearchResults && globalSearchResults.length > 0 && (
+            <div className="global-search-results">
+              {globalSearchResults.map((r, i) => (
+                <button key={i} className="search-result-item" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => navigateToSearchResult(r)}>
+                  <span className="search-result-type">{r.type === "customer" ? "👤" : r.type === "order" ? "📋" : "🚚"}</span>
+                  <span className="search-result-label">{r.label}</span>
+                  <span className="search-result-meta">{r.customerName}{r.detail ? ` · ${r.detail}` : ""}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
         <button
           className="primary-action"
           type="button"
@@ -2438,7 +2544,12 @@ function App() {
               <button
                 className="customer-item-body"
                 type="button"
-                onClick={() => setSelectedCustomerId(customer.id)}
+                onClick={() => {
+                  if (selectedCustomerId) lastTableByCustomerRef.current[selectedCustomerId] = activeTable;
+                  setSelectedCustomerId(customer.id);
+                  const lastTable = lastTableByCustomerRef.current[customer.id];
+                  if (lastTable) setActiveTable(lastTable);
+                }}
               >
                 <span className="customer-name">
                   {customer.name}
@@ -2494,6 +2605,15 @@ function App() {
           <button className="ghost-button" type="button" onClick={resetDemoData}>
             恢复演示数据
           </button>
+          <button
+            className="ghost-button"
+            type="button"
+            title="系统设置"
+            onClick={() => setShowSettings(true)}
+          >
+            <Settings2 size={14} />
+            系统设置
+          </button>
         </div>
       </aside>
 
@@ -2501,7 +2621,7 @@ function App() {
         <header className="topbar">
           <div>
             <p className="eyebrow">CUSTOMER COMMAND CENTER</p>
-            <h2>{selectedCustomer?.name || "请选择客户"}</h2>
+            <h2>{selectedCustomer?.name || "运营仪表盘"}</h2>
           </div>
           <div className="topbar-actions">
             <button
@@ -2528,9 +2648,11 @@ function App() {
             </article>
           ))}
         </section>
-
         <>
-            {selectedCustomer && alertMap[selectedCustomer.id] && (
+
+        {selectedCustomer ? (
+          <>
+            {alertMap[selectedCustomer.id] && (
               <section className={`alert-banner alert-banner--${alertMap[selectedCustomer.id]}`}>
                 <AlertTriangle size={15} />
                 {alertMap[selectedCustomer.id] === "danger"
@@ -2558,7 +2680,11 @@ function App() {
                         key={key}
                         className={`tab-button ${activeTable === key ? "is-active" : ""}`}
                         type="button"
-                        onClick={() => setActiveTable(key)}
+                        onClick={() => {
+                          if (selectedCustomer) lastTableByCustomerRef.current[selectedCustomer.id] = key;
+                          setActiveTable(key);
+                          setViewMode("grid");
+                        }}
                       >
                         <Icon size={17} />
                         {config.label}
@@ -2566,6 +2692,17 @@ function App() {
                     );
                   })}
                 </div>
+                {activeTable === "orders" && selectedCustomer && (
+                  <button
+                    className={`tab-button ${viewMode === "kanban" ? "is-active" : ""}`}
+                    type="button"
+                    onClick={() => setViewMode(v => v === "kanban" ? "grid" : "kanban")}
+                    title="看板视图"
+                  >
+                    <KanbanSquare size={16} />
+                    看板
+                  </button>
+                )}
                 <div className="toolbar-actions">
                   <label className="filter-box">
                     <Filter size={16} />
@@ -2581,6 +2718,16 @@ function App() {
                       dialogs={dialogs}
                       onImport={handleOrderImport}
                     />
+                  )}
+                  {selectedCustomer && activeTable === "orders" && (
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      title="生成对账单"
+                      onClick={() => generateStatement(selectedCustomer, systemSettings)}
+                    >
+                      对账单
+                    </button>
                   )}
                   {selectedCustomer && (
                     <button
@@ -2623,7 +2770,21 @@ function App() {
                 </div>
               </div>
 
-              {selectedCustomer ? (
+              {viewMode === "kanban" && activeTable === "orders" ? (
+                <KanbanBoard
+                  customer={selectedCustomer}
+                  onStatusChange={(orderId, newStatus) => {
+                    const currentCustomer = customers.find(c => c.id === selectedCustomerId) || selectedCustomer;
+                    const updatedOrders = (currentCustomer.orders || []).map(o =>
+                      o.id === orderId ? { ...o, status: newStatus } : o
+                    );
+                    pushUndoSnapshot();
+                    updateSelectedCustomer(c => ({ ...c, orders: updatedOrders }));
+                    handleRowsChange("orders", updatedOrders);
+                  }}
+                  onSelectOrder={(orderId) => { setViewMode("grid"); }}
+                />
+              ) : (
                 <BusinessGrid
                   key={`${selectedCustomer.id}-${activeTable}`}
                   customer={selectedCustomer}
@@ -2643,10 +2804,12 @@ function App() {
                   readOnly={isHistoryOrders}
                   dialogs={dialogs}
                 />
-              ) : (
-                <div className="empty-state">请先新增或选择一个客户。</div>
               )}
             </section>
+          </>
+        ) : (
+          <DashboardView customers={customers} alertMap={alertMap} onCreateCustomer={() => { setEditingCustomer(null); setShowCustomerModal(true); }} onSelectCustomer={setSelectedCustomerId} />
+        )}
         </>
       </main>
 
@@ -2686,6 +2849,18 @@ function App() {
           delivery={printDelivery}
           customer={selectedCustomer}
           onClose={() => setPrintDelivery(null)}
+        />
+      )}
+
+      {showSettings && (
+        <SettingsModal
+          settings={systemSettings}
+          onClose={() => setShowSettings(false)}
+          onSave={(s) => {
+            setSystemSettings(s);
+            localStorage.setItem("foam-crm-settings", JSON.stringify(s));
+            setShowSettings(false);
+          }}
         />
       )}
 
@@ -2851,6 +3026,15 @@ function BusinessGrid({
     onRowsChange(tableKey, updatedRows, { formulaRowIds: changedRowIds });
   }, [onBeforeDataChange, onRowsChange, sourceRows, tableKey]);
 
+  const advanceOrderStatus = useCallback((rowId, nextStatus, rowData) => {
+    if (!getNextStatuses(normalizeOrderStatus(rowData?.status)).includes(nextStatus)) return;
+    onBeforeDataChange?.();
+    const updatedRows = sourceRows.map(row =>
+      row.id === rowId ? { ...row, status: nextStatus } : row
+    );
+    onRowsChange(tableKey, updatedRows, { formulaRowIds: [rowId] });
+  }, [onBeforeDataChange, onRowsChange, sourceRows, tableKey]);
+
   const columnDefs = useMemo(() => {
     const rowNumberColumn = {
       field: "__rowNumber",
@@ -2922,6 +3106,84 @@ function BusinessGrid({
       const nextColumn = readOnly
         ? { ...column, editable: false }
         : column;
+
+      // Orders 视图：进度列增加快捷流转按钮
+      if (viewKey === "orders" && column.field === "status" && !readOnly) {
+        return {
+          ...nextColumn,
+          cellRenderer: (params) => {
+            const value = normalizeOrderStatus(params.value);
+            const nextStatuses = getNextStatuses(value);
+            if (!nextStatuses.length) {
+              return <span className={`status-chip ${statusClass(value)}`}>{value}</span>;
+            }
+            return (
+              <div style={{ display: "flex", alignItems: "center", gap: 4, height: "100%" }}>
+                <span className={`status-chip ${statusClass(value)}`} style={{ flexShrink: 0 }}>{value}</span>
+                <span className="status-actions">
+                  {nextStatuses.map(ns => (
+                    <button
+                      key={ns}
+                      className="status-next-btn"
+                      type="button"
+                      title={`流转到：${ns}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        advanceOrderStatus(params.data.id, ns, params.data);
+                      }}
+                    >
+                      → {ns}
+                    </button>
+                  ))}
+                </span>
+              </div>
+            );
+          },
+        };
+      }
+
+      // Orders 视图：产品列关联客户产品库下拉选择
+      if (viewKey === "orders" && column.field === "product" && !readOnly) {
+        const products = customer.products || [];
+        const productNames = products.map(p => p.name);
+        return {
+          ...nextColumn,
+          cellEditor: "agSelectCellEditor",
+          cellEditorParams: {
+            values: productNames,
+          },
+          onCellValueChanged: (params) => {
+            const selectedProduct = products.find(p => p.name === params.newValue);
+            if (selectedProduct && params.data) {
+              const updatedRows = sourceRows.map(row => {
+                if (row.id !== params.data.id) return row;
+                return {
+                  ...row,
+                  product: selectedProduct.name,
+                  ...(selectedProduct.spec ? { spec: selectedProduct.spec } : {}),
+                  ...(selectedProduct.unit ? { unit: selectedProduct.unit } : {}),
+                  ...(selectedProduct.unitPrice ? { unitPrice: selectedProduct.unitPrice } : {}),
+                };
+              });
+              setTimeout(() => onRowsChange(tableKey, updatedRows, { formulaRowIds: [params.data.id] }), 0);
+            }
+          },
+        };
+      }
+
+      // Orders 视图：交期校验（早于订单日期时黄色警告）
+      if (viewKey === "orders" && column.field === "dueDate") {
+        return {
+          ...nextColumn,
+          cellStyle: (params) => {
+            if (!params.value || !params.data?.date) return null;
+            if (params.value < params.data.date) {
+              return { backgroundColor: "rgba(210, 153, 34, 0.15)", borderLeft: "3px solid var(--amber)" };
+            }
+            return null;
+          },
+        };
+      }
 
       if (viewKey !== "finalDeliveries") return nextColumn;
 
@@ -3005,6 +3267,7 @@ function BusinessGrid({
     toggleDeliveryGroup,
     updateDeliveryGroupStatus,
     viewKey,
+    advanceOrderStatus,
   ]);
 
   const selectableColumnFields = useMemo(
@@ -4321,12 +4584,71 @@ function BusinessGrid({
     scheduleAutoSizeColumns({ delay: 80 });
   }, [scheduleAutoSizeColumns]);
 
+  // 快捷键支持
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.target?.closest?.("input, textarea, select, [contenteditable]")) return;
+      const isGrid = e.target?.closest?.(".ag-root");
+      if (!isGrid) return;
+
+      if ((e.ctrlKey || e.metaKey) && e.key === "n") {
+        e.preventDefault();
+        const newRow = { ...config.emptyRow, id: makeId(tableKey), date: tableKey === "orders" ? today() : "", orderNo: "", status: "未完成" };
+        const newRows = [...sourceRows, newRow];
+        onBeforeDataChange?.();
+        onRowsChange(tableKey, newRows);
+        setTimeout(() => {
+          const api = gridRef.current?.api;
+          if (!api) return;
+          const lastIndex = api.getDisplayedRowCount() - 1;
+          api.ensureIndexVisible(lastIndex);
+          api.startEditingCell({ rowIndex: lastIndex, colKey: selectableColumnFields[1] || selectableColumnFields[0] });
+        }, 150);
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === "d" && selectedIds.length === 1) {
+        e.preventDefault();
+        const row = sourceRows.find(r => r.id === selectedIds[0]);
+        if (row) {
+          const copiedRow = { ...row, id: makeId(tableKey), orderNo: "", date: today() };
+          const newRows = [...sourceRows, copiedRow];
+          onBeforeDataChange?.();
+          onRowsChange(tableKey, newRows);
+        }
+      }
+      if (e.key === "Delete" && selectedIds.length > 0) {
+        e.preventDefault();
+        handleBatchDelete();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [selectedIds, sourceRows, tableKey, onRowsChange, onBeforeDataChange]);
+
   const getGridRowClass = useCallback(
     (params) => params.data?.__isDeliveryGroup ? "delivery-group-row" : undefined,
     [],
   );
 
   const getGridRowId = useCallback((params) => params.data.id, []);
+
+  const [bulkEditField, setBulkEditField] = useState("");
+  const [bulkEditValue, setBulkEditValue] = useState("");
+  const [showBulkEdit, setShowBulkEdit] = useState(false);
+
+  const applyBulkEdit = () => {
+    if (!bulkEditField || !selectedIds.length) return;
+    const updatedRows = sourceRows.map(row =>
+      selectedIds.includes(row.id) ? { ...row, [bulkEditField]: bulkEditValue } : row
+    );
+    onBeforeDataChange?.();
+    onRowsChange(tableKey, updatedRows);
+    setSelectedIds([]);
+    gridRef.current?.api?.deselectAll();
+    setSelectionRange(null);
+    setShowBulkEdit(false);
+    setBulkEditField("");
+    setBulkEditValue("");
+  };
 
   return (
     <>
@@ -4352,11 +4674,34 @@ function BusinessGrid({
                 确认生成送货单
               </button>
             )}
+            <button className="secondary-button compact" type="button" onClick={() => setShowBulkEdit(!showBulkEdit)}>
+              <Pencil size={14} />
+              批量修改
+            </button>
             <button className="danger-button compact" type="button" onClick={handleBatchDelete}>
               <Trash2 size={14} />
               批量删除
             </button>
           </div>
+          {showBulkEdit && (
+            <div className="bulk-edit-row">
+              <select value={bulkEditField} onChange={e => setBulkEditField(e.target.value)}>
+                <option value="">选择字段</option>
+                {tableColumns.filter(c => c.field !== "id" && c.field !== "__actions").map(c => (
+                  <option key={c.field} value={c.field}>{c.headerName}</option>
+                ))}
+              </select>
+              <input
+                value={bulkEditValue}
+                onChange={e => setBulkEditValue(e.target.value)}
+                placeholder="新值"
+                onKeyDown={e => e.key === "Enter" && applyBulkEdit()}
+              />
+              <button className="primary-action compact" type="button" onClick={applyBulkEdit} style={{ minHeight: 32 }}>
+                应用
+              </button>
+            </div>
+          )}
         </div>
       )}
       <div
@@ -5259,6 +5604,285 @@ function Field({ label, required = false, wide = false, children }) {
       {children}
     </label>
   );
+}
+
+function DashboardView({ customers, alertMap, onCreateCustomer, onSelectCustomer }) {
+  const overdueOrders = useMemo(() => {
+    const todayTs = new Date().setHours(0, 0, 0, 0);
+    const result = [];
+    for (const customer of customers) {
+      for (const order of customer.orders || []) {
+        if (!isOpenOrder(order.status) || !order.dueDate) continue;
+        const dueTs = new Date(order.dueDate).setHours(0, 0, 0, 0);
+        if (dueTs < todayTs) {
+          result.push({ ...order, customerName: customer.name, customerId: customer.id, overdue: true });
+        } else if (dueTs <= todayTs + 3 * 86400000) {
+          result.push({ ...order, customerName: customer.name, customerId: customer.id, overdue: false });
+        }
+      }
+    }
+    result.sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
+    return result.slice(0, 20);
+  }, [customers]);
+
+  const recentOrders = useMemo(() => {
+    return customers.flatMap(c => (c.orders || []).map(o => ({ ...o, customerName: c.name, customerId: c.id })))
+      .filter(o => o.date)
+      .sort((a, b) => new Date(b.date) - new Date(a.date))
+      .slice(0, 10);
+  }, [customers]);
+
+  return (
+    <div className="dashboard-view">
+      <div className="dashboard-hero">
+        <div className="dashboard-hero-text">
+          <h2 style={{ fontSize: "clamp(22px, 2.5vw, 32px)", marginBottom: 8, lineHeight: 1.2 }}>
+            {customers.length ? `${customers.length} 个客户 · ${customers.flatMap(c => c.orders || []).filter(o => isOpenOrder(o.status)).length} 个进行中订单` : "欢迎使用泡沫厂客户管理系统"}
+          </h2>
+          <p style={{ color: "var(--muted)", margin: 0 }}>选择一个客户开始操作，或使用全局搜索快速定位订单/送货单</p>
+        </div>
+        <button className="primary-action compact" type="button" onClick={onCreateCustomer} style={{ padding: "0 20px", minHeight: 40 }}>
+          <UserRoundPlus size={18} />
+          新增客户
+        </button>
+      </div>
+
+      {overdueOrders.length > 0 && (
+        <section className="dashboard-section">
+          <h4 style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <AlertTriangle size={16} style={{ color: "var(--red)" }} />
+            待跟进订单（逾期 & 即将到期）
+          </h4>
+          <div className="dashboard-order-list">
+            {overdueOrders.map(order => (
+              <button
+                key={order.id}
+                className={`dashboard-order-row ${order.overdue ? "overdue" : "warning"}`}
+                type="button"
+                onClick={() => onSelectCustomer(order.customerId)}
+              >
+                <span className="dashboard-order-customer">{order.customerName}</span>
+                <span className="dashboard-order-no">{order.orderNo || order.product}</span>
+                <span className="dashboard-order-product">{order.product}</span>
+                <span className="dashboard-order-qty">{order.quantity || 0}</span>
+                <span className="dashboard-order-due" style={{ color: order.overdue ? "var(--red)" : "var(--amber)" }}>
+                  {order.dueDate}
+                  {order.overdue ? " · 已逾期" : " · 即将到期"}
+                </span>
+                <span className={`status-chip ${statusClass(order.status)}`}>{order.status}</span>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {recentOrders.length > 0 && (
+        <section className="dashboard-section">
+          <h4>最近订单</h4>
+          <div className="dashboard-order-list">
+            {recentOrders.map(order => (
+              <button
+                key={order.id}
+                className="dashboard-order-row"
+                type="button"
+                onClick={() => onSelectCustomer(order.customerId)}
+              >
+                <span className="dashboard-order-customer">{order.customerName}</span>
+                <span className="dashboard-order-no">{order.orderNo || order.product}</span>
+                <span className="dashboard-order-product">{order.product}</span>
+                <span className="dashboard-order-qty">{order.quantity || 0}</span>
+                <span className="dashboard-order-due">{order.date}</span>
+                <span className={`status-chip ${statusClass(order.status)}`}>{order.status}</span>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {customers.length === 0 && (
+        <div className="dashboard-empty">
+          <Boxes size={48} style={{ color: "var(--muted)", marginBottom: 16 }} />
+          <p style={{ color: "var(--muted)", fontSize: 16 }}>暂无客户数据</p>
+          <button className="primary-action compact" type="button" onClick={onCreateCustomer} style={{ marginTop: 12 }}>
+            <UserRoundPlus size={18} />
+            创建第一个客户
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SettingsModal({ settings, onClose, onSave }) {
+  const [form, setForm] = useState({
+    companyName: settings.companyName || "",
+    companyAddress: settings.companyAddress || "",
+    companyPhone: settings.companyPhone || "",
+    companyTaxNo: settings.taxNo || "",
+    defaultDueDays: settings.defaultDueDays || "7",
+    orderNoPrefix: settings.orderNoPrefix || "",
+  });
+
+  const update = (field, value) => setForm(c => ({ ...c, [field]: value }));
+
+  const submit = (e) => {
+    e.preventDefault();
+    onSave(form);
+  };
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <form className="modal-card" onSubmit={submit}>
+        <div className="modal-head">
+          <div>
+            <p className="eyebrow">SYSTEM SETTINGS</p>
+            <h3>系统设置</h3>
+          </div>
+          <button className="icon-button" type="button" onClick={onClose} title="关闭">
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="settings-section">
+          <h4>公司信息（用于送货单打印）</h4>
+          <div className="settings-grid">
+            <label className="field">
+              <span>公司名称</span>
+              <input value={form.companyName} onChange={e => update("companyName", e.target.value)} placeholder="例如：XX泡沫包装有限公司" />
+            </label>
+            <label className="field">
+              <span>联系电话</span>
+              <input value={form.companyPhone} onChange={e => update("companyPhone", e.target.value)} placeholder="例如：0757-8888 8888" />
+            </label>
+            <label className="field" style={{ gridColumn: "1 / -1" }}>
+              <span>公司地址</span>
+              <input value={form.companyAddress} onChange={e => update("companyAddress", e.target.value)} placeholder="例如：佛山市南海区XX工业园" />
+            </label>
+            <label className="field">
+              <span>税号</span>
+              <input value={form.companyTaxNo} onChange={e => update("companyTaxNo", e.target.value)} placeholder="纳税人识别号" />
+            </label>
+          </div>
+        </div>
+
+        <div className="settings-section">
+          <h4>订单默认设置</h4>
+          <div className="settings-grid">
+            <label className="field">
+              <span>默认交期天数（新增订单时交期=今天+N天）</span>
+              <input type="number" value={form.defaultDueDays} onChange={e => update("defaultDueDays", e.target.value)} min="0" max="365" />
+            </label>
+            <label className="field">
+              <span>订单号前缀（自动生成，留空则不自动生成）</span>
+              <input value={form.orderNoPrefix} onChange={e => update("orderNoPrefix", e.target.value)} placeholder="例如：KH-" />
+            </label>
+          </div>
+        </div>
+
+        <div className="modal-actions">
+          <button className="ghost-button" type="button" onClick={onClose}>取消</button>
+          <button className="primary-action compact" type="submit">
+            <Save size={17} />
+            保存设置
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function KanbanBoard({ customer, onStatusChange, onSelectOrder }) {
+  const orders = (customer.orders || []).filter(o => normalizeOrderStatus(o.status) !== "已付款");
+  const columns = statusOptions.filter(s => s !== "已付款");
+  const ordersByStatus = Object.fromEntries(columns.map(s => [s, []]));
+  for (const order of orders) {
+    const s = normalizeOrderStatus(order.status);
+    if (ordersByStatus[s]) ordersByStatus[s].push(order);
+  }
+
+  return (
+    <div className="kanban-board">
+      {columns.map(status => (
+        <div className="kanban-column" key={status}>
+          <div className="kanban-column-header">
+            <span className={`status-chip ${statusClass(status)}`} style={{ fontSize: 12 }}>{status}</span>
+            <span className="count">{ordersByStatus[status]?.length || 0}</span>
+          </div>
+          <div className="kanban-column-body">
+            {ordersByStatus[status]?.map(order => (
+              <div
+                className="kanban-card"
+                key={order.id}
+                draggable
+                onDragStart={(e) => e.dataTransfer.setData("orderId", order.id)}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const orderId = e.dataTransfer.getData("orderId");
+                  if (orderId) onStatusChange(orderId, status);
+                }}
+                onClick={() => onSelectOrder(order.id)}
+              >
+                <strong>{order.orderNo || order.product}</strong>
+                <small>{order.product || ""} · {order.quantity || 0} 件</small>
+                <small>{order.dueDate ? `交期 ${order.dueDate}` : ""}</small>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function generateStatement(customer, settings = {}) {
+  const billableOrders = (customer.orders || []).filter(o => {
+    const s = normalizeOrderStatus(o.status);
+    return s === "已送货" || s === "已开对账单" || s === "已付款";
+  });
+  if (!billableOrders.length) {
+    alert(`客户 "${customer.name}" 没有可对账的订单（需要已送货/已开对账单/已付款状态）。`);
+    return;
+  }
+
+  const total = billableOrders.reduce((sum, o) => sum + Number(o.amount || 0), 0);
+  const companyName = settings.companyName || "泡沫厂";
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>对账单 - ${customer.name}</title>
+<style>
+  body { font-family: "PingFang SC","Microsoft YaHei",sans-serif; padding:40px; max-width:800px; margin:0 auto; color:#111; font-size:13px; }
+  h1 { text-align:center; font-size:20px; margin-bottom:4px; }
+  .subtitle { text-align:center; color:#666; font-size:12px; margin-bottom:20px; }
+  .info { display:flex; justify-content:space-between; margin-bottom:16px; }
+  .info div { line-height:1.8; }
+  table { width:100%; border-collapse:collapse; margin-bottom:16px; }
+  th { background:#f5f5f5; text-align:left; padding:8px 10px; border-bottom:2px solid #333; font-size:12px; }
+  td { padding:8px 10px; border-bottom:1px solid #ddd; }
+  .num { text-align:right; }
+  .total { text-align:right; font-weight:700; font-size:15px; margin-top:12px; }
+  .footer { margin-top:24px; padding-top:12px; border-top:1px solid #ddd; display:flex; justify-content:space-between; color:#666; font-size:12px; }
+  @media print { body { padding:20px; } }
+</style></head><body>
+<h1>对 账 单</h1>
+<p class="subtitle">${companyName}</p>
+<div class="info">
+  <div><strong>客户：</strong>${customer.name}<br/><strong>联系人：</strong>${customer.contact || "-"}<br/><strong>电话：</strong>${customer.phone || "-"}</div>
+  <div><strong>日期：</strong>${today()}<br/><strong>账期：</strong>${customer.paymentTerm || "-"}<br/><strong>地址：</strong>${customer.address || "-"}</div>
+</div>
+<table>
+<thead><tr><th>订单号</th><th>日期</th><th>产品</th><th class="num">数量</th><th class="num">金额</th><th>状态</th></tr></thead>
+<tbody>
+${billableOrders.map(o => `<tr><td>${o.orderNo || "-"}</td><td>${o.date || "-"}</td><td>${o.product || "-"}</td><td class="num">${o.quantity || 0}</td><td class="num">${Number(o.amount || 0).toFixed(2)}</td><td>${normalizeOrderStatus(o.status)}</td></tr>`).join("")}
+</tbody>
+</table>
+<p class="total">合计金额：¥ ${total.toLocaleString("zh-CN", { minimumFractionDigits: 2 })}</p>
+<div class="footer">
+  <div>制单人：___________</div>
+  <div>客户确认：___________</div>
+</div>
+</body></html>`;
+
+  const w = window.open("", "_blank", "width=900,height=700");
+  if (w) { w.document.write(html); w.document.close(); }
 }
 
 export default App;

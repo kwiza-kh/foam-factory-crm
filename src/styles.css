@@ -1460,3 +1460,353 @@ h4 {
 .customer-item:hover .customer-delete { display: flex; }
 .customer-delete:hover { color: var(--red); background: var(--red-subdued); }
 
+
+/* ===== Global Search ===== */
+.global-search-wrap {
+  position: relative;
+  margin-bottom: 12px;
+}
+
+.global-search {
+  width: 100%;
+}
+
+.global-search-results {
+  position: absolute;
+  z-index: 100;
+  top: 100%;
+  left: 0;
+  right: 0;
+  margin-top: 4px;
+  background: var(--panel-elevated);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lg);
+  max-height: 380px;
+  overflow-y: auto;
+}
+
+.search-result-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 10px 12px;
+  border: none;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: background 100ms ease;
+}
+
+.search-result-item:last-child { border-bottom: none; }
+.search-result-item:hover { background: var(--accent-subdued); }
+.search-result-label { font-weight: 600; font-size: 13px; }
+.search-result-meta { color: var(--muted); font-size: 11px; }
+.search-result-type { font-size: 14px; margin-right: 6px; }
+
+/* ===== Dashboard ===== */
+.dashboard-view {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-top: 8px;
+}
+
+.dashboard-hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 20px 24px;
+  background: var(--panel-elevated);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.dashboard-hero-text { flex: 1; min-width: 0; }
+
+.dashboard-section {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 14px;
+}
+
+.dashboard-section h4 { margin-bottom: 10px; }
+.dashboard-order-list { display: flex; flex-direction: column; gap: 4px; }
+
+.dashboard-order-row {
+  display: grid;
+  grid-template-columns: 140px 150px 1fr 80px 140px 90px;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  text-align: left;
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.dashboard-order-row:hover {
+  border-color: var(--accent);
+  background: var(--accent-subdued);
+}
+
+.dashboard-order-row.overdue { border-left: 3px solid var(--red); }
+.dashboard-order-row.warning { border-left: 3px solid var(--amber); }
+
+.dashboard-order-customer {
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard-order-no {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard-order-product {
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard-order-qty { text-align: right; font-variant-numeric: tabular-nums; }
+.dashboard-order-due { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.dashboard-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 20px;
+  text-align: center;
+}
+
+/* ===== Status Action Buttons ===== */
+.status-actions {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.status-next-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--panel-elevated);
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 120ms ease;
+  white-space: nowrap;
+}
+
+.status-next-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-subdued);
+}
+
+/* ===== Bulk Edit Panel ===== */
+.bulk-edit-panel {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--accent-subdued);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.bulk-edit-panel select,
+.bulk-edit-panel input {
+  min-height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.bulk-edit-panel select { min-width: 120px; }
+.bulk-edit-panel input { min-width: 100px; }
+
+/* ===== Kanban Board ===== */
+.kanban-board {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  padding: 8px 0;
+  min-height: 400px;
+}
+
+.kanban-column {
+  flex: 1;
+  min-width: 180px;
+  max-width: 260px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+}
+
+.kanban-column-header {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  font-weight: 700;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.kanban-column-header .count { color: var(--muted); font-size: 11px; font-weight: 400; }
+
+.kanban-column-body {
+  flex: 1;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+}
+
+.kanban-card {
+  padding: 10px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  cursor: grab;
+  transition: border-color 120ms ease;
+}
+
+.kanban-card:hover { border-color: var(--accent); }
+.kanban-card strong { display: block; font-size: 13px; margin-bottom: 4px; }
+.kanban-card small { color: var(--muted); font-size: 11px; display: block; }
+
+/* ===== Settings Page ===== */
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+.settings-grid .field { display: flex; flex-direction: column; gap: 4px; }
+
+.settings-grid .field span {
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.settings-grid .field input,
+.settings-grid .field select {
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.settings-grid .field input:focus { border-color: var(--accent); outline: none; }
+
+/* ===== Mobile responsive ===== */
+@media (max-width: 768px) {
+  .dashboard-order-row { grid-template-columns: 1fr; gap: 2px; padding: 12px; }
+  .kanban-board { flex-direction: column; }
+  .kanban-column { max-width: none; }
+  .bulk-edit-panel { flex-direction: column; align-items: stretch; }
+}
+
+/* ===== Bulk Edit Row ===== */
+.bulk-edit-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+  margin-top: 6px;
+}
+
+.bulk-edit-row select,
+.bulk-edit-row input {
+  min-height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.bulk-edit-row select { min-width: 130px; }
+.bulk-edit-row input { min-width: 120px; flex: 1; }
+
+/* ===== Grid Selection Bar ===== */
+.grid-selection-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--accent-subdued);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  margin-bottom: 8px;
+}
+
+.grid-selection-bar > span {
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.grid-selection-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.grid-selection-bar .secondary-button.compact,
+.grid-selection-bar .danger-button.compact {
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+/* ===== Settings Modal ===== */
+.settings-section {
+  margin-bottom: 16px;
+}
+
+.settings-section h4 {
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+}

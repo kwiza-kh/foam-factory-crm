@@ -1,15 +1,17 @@
 import { useMemo, useState } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import {
+  CellStyleModule,
   ClientSideRowModelModule,
   ModuleRegistry,
+  RowSelectionModule,
   TextEditorModule,
   themeQuartz,
 } from 'ag-grid-community';
-import { Check, X } from 'lucide-react';
-import { makeId } from '../lib/utils.js';
+import { Check, X, Pencil } from 'lucide-react';
+import { makeId, today } from '../lib/utils.js';
 
-ModuleRegistry.registerModules([ClientSideRowModelModule, TextEditorModule]);
+ModuleRegistry.registerModules([CellStyleModule, ClientSideRowModelModule, RowSelectionModule, TextEditorModule]);
 
 const gridTheme = themeQuartz.withParams({
   accentColor: '#42e8ff',
@@ -39,6 +41,9 @@ export function OrderImportPreviewModal({
   const [columnData, setColumnData] = useState(() =>
     columns.map(column => ({ ...column, included: column.field !== 'status', __columnId: makeId('col') })),
   );
+  const [selectedRowIds, setSelectedRowIds] = useState(new Set());
+  const [batchField, setBatchField] = useState("dueDate");
+  const [batchValue, setBatchValue] = useState("");
 
   const activeColumns = useMemo(
     () => columnData.filter(column => column.included),
@@ -46,6 +51,16 @@ export function OrderImportPreviewModal({
   );
 
   const colDefs = useMemo(() => [
+    {
+      headerName: '',
+      width: 52,
+      checkboxSelection: true,
+      headerCheckboxSelection: true,
+      sortable: false,
+      filter: false,
+      resizable: false,
+      pinned: "left",
+    },
     ...activeColumns.map(column => ({
       field: column.field,
       headerName: column.headerName,
@@ -69,6 +84,22 @@ export function OrderImportPreviewModal({
       ),
     },
   ], [activeColumns]);
+
+  const handleSelectionChanged = (event) => {
+    const selected = event.api.getSelectedRows();
+    setSelectedRowIds(new Set(selected.map(r => r.__previewId)));
+  };
+
+  const applyBatchFill = () => {
+    if (!batchValue.trim() || selectedRowIds.size === 0) return;
+    setRowData(current =>
+      current.map(row =>
+        selectedRowIds.has(row.__previewId)
+          ? { ...row, [batchField]: batchField === "quantity" || batchField === "amount" ? Number(batchValue) || 0 : batchValue }
+          : row
+      )
+    );
+  };
 
   const handleConfirm = () => {
     const activeFields = new Set(activeColumns.map(column => column.field));
@@ -123,11 +154,49 @@ export function OrderImportPreviewModal({
           ))}
         </div>
 
+        {selectedRowIds.size > 0 && (
+          <div className="bulk-edit-panel" style={{ marginBottom: 8 }}>
+            <span style={{ color: "var(--accent)", fontWeight: 600, fontSize: 13 }}>
+              <Pencil size={13} style={{ verticalAlign: -2, marginRight: 4 }} />
+              已选 {selectedRowIds.size} 行 · 批量填充：
+            </span>
+            <select value={batchField} onChange={e => setBatchField(e.target.value)}>
+              <option value="dueDate">交期</option>
+              <option value="status">状态</option>
+              <option value="followUp">跟进记录</option>
+              <option value="quantity">数量</option>
+              <option value="amount">金额</option>
+            </select>
+            {batchField === "status" ? (
+              <select value={batchValue} onChange={e => setBatchValue(e.target.value)}>
+                <option value="">选择状态</option>
+                {["未完成","已排产","生产中","已完成","已送货","已开对账单","已付款"].map(s => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
+            ) : batchField === "dueDate" ? (
+              <input type="date" value={batchValue} onChange={e => setBatchValue(e.target.value)} />
+            ) : (
+              <input
+                value={batchValue}
+                onChange={e => setBatchValue(e.target.value)}
+                placeholder={batchField === "followUp" ? "统一备注内容" : "值"}
+                onKeyDown={e => e.key === "Enter" && applyBatchFill()}
+              />
+            )}
+            <button className="secondary-button" type="button" onClick={applyBatchFill} style={{ minHeight: 32 }}>
+              应用
+            </button>
+          </div>
+        )}
+
         <div style={{ height: 360 }}>
           <AgGridReact
             theme={gridTheme}
             rowData={rowData}
             columnDefs={colDefs}
+            rowSelection="multiple"
+            onSelectionChanged={handleSelectionChanged}
             onCellValueChanged={({ data }) =>
               setRowData(current => current.map(row => row.__previewId === data.__previewId ? data : row))
             }
