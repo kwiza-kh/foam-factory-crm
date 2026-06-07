@@ -11,7 +11,10 @@
     "db:start:local": "powershell -ExecutionPolicy Bypass -File scripts/start-local-postgres.ps1",
     "db:stop:local": "powershell -ExecutionPolicy Bypass -File scripts/stop-local-postgres.ps1",
     "build": "vite build",
-    "preview": "vite preview --host 0.0.0.0"
+    "preview": "vite preview --host 0.0.0.0",
+    "mobile:start": "npm --prefix mobile run start -- --lan",
+    "mobile:ios": "npm --prefix mobile run ios",
+    "mobile:doctor": "npm --prefix mobile exec expo-doctor"
   },
   "overrides": {
     "uuid": ">=11.1.1"

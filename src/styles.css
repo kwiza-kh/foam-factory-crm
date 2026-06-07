@@ -77,7 +77,7 @@ button:disabled {
 
 .app-shell {
   display: grid;
-  grid-template-columns: 300px minmax(0, 1fr) 280px;
+  grid-template-columns: 300px minmax(0, 1fr);
   gap: 18px;
   min-height: 100vh;
   padding: 18px;
@@ -85,7 +85,6 @@ button:disabled {
 
 .sidebar,
 .workspace,
-.inspector,
 .customer-panel,
 .table-section,
 .metric-card,
@@ -95,8 +94,7 @@ button:disabled {
   box-shadow: var(--shadow-md);
 }
 
-.sidebar,
-.inspector {
+.sidebar {
   position: sticky;
   top: 18px;
   height: calc(100vh - 36px);
@@ -337,8 +335,7 @@ h4 {
 .topbar,
 .table-toolbar,
 .modal-head,
-.modal-actions,
-.inspector-header {
+.modal-actions {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -380,9 +377,7 @@ h4 {
 }
 
 .metric-card span,
-.info-pill span,
-.note-panel span,
-.summary-row span {
+.info-pill span {
   color: var(--muted);
   font-size: 12px;
 }
@@ -536,6 +531,53 @@ h4 {
   color: var(--text);
 }
 
+.grid-shell .ag-row.delivery-group-row .ag-cell {
+  background: rgba(91, 141, 239, 0.08);
+  border-bottom-color: rgba(91, 141, 239, 0.2);
+  font-weight: 700;
+}
+
+.delivery-group-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+
+.delivery-group-toggle span {
+  color: var(--accent);
+  font-size: 13px;
+}
+
+.delivery-group-toggle strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.delivery-group-toggle small {
+  flex-shrink: 0;
+  max-width: 56%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.delivery-group-status {
+  width: 100%;
+  min-width: 78px;
+  appearance: none;
+  cursor: pointer;
+}
+
 .grid-context-menu {
   position: fixed;
   z-index: 1500;
@@ -622,6 +664,13 @@ h4 {
   background: var(--panel-elevated);
   color: var(--text-secondary);
   font-size: 13px;
+}
+
+.grid-selection-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .column-header {
@@ -794,6 +843,11 @@ h4 {
   font-variant-numeric: tabular-nums;
 }
 
+.grid-shell .ag-cell.formula-cell {
+  color: var(--accent-text);
+  background: rgba(66, 232, 255, 0.055);
+}
+
 .grid-delete {
   display: inline-grid;
   place-items: center;
@@ -891,85 +945,10 @@ h4 {
   background: var(--red-subdued);
 }
 
-.inspector {
-  padding: 18px;
-}
-
-.inspector-header {
-  color: var(--accent);
-  font-weight: 700;
-  font-size: 13px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.status-ring {
-  display: grid;
-  place-items: center;
-  width: 168px;
-  height: 168px;
-  margin: 24px auto;
-  border: 2px solid var(--accent);
-  border-radius: 50%;
-  background: var(--accent-subdued);
-}
-
-.status-ring strong,
-.status-ring span {
-  grid-area: 1 / 1;
-}
-
-.status-ring strong {
-  transform: translateY(-10px);
-  font-size: 42px;
-  color: var(--accent);
-}
-
-.status-ring span {
-  transform: translateY(28px);
+.status-chip.is-void {
+  border-color: var(--muted);
   color: var(--text-secondary);
-  font-weight: 700;
-  font-size: 13px;
-}
-
-.summary-list,
-.note-panel {
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-}
-
-.summary-list {
-  overflow: hidden;
-}
-
-.summary-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  min-height: 42px;
-  padding: 0 12px;
-  border-bottom: 1px solid var(--line);
-}
-
-.summary-row:last-child {
-  border-bottom: 0;
-}
-
-.summary-row strong {
-  text-align: right;
-}
-
-.note-panel {
-  margin-top: 12px;
-  padding: 12px;
-}
-
-.note-panel p {
-  margin: 8px 0 0;
-  color: var(--text-secondary);
-  line-height: 1.65;
+  background: rgba(110, 118, 129, 0.14);
 }
 
 .empty-state {
@@ -1074,6 +1053,10 @@ h4 {
   width: min(680px, 100%);
 }
 
+.modal-card.production-modal {
+  width: min(780px, 100%);
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1133,6 +1116,67 @@ h4 {
   margin-top: 18px;
 }
 
+.production-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.production-summary span {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 7px 10px;
+  color: var(--text-secondary);
+  background: var(--panel-elevated);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.production-order-list {
+  display: grid;
+  gap: 8px;
+  max-height: 250px;
+  overflow: auto;
+  margin-top: 16px;
+  padding-right: 4px;
+}
+
+.production-order-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  background: var(--panel-elevated);
+}
+
+.production-order-row div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.production-order-row strong,
+.production-order-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.production-order-row strong {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.production-order-row span,
+.production-order-row small {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
 .column-manager {
   display: grid;
   gap: 18px;
@@ -1167,6 +1211,67 @@ h4 {
   background: var(--accent-subdued);
 }
 
+.formula-input-list {
+  display: grid;
+  gap: 8px;
+}
+
+.column-formula-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.8fr) minmax(180px, 1fr) 36px;
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel-elevated);
+}
+
+.column-formula-name {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.column-formula-name span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.column-formula-name small {
+  flex: 0 0 auto;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 1px 6px;
+  color: var(--accent);
+  font-size: 11px;
+  line-height: 1.5;
+  background: var(--accent-subdued);
+}
+
+.column-formula-input {
+  width: 100%;
+  height: 36px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 0 10px;
+  color: var(--text);
+  background: var(--bg);
+  outline: 0;
+}
+
+.column-formula-input:focus {
+  border-color: var(--accent);
+}
+
+.column-delete-button {
+  width: 36px;
+  height: 36px;
+}
+
 .add-column-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 150px;
@@ -1176,10 +1281,6 @@ h4 {
 @media (max-width: 1180px) {
   .app-shell {
     grid-template-columns: 260px minmax(0, 1fr);
-  }
-
-  .inspector {
-    display: none;
   }
 
   .metrics-grid {
@@ -1231,6 +1332,18 @@ h4 {
   .profile-strip,
   .form-grid,
   .add-column-row {
+    grid-template-columns: 1fr;
+  }
+
+  .column-formula-row {
+    grid-template-columns: minmax(0, 1fr) 36px;
+  }
+
+  .column-formula-input {
+    grid-column: 1 / -1;
+  }
+
+  .production-order-row {
     grid-template-columns: 1fr;
   }
 
@@ -1347,64 +1460,3 @@ h4 {
 .customer-item:hover .customer-delete { display: flex; }
 .customer-delete:hover { color: var(--red); background: var(--red-subdued); }
 
-/* ── 看板切换按钮 ─────────────────────────────── */
-.kanban-toggle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  justify-content: center;
-  margin-bottom: 4px;
-}
-.kanban-toggle.is-active { color: var(--accent); border-color: var(--accent); }
-
-/* ── 订单看板 ─────────────────────────────────── */
-.kanban-board {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 12px;
-  padding: 16px 20px;
-  overflow-x: auto;
-  flex: 1;
-}
-.kanban-col {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  min-width: 180px;
-}
-.kanban-col-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 6px 10px;
-  border-radius: 6px;
-  font-size: 12px;
-  font-weight: 600;
-}
-.kanban-count {
-  background: var(--line);
-  border-radius: 10px;
-  padding: 1px 7px;
-  font-size: 11px;
-}
-.kanban-cards { display: flex; flex-direction: column; gap: 6px; }
-.kanban-card {
-  background: var(--panel-elevated);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 10px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  text-align: left;
-  cursor: pointer;
-  color: var(--text);
-  transition: border-color 0.15s, background 0.15s;
-}
-.kanban-card:hover { border-color: var(--accent); background: var(--accent-subdued); }
-.kanban-customer { font-size: 11px; color: var(--muted); }
-.kanban-order-no { font-size: 13px; font-weight: 600; }
-.kanban-amount { font-size: 12px; color: var(--accent); }
-.kanban-due { font-size: 11px; color: var(--muted); }
-.kanban-due.is-overdue { color: var(--red); }
-.kanban-empty { font-size: 12px; color: var(--muted); text-align: center; padding: 16px 0; }

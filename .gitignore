@@ -6,3 +6,4 @@ output/
 .env
 .postgres/
 dev-server*.log
+mobile-expo.log

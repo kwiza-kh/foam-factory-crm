@@ -37,7 +37,7 @@ export function OrderImportPreviewModal({
     rows.map(row => ({ ...row, __previewId: makeId('prev') })),
   );
   const [columnData, setColumnData] = useState(() =>
-    columns.map(column => ({ ...column, included: true, __columnId: makeId('col') })),
+    columns.map(column => ({ ...column, included: column.field !== 'status', __columnId: makeId('col') })),
   );
 
   const activeColumns = useMemo(

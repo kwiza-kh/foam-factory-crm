@@ -190,6 +190,44 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
+// PATCH /api/customers/:id/orders/:orderId/status - update one order status
+router.patch('/:id/orders/:orderId/status', async (req, res) => {
+  const { id, orderId } = req.params;
+  const { status } = req.body || {};
+  const nextStatus = String(status || '').trim();
+  if (!nextStatus) return res.status(400).json({ error: 'Missing status' });
+  const allowedExtraFields = ['completionTime', 'completionOperator', 'completionNote'];
+  const extraData = {};
+  for (const field of allowedExtraFields) {
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, field)) {
+      extraData[field] = req.body[field];
+    }
+  }
+
+  try {
+    const order = await prisma.order.findFirst({
+      where: {
+        id: orderId,
+        customerId: id,
+      },
+    });
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+
+    const data = {
+      ...(order.data || {}),
+      ...extraData,
+      status: nextStatus,
+    };
+    const updated = await prisma.order.update({
+      where: { id: orderId },
+      data: { data },
+    });
+    res.json({ ok: true, row: updated.data });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // PUT /api/customers/:id/:tableKey - replace all rows
 router.put('/:id/:tableKey', async (req, res) => {
   const { id, tableKey } = req.params;
