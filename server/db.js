@@ -16,7 +16,12 @@ if (typeof password !== 'string' || password.length === 0) {
   throw new Error('DATABASE_URL must include a PostgreSQL password, for example postgresql://postgres:password@localhost:5432/foam_crm');
 }
 
-const pool = new Pool({ connectionString });
+const pool = new Pool({
+  connectionString,
+  max: 20,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 5000,
+});
 const adapter = new PrismaPg(pool);
 
 export const prisma = new PrismaClient({

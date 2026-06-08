@@ -61,18 +61,43 @@ function normalize(row) {
   };
 }
 
-// GET /api/customers
+// GET /api/customers?page=1&limit=50&search=xxx
 router.get('/', async (req, res) => {
   try {
-    const customers = await prisma.customer.findMany({
-      orderBy: { name: 'asc' },
-      include: {
-        products: { orderBy: { sortOrder: 'asc' } },
-        orders: { orderBy: { sortOrder: 'asc' } },
-        deliveries: { orderBy: { sortOrder: 'asc' } },
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit) || 50));
+    const skip = (page - 1) * limit;
+    const search = (req.query.search || '').trim();
+
+    const where = search
+      ? { name: { contains: search, mode: 'insensitive' } }
+      : {};
+
+    const [customers, total] = await Promise.all([
+      prisma.customer.findMany({
+        where,
+        orderBy: { name: 'asc' },
+        skip,
+        take: limit,
+        include: {
+          products: { orderBy: { sortOrder: 'asc' } },
+          orders: { orderBy: { sortOrder: 'asc' } },
+          deliveries: { orderBy: { sortOrder: 'asc' } },
+        },
+      }),
+      prisma.customer.count({ where }),
+    ]);
+
+    res.json({
+      data: customers.map(normalize),
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+        hasMore: skip + customers.length < total,
       },
     });
-    res.json(customers.map(normalize));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

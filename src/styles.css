@@ -904,9 +904,21 @@ h4 {
 }
 
 .status-chip.is-unfinished {
-  border-color: var(--amber);
-  color: var(--amber);
-  background: var(--amber-subdued);
+  border-color: var(--muted);
+  color: var(--muted);
+  background: rgba(110, 118, 129, 0.10);
+}
+
+.status-chip.is-pending {
+  border-color: #f0883e;
+  color: #f0883e;
+  background: rgba(240, 136, 62, 0.12);
+}
+
+.status-chip.is-scheduled {
+  border-color: #58a6ff;
+  color: #58a6ff;
+  background: rgba(88, 166, 255, 0.12);
 }
 
 .status-chip.is-completed {
@@ -916,9 +928,9 @@ h4 {
 }
 
 .status-chip.is-delivered {
-  border-color: var(--accent);
-  color: var(--accent);
-  background: var(--accent-subdued);
+  border-color: #7c8cf8;
+  color: #7c8cf8;
+  background: rgba(124, 140, 248, 0.12);
 }
 
 .status-chip.is-reconciled {

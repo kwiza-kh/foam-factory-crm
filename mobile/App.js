@@ -18,7 +18,7 @@ import {
   View,
 } from 'react-native';
 
-const statusOptions = ['未完成', '已排产', '生产中', '已完成', '已送货', '已开对账单', '已付款'];
+const statusOptions = ['未完成', '已排产', '已完成', '已送货', '已开对账单', '已付款'];
 const completionTimeField = 'completionTime';
 const completionOperatorField = 'completionOperator';
 const completionNoteField = 'completionNote';
@@ -195,8 +195,9 @@ export default function App() {
     if (!silent) setLoading(true);
     setError('');
     try {
-      const data = await request('/customers');
-      setCustomers(Array.isArray(data) ? data : []);
+      const result = await request('/customers?limit=200');
+      const list = result.data || result;
+      setCustomers(Array.isArray(list) ? list : []);
     } catch (err) {
       setError(err.message || '连接失败');
     } finally {
@@ -578,21 +579,30 @@ function Meta({ label, value }) {
 }
 
 function StatusChip({ status }) {
+  const pending = status === '未完成';
   const scheduled = status === '已排产';
   const completed = status === '已完成';
   const delivered = status === '已送货';
+  const reconciled = status === '已开对账单';
+  const paid = status === '已付款';
   return (
     <View style={[
       styles.statusChip,
+      pending && styles.statusPending,
       scheduled && styles.statusScheduled,
       completed && styles.statusCompleted,
       delivered && styles.statusDelivered,
+      reconciled && styles.statusReconciled,
+      paid && styles.statusPaid,
     ]}>
       <Text style={[
         styles.statusText,
+        pending && styles.statusPendingText,
         scheduled && styles.statusScheduledText,
         completed && styles.statusCompletedText,
         delivered && styles.statusDeliveredText,
+        reconciled && styles.statusReconciledText,
+        paid && styles.statusPaidText,
       ]}>
         {status}
       </Text>
@@ -1077,28 +1087,46 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
     backgroundColor: '#25314a',
   },
+  statusPending: {
+    backgroundColor: '#3d2210',
+  },
+  statusScheduled: {
+    backgroundColor: '#0d2137',
+  },
   statusCompleted: {
     backgroundColor: '#143c2c',
   },
-  statusScheduled: {
-    backgroundColor: '#332913',
-  },
   statusDelivered: {
-    backgroundColor: '#122f50',
+    backgroundColor: '#1a1f3d',
+  },
+  statusReconciled: {
+    backgroundColor: '#1e1835',
+  },
+  statusPaid: {
+    backgroundColor: '#0d2b28',
   },
   statusText: {
     color: '#c6d2e2',
     fontSize: 12,
     fontWeight: '800',
   },
+  statusPendingText: {
+    color: '#f0883e',
+  },
+  statusScheduledText: {
+    color: '#58a6ff',
+  },
   statusCompletedText: {
     color: '#96f2c0',
   },
-  statusScheduledText: {
-    color: '#f8d978',
-  },
   statusDeliveredText: {
-    color: '#9bd7ff',
+    color: '#9bb8ff',
+  },
+  statusReconciledText: {
+    color: '#c4a8ff',
+  },
+  statusPaidText: {
+    color: '#5eeadb',
   },
   stateBox: {
     minHeight: 180,

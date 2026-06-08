@@ -170,7 +170,7 @@ export function OrderImportPreviewModal({
             {batchField === "status" ? (
               <select value={batchValue} onChange={e => setBatchValue(e.target.value)}>
                 <option value="">选择状态</option>
-                {["未完成","已排产","生产中","已完成","已送货","已开对账单","已付款"].map(s => (
+                {["未完成","已排产","已完成","已送货","已开对账单","已付款"].map(s => (
                   <option key={s} value={s}>{s}</option>
                 ))}
               </select>

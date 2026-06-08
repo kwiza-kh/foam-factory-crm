@@ -59,6 +59,9 @@ import {
   RotateCcw,
   Pencil,
 } from "lucide-react";
+import { statusOptions, closedOrderStatuses, isOpenOrder, normalizeOrderStatus, statusTransitions, getNextStatuses, deliveryStatusOptions, customerLevelOptions, materialOptions, unitOptions } from "./lib/statusWorkflow.js";
+import { orderDefaultColumns, orderDeliveryTrackingColumns, productionScheduleColumns, knownOrderDataColumns, deliveryQuantityField, orderDeliveredQuantityField, orderRemainingQuantityField, finalDeliveryField, linkedOrderIdField, linkedOrderQuantitySourceField, deliveryOrderFieldPrefix, finalDeliveryStatusOptions, productionScheduleStatusOptions, productionScheduleDateField, productionScheduleQuantityField, productionLineField, productionNoteField, deliveryQuantityColumn } from "./lib/columnDefs.js";
+import { tableConfigs } from "./config/tableConfigs.js";
 
 ModuleRegistry.registerModules([
   CellStyleModule,
@@ -82,316 +85,6 @@ ModuleRegistry.registerModules([
   SortModule,
   TextEditorModule,
 ]);
-
-const statusOptions = ["未完成", "已排产", "生产中", "已完成", "已送货", "已开对账单", "已付款"];
-const closedOrderStatuses = new Set(["已完成", "已送货", "已开对账单", "已付款", "已发货"]);
-const isOpenOrder = (status = "") => !closedOrderStatuses.has(status) && status !== "异常";
-const normalizeOrderStatus = (status = "") => {
-  if (statusOptions.includes(status)) return status;
-  if (status === "已发货") return "已送货";
-  return "未完成";
-};
-const statusTransitions = {
-  "未完成": ["已排产", "已完成"],
-  "已排产": ["生产中"],
-  "生产中": ["已完成"],
-  "已完成": ["已送货", "已开对账单"],
-  "已送货": ["已开对账单"],
-  "已开对账单": ["已付款"],
-  "已付款": [],
-};
-const getNextStatuses = (currentStatus) => {
-  const normalized = normalizeOrderStatus(currentStatus);
-  return statusTransitions[normalized] || [];
-};
-const deliveryStatusOptions = ["待装车", "配送中", "已签收", "回单异常"];
-const customerLevelOptions = ["重点客户", "稳定客户", "新客户", "暂停合作"];
-const materialOptions = ["EPS", "EPE", "EPP", "珍珠棉", "海绵", "其他"];
-const unitOptions = ["件", "套", "箱", "个", "㎡", "m³", "kg"];
-const orderDefaultColumns = [
-  {
-    field: "status",
-    headerName: "进度",
-    width: 130,
-    type: "select",
-    options: statusOptions,
-  },
-];
-const deliveryQuantityField = "deliveryQuantity";
-const orderDeliveredQuantityField = "deliveredQuantity";
-const orderRemainingQuantityField = "remainingQuantity";
-const finalDeliveryField = "_finalDelivery";
-const linkedOrderIdField = "_linkedOrderId";
-const linkedOrderQuantitySourceField = "_linkedOrderQuantitySourceField";
-const deliveryOrderFieldPrefix = "order_";
-const finalDeliveryStatusOptions = ["未送", "已送", "作废"];
-const productionScheduleStatusOptions = ["已排产", "生产中"];
-const orderDeliveryTrackingColumns = [
-  { field: orderDeliveredQuantityField, headerName: "已送数量", width: 110, type: "number" },
-  { field: orderRemainingQuantityField, headerName: "剩余数量", width: 110, type: "number" },
-];
-const productionScheduleDateField = "productionDate";
-const productionScheduleQuantityField = "productionQuantity";
-const productionLineField = "productionLine";
-const productionNoteField = "productionNote";
-const productionScheduleColumns = [
-  { field: productionScheduleDateField, headerName: "排产日期", width: 130, type: "date" },
-  { field: productionScheduleQuantityField, headerName: "排产数量", width: 110, type: "number" },
-  { field: productionLineField, headerName: "员工姓名", width: 120 },
-  { field: productionNoteField, headerName: "排产备注", flex: 1, minWidth: 160 },
-];
-const deliveryQuantityColumn = {
-  field: deliveryQuantityField,
-  headerName: "送货数量",
-  width: 110,
-  type: "number",
-};
-const knownOrderDataColumns = [
-  { field: "orderNo", headerName: "订单号", width: 140 },
-  { field: "date", headerName: "订单日期", width: 130, type: "date" },
-  { field: "product", headerName: "产品", width: 150 },
-  { field: "quantity", headerName: "订单数量", width: 110, type: "number" },
-  { field: "amount", headerName: "金额", width: 120, type: "number" },
-  { field: "dueDate", headerName: "交期", width: 130, type: "date" },
-  { field: "followUp", headerName: "跟进记录", flex: 1, minWidth: 180 },
-];
-
-const tableConfigs = {
-  products: {
-    label: "产品录入",
-    icon: Boxes,
-    rowLabel: "产品",
-    defaultColumns: [
-      { field: "name", headerName: "产品名称", width: 150, required: true },
-      { field: "spec", headerName: "规格尺寸", width: 150 },
-      { field: "material", headerName: "泡沫材质", width: 130, type: "select", options: materialOptions },
-      { field: "unit", headerName: "单位", width: 90, type: "select", options: unitOptions },
-      {
-        field: "unitPrice",
-        headerName: "单价",
-        width: 110,
-        type: "number",
-      },
-      { field: "moq", headerName: "起订量", width: 110, type: "number" },
-      { field: "remark", headerName: "备注", flex: 1, minWidth: 160 },
-    ],
-    emptyRow: {
-      name: "新泡沫产品",
-      spec: "",
-      material: "EPS",
-      unit: "件",
-      unitPrice: 0,
-      moq: 0,
-      remark: "",
-    },
-  },
-  orders: {
-    label: "订单录入 / 跟进",
-    icon: ClipboardList,
-    rowLabel: "订单",
-    defaultColumns: orderDefaultColumns,
-    emptyRow: {
-      orderNo: "",
-      date: "",
-      product: "",
-      quantity: 0,
-      amount: 0,
-      dueDate: "",
-      status: "未完成",
-      followUp: "",
-    },
-  },
-  productionSchedule: {
-    label: "排产看板",
-    icon: KanbanSquare,
-    rowLabel: "排产订单",
-    defaultColumns: [
-      ...orderDefaultColumns,
-      ...productionScheduleColumns,
-    ],
-    emptyRow: {},
-    sourceTableKey: "orders",
-    disableRowCreate: true,
-  },
-  historyOrders: {
-    label: "历史订单",
-    icon: ClipboardList,
-    rowLabel: "历史订单",
-    defaultColumns: orderDefaultColumns,
-    emptyRow: {},
-    sourceTableKey: "orders",
-    readOnly: true,
-  },
-  deliveries: {
-    label: "送货单草稿",
-    icon: Truck,
-    rowLabel: "送货单草稿",
-    defaultColumns: [
-      {
-        field: "deliveryNo",
-        headerName: "送货单号",
-        width: 150,
-        required: true,
-      },
-      { field: "date", headerName: "送货日期", width: 130, type: "date" },
-    ],
-    emptyRow: {
-      deliveryNo: "",
-      date: "",
-      status: "未送",
-      [finalDeliveryField]: false,
-    },
-  },
-  finalDeliveries: {
-    label: "送货单",
-    icon: Truck,
-    rowLabel: "送货单",
-    defaultColumns: [
-      {
-        field: "deliveryNo",
-        headerName: "送货单号",
-        width: 150,
-        required: true,
-      },
-      { field: "date", headerName: "送货日期", width: 130, type: "date" },
-      {
-        field: "status",
-        headerName: "状态",
-        width: 110,
-        type: "select",
-        options: finalDeliveryStatusOptions,
-      },
-    ],
-    emptyRow: {},
-    sourceTableKey: "deliveries",
-    disableRowCreate: true,
-  },
-};
-
-const initialCustomers = [
-  {
-    id: "cus-kanghui",
-    name: "康辉冷链包装",
-    contact: "李经理",
-    phone: "138 0000 3210",
-    address: "佛山南海工业园 6 号仓",
-    level: "重点客户",
-    paymentTerm: "月结 30 天",
-    taxNo: "91440600MA5FOAM001",
-    note: "冷链泡沫箱月度稳定采购，交期优先。",
-    customColumns: {
-      products: [
-        { field: "density", headerName: "密度", type: "text", width: 100 },
-      ],
-      orders: [
-        { field: "salesOwner", headerName: "业务员", type: "text", width: 110 },
-      ],
-      deliveries: [
-        { field: "driver", headerName: "司机", type: "text", width: 110 },
-      ],
-    },
-    products: [
-      {
-        id: "p-1",
-        name: "冷链泡沫箱",
-        spec: "620*420*360mm",
-        material: "EPS",
-        unit: "套",
-        unitPrice: 18.5,
-        moq: 200,
-        density: "18kg/m3",
-        remark: "带盖，白色",
-      },
-      {
-        id: "p-2",
-        name: "保温内衬",
-        spec: "定制",
-        material: "EPP",
-        unit: "件",
-        unitPrice: 6.8,
-        moq: 500,
-        density: "28kg/m3",
-        remark: "按客户图纸开模",
-      },
-    ],
-    orders: [
-      {
-        id: "o-1",
-        orderNo: "KH-202605-018",
-        date: "2026-05-18",
-        product: "冷链泡沫箱",
-        quantity: 1200,
-        amount: 22200,
-        dueDate: "2026-05-30",
-        status: "未完成",
-        salesOwner: "陈峰",
-        followUp: "已排产，待 5 月 28 日质检。",
-      },
-    ],
-    deliveries: [
-      {
-        id: "d-1",
-        deliveryNo: "DN-202605-088",
-        date: "2026-05-20",
-        orderNo: "KH-202605-016",
-        receiver: "王仓管",
-        address: "佛山南海工业园 6 号仓",
-        packages: 360,
-        status: "已签收",
-        driver: "粤A8F21",
-        signedNote: "回单已拍照归档",
-      },
-    ],
-  },
-  {
-    id: "cus-shengda",
-    name: "盛达电器配套",
-    contact: "周总",
-    phone: "139 0000 8621",
-    address: "中山小榄智能制造园",
-    level: "稳定客户",
-    paymentTerm: "货到 15 天",
-    taxNo: "91442000MA5FOAM002",
-    note: "防震泡沫成型件，对规格一致性要求高。",
-    customColumns: {
-      products: [
-        { field: "moldNo", headerName: "模具号", type: "text", width: 110 },
-      ],
-      orders: [
-        { field: "poNo", headerName: "客户PO", type: "text", width: 130 },
-      ],
-      deliveries: [],
-    },
-    products: [
-      {
-        id: "p-3",
-        name: "电器防震角",
-        spec: "A-42",
-        material: "EPE",
-        unit: "个",
-        unitPrice: 0.72,
-        moq: 5000,
-        moldNo: "M-042",
-        remark: "黑色袋装",
-      },
-    ],
-    orders: [
-      {
-        id: "o-2",
-        orderNo: "SD-202605-009",
-        date: "2026-05-21",
-        product: "电器防震角",
-        quantity: 24000,
-        amount: 17280,
-        dueDate: "2026-05-27",
-        status: "未完成",
-        poNo: "PO-886132",
-        followUp: "客户要求 5 月 26 日上午装车。",
-      },
-    ],
-    deliveries: [],
-  },
-];
 
 const gridTheme = themeQuartz.withParams({
   accentColor: "#42e8ff",
@@ -1593,9 +1286,10 @@ function App() {
   }, [restoreLastUndoSnapshot]);
 
   useEffect(() => {
-    api.getCustomers()
-      .then(data => {
-        const normalizedData = normalizeCustomerOrderStatuses(data);
+    api.getCustomers({ limit: 200 })
+      .then(res => {
+        const list = res.data || res;
+        const normalizedData = normalizeCustomerOrderStatuses(list);
         setCustomers(normalizedData);
         if (normalizedData.length) setSelectedCustomerId(normalizedData[0].id);
       })
@@ -2423,20 +2117,6 @@ function App() {
     }
   };
 
-  const resetDemoData = async () => {
-    try {
-      const safeInitialCustomers = normalizeCustomerOrderStatuses(ensureUniqueCustomerRowIds(initialCustomers));
-      pushUndoSnapshot();
-      const result = await api.replaceAll(safeInitialCustomers);
-      const restoredCustomers = normalizeCustomerOrderStatuses(result?.customers || safeInitialCustomers);
-      setCustomers(restoredCustomers);
-      setSelectedCustomerId(restoredCustomers[0]?.id);
-      setActiveTable("orders");
-    } catch (err) {
-      await dialogs.alert(`重置失败：${err.message}`, { title: "重置失败" });
-    }
-  };
-
   if (loading) {
     return (
       <div className="app-shell" style={{ alignItems: 'center', justifyContent: 'center' }}>
@@ -2601,9 +2281,6 @@ function App() {
           >
             <Archive size={14} />
             恢复备份
-          </button>
-          <button className="ghost-button" type="button" onClick={resetDemoData}>
-            恢复演示数据
           </button>
           <button
             className="ghost-button"
@@ -5197,11 +4874,15 @@ function filterValue(value) {
 
 function statusClass(value = "") {
   if (value === "作废") return "is-void";
-  if (value === "未完成" || value === "未排产" || value === "未送" || value === "待确认" || value === "已排产" || value === "生产中" || value === "待发货") return "is-unfinished";
-  if (value === "已完成") return "is-completed";
-  if (value === "已送" || value === "已送货" || value === "已发货" || value.includes("签收")) return "is-delivered";
-  if (value === "已开对账单") return "is-reconciled";
   if (value === "已付款") return "is-paid";
+  if (value === "已开对账单") return "is-reconciled";
+  if (value === "已送货" || value === "已发货") return "is-delivered";
+  if (value === "已完成") return "is-completed";
+  if (value === "已排产") return "is-scheduled";
+  if (value === "未完成") return "is-pending";
+  // legacy fallbacks
+  if (value === "未排产" || value === "未送" || value === "待确认" || value === "待发货") return "is-unfinished";
+  if (value === "已送" || value.includes("签收")) return "is-delivered";
   if (value.includes("异常")) return "is-risk";
   if (value.includes("配送")) return "is-live";
   if (value.includes("装车")) return "is-waiting";
