@@ -32,6 +32,16 @@ CREATE TABLE IF NOT EXISTS deliveries (
   data        JSONB NOT NULL DEFAULT '{}'
 );
 
+CREATE TABLE IF NOT EXISTS mobile_users (
+  id         TEXT PRIMARY KEY,
+  name       TEXT NOT NULL DEFAULT '',
+  phone      TEXT NOT NULL UNIQUE,
+  role       TEXT NOT NULL DEFAULT 'employee',
+  token      TEXT NOT NULL UNIQUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE INDEX IF NOT EXISTS products_customer_idx   ON products(customer_id);
 CREATE INDEX IF NOT EXISTS orders_customer_idx     ON orders(customer_id);
 CREATE INDEX IF NOT EXISTS deliveries_customer_idx ON deliveries(customer_id);

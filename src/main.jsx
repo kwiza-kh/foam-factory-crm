@@ -15,10 +15,10 @@ class ErrorBoundary extends React.Component {
     if (this.state.error) {
       return (
         <div style={{ padding: 40, color: "#f85149", background: "#0a0e14", minHeight: "100vh", fontFamily: "monospace" }}>
-          <h2>应用错误</h2>
+          <h2>应用错误 / App Error</h2>
           <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{this.state.error.message || String(this.state.error)}</pre>
           <pre style={{ whiteSpace: "pre-wrap", fontSize: 11, color: "#6e7681", marginTop: 16 }}>{this.state.error.stack || ""}</pre>
-          <button onClick={() => this.setState({ error: null })} style={{ marginTop: 20, padding: "8px 16px", cursor: "pointer" }}>重试</button>
+          <button onClick={() => this.setState({ error: null })} style={{ marginTop: 20, padding: "8px 16px", cursor: "pointer" }}>重试 / Retry</button>
         </div>
       );
     }

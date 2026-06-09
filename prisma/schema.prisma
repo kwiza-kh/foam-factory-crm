@@ -56,3 +56,15 @@ model Delivery {
   @@index([customerId], map: "deliveries_customer_idx")
   @@map("deliveries")
 }
+
+model MobileUser {
+  id        String   @id
+  name      String   @default("")
+  phone     String   @unique
+  role      String   @default("employee")
+  token     String   @unique
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("mobile_users")
+}

@@ -3,7 +3,7 @@ import { FileUp } from 'lucide-react';
 import { parseOrderFile } from '../lib/orderImport.js';
 import { OrderImportPreviewModal } from './OrderImportPreviewModal.jsx';
 
-export function OrderImportButton({ onImport, disabled, dialogs }) {
+export function OrderImportButton({ onImport, disabled, dialogs, t = (text) => text }) {
   const inputRef = useRef(null);
   const [parsed, setParsed] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -17,12 +17,12 @@ export function OrderImportButton({ onImport, disabled, dialogs }) {
     try {
       const result = await parseOrderFile(file);
       if (!result.rows.length) {
-        await dialogs.alert('没有识别到可导入的订单数据。', { title: '导入订单' });
+        await dialogs.alert(t('没有识别到可导入的订单数据。'), { title: t('导入订单') });
         return;
       }
       setParsed(result);
     } catch (err) {
-      await dialogs.alert(`导入失败：${err.message}`, { title: '导入失败' });
+      await dialogs.alert(t('导入失败：{message}', { message: err.message }), { title: t('导入失败') });
     } finally {
       setBusy(false);
     }
@@ -41,11 +41,11 @@ export function OrderImportButton({ onImport, disabled, dialogs }) {
         className="secondary-button"
         type="button"
         disabled={disabled || busy}
-        title="从 CSV 或 XLSX 自动识别表头并导入订单"
+        title={t("从 CSV 或 XLSX 自动识别表头并导入订单")}
         onClick={() => inputRef.current?.click()}
       >
         <FileUp size={15} />
-        {busy ? '解析中' : '导入订单'}
+        {busy ? t('解析中') : t('导入订单')}
       </button>
 
       {parsed && (
@@ -53,6 +53,7 @@ export function OrderImportButton({ onImport, disabled, dialogs }) {
           columns={parsed.columns}
           rows={parsed.rows}
           headerRowNumber={parsed.headerRowNumber}
+          t={t}
           onClose={() => setParsed(null)}
           onConfirm={(rows, columns) => {
             onImport(rows, columns);

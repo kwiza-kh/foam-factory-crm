@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { randomUUID } from 'crypto';
 import { prisma } from '../db.js';
+import { findUserByMobileToken, normalizeRole } from './users.js';
 
 const router = Router();
 const VALID_TABLES = new Set(['products', 'orders', 'deliveries']);
@@ -61,9 +62,33 @@ function normalize(row) {
   };
 }
 
+function normalizeOrderStatus(status = '') {
+  const value = String(status || '').trim();
+  if (value === '已发货') return '已送货';
+  return value || '未完成';
+}
+
+function filterCustomerForMobileUser(customer, user) {
+  if (!user || normalizeRole(user.role) === 'admin') return customer;
+  return {
+    ...customer,
+    products: [],
+    deliveries: [],
+    orders: (customer.orders || []).filter(order => normalizeOrderStatus(order.status) === '已排产'),
+  };
+}
+
+function hasMobileUserToken(req) {
+  return Boolean(String(req.headers['x-mobile-user-token'] || req.query.mobileToken || '').trim());
+}
+
 // GET /api/customers?page=1&limit=50&search=xxx
 router.get('/', async (req, res) => {
   try {
+    const mobileUser = await findUserByMobileToken(req);
+    if (hasMobileUserToken(req) && !mobileUser) {
+      return res.status(401).json({ error: '手机账号不存在或已失效' });
+    }
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = Math.min(200, Math.max(1, parseInt(req.query.limit) || 50));
     const skip = (page - 1) * limit;
@@ -88,8 +113,13 @@ router.get('/', async (req, res) => {
       prisma.customer.count({ where }),
     ]);
 
+    const data = customers
+      .map(normalize)
+      .map(customer => filterCustomerForMobileUser(customer, mobileUser))
+      .filter(customer => !mobileUser || normalizeRole(mobileUser.role) === 'admin' || customer.orders.length > 0);
+
     res.json({
-      data: customers.map(normalize),
+      data,
       pagination: {
         page,
         limit,
@@ -221,7 +251,15 @@ router.patch('/:id/orders/:orderId/status', async (req, res) => {
   const { status } = req.body || {};
   const nextStatus = String(status || '').trim();
   if (!nextStatus) return res.status(400).json({ error: 'Missing status' });
-  const allowedExtraFields = ['completionTime', 'completionOperator', 'completionNote'];
+  const allowedExtraFields = [
+    'completionTime',
+    'completionOperator',
+    'completionNote',
+    'completionPhoto',
+    'completionPhotoAt',
+    'completionUserId',
+    'completionUserName',
+  ];
   const extraData = {};
   for (const field of allowedExtraFields) {
     if (Object.prototype.hasOwnProperty.call(req.body || {}, field)) {
@@ -230,6 +268,10 @@ router.patch('/:id/orders/:orderId/status', async (req, res) => {
   }
 
   try {
+    const mobileUser = await findUserByMobileToken(req);
+    if (hasMobileUserToken(req) && !mobileUser) {
+      return res.status(401).json({ error: '手机账号不存在或已失效' });
+    }
     const order = await prisma.order.findFirst({
       where: {
         id: orderId,
@@ -237,6 +279,20 @@ router.patch('/:id/orders/:orderId/status', async (req, res) => {
       },
     });
     if (!order) return res.status(404).json({ error: 'Order not found' });
+    if (mobileUser && normalizeRole(mobileUser.role) === 'employee') {
+      if (nextStatus !== '已完成') return res.status(403).json({ error: '员工只能完成已排产订单' });
+      if (normalizeOrderStatus(order.data?.status) !== '已排产') {
+        return res.status(403).json({ error: '员工只能完成已排产订单' });
+      }
+    }
+    if (nextStatus === '已完成' && !req.body?.completionPhoto && !order.data?.completionPhoto) {
+      return res.status(400).json({ error: '完成订单必须上传现场照片' });
+    }
+    if (mobileUser) {
+      extraData.completionUserId = mobileUser.id;
+      extraData.completionUserName = mobileUser.name || '';
+      if (!extraData.completionOperator) extraData.completionOperator = mobileUser.name || '手机端';
+    }
 
     const data = {
       ...(order.data || {}),

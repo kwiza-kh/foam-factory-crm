@@ -1,10 +1,11 @@
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { makeId, today } from "./lib/utils.js";
 import { api } from "./lib/api.js";
 import { OrderImportButton } from "./components/OrderImportButton.jsx";
 import { exportTableToExcel } from "./lib/exporter.js";
 import { exportBackup, importBackup } from "./lib/backup.js";
 import { DeliveryPrintModal } from "./components/DeliveryPrintModal.jsx";
+import { createTranslator, formatCurrencyForLanguage, getGridLocaleText, languageOptions, normalizeLanguage } from "./lib/i18n.js";
 import { AgGridReact } from "ag-grid-react";
 import {
   CellStyleModule,
@@ -101,30 +102,33 @@ const gridTheme = themeQuartz.withParams({
   spacing: 8,
 });
 
-const localeText = {
-  noRowsToShow: "暂无数据，点击新增开始录入",
-  loadingOoo: "加载中...",
-  searchOoo: "搜索...",
-  selectAll: "全选",
-  blanks: "空白",
-  filterOoo: "筛选...",
-  equals: "等于",
-  notEqual: "不等于",
-  contains: "包含",
-  notContains: "不包含",
-  startsWith: "开头是",
-  endsWith: "结尾是",
-  lessThan: "小于",
-  greaterThan: "大于",
-  applyFilter: "应用",
-  resetFilter: "重置",
-  clearFilter: "清除",
-  columns: "列",
-  filters: "筛选",
-};
+const defaultTranslator = createTranslator("zh");
+const I18nContext = createContext({ language: "zh", t: defaultTranslator });
+
+function useI18n() {
+  return useContext(I18nContext);
+}
 
 
 const MAX_UNDO_STEPS = 50;
+const UNGROUPED_CUSTOMER_GROUP = "未分组";
+const CUSTOMER_DRAG_HOLD_MS = 420;
+
+function normalizeCustomerGroupList(groups = []) {
+  const seen = new Set();
+  const result = [];
+  for (const group of groups) {
+    const value = String(group || "").trim();
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    result.push(value);
+  }
+  return result;
+}
+
+function customerGroupLevel(customer) {
+  return customer?.level || UNGROUPED_CUSTOMER_GROUP;
+}
 
 function cloneData(data) {
   if (typeof structuredClone === "function") {
@@ -250,14 +254,7 @@ function parseClipboardTable(text) {
   return rows;
 }
 
-const formatCurrency = (value) => {
-  const number = Number(value || 0);
-  return number.toLocaleString("zh-CN", {
-    style: "currency",
-    currency: "CNY",
-    maximumFractionDigits: 2,
-  });
-};
+const formatCurrency = (value, language = "zh") => formatCurrencyForLanguage(value, language);
 
 const toFieldKey = (label) =>
   `custom_${label
@@ -296,12 +293,25 @@ const formulaReferenceAliases = {
   订单数量: "quantity",
   订购数量: "quantity",
   数量: "quantity",
+  Quantity: "quantity",
+  "Order Quantity": "quantity",
+  "Purchase Quantity": "quantity",
   单价: "unitPrice",
+  UnitPrice: "unitPrice",
+  "Unit Price": "unitPrice",
   金额: "amount",
   订单金额: "amount",
+  Amount: "amount",
+  "Order Amount": "amount",
   送货数量: deliveryQuantityField,
+  DeliveryQuantity: deliveryQuantityField,
+  "Delivery Quantity": deliveryQuantityField,
   已送数量: orderDeliveredQuantityField,
+  DeliveredQuantity: orderDeliveredQuantityField,
+  "Delivered Quantity": orderDeliveredQuantityField,
   剩余数量: orderRemainingQuantityField,
+  RemainingQuantity: orderRemainingQuantityField,
+  "Remaining Quantity": orderRemainingQuantityField,
 };
 
 function normalizeFormulaInput(formula) {
@@ -593,7 +603,7 @@ function findEffectiveDeliveryOverages(orders = [], deliveries = []) {
     .filter(Boolean);
 }
 
-function buildDeliveryFinalizePreview(customer, selectedDrafts) {
+function buildDeliveryFinalizePreview(customer, selectedDrafts, t = defaultTranslator) {
   const orders = customer?.orders || [];
   const deliveries = customer?.deliveries || [];
   const ordersById = new Map(orders.map(order => [order.id, order]));
@@ -631,10 +641,10 @@ function buildDeliveryFinalizePreview(customer, selectedDrafts) {
 
     return {
       id: delivery.id,
-      deliveryNo: delivery.deliveryNo || "未填写送货单号",
+      deliveryNo: delivery.deliveryNo || t("未填写送货单号"),
       date: delivery.date || "",
       orderId,
-      orderLabel: order ? getOrderLabel(order, orderId) : (delivery.orderNo || "未关联订单"),
+      orderLabel: order ? getOrderLabel(order, orderId) : (delivery.orderNo || t("未关联订单")),
       product: order?.product || delivery[deliveryOrderField("product")] || "",
       quantity,
       deliveredBefore,
@@ -660,42 +670,60 @@ function buildDeliveryFinalizePreview(customer, selectedDrafts) {
   return {
     draftSummaries,
     orderSummaries,
-    deliveryNos: [...new Set(selectedDrafts.map(delivery => delivery.deliveryNo || "未填写送货单号"))],
+    deliveryNos: [...new Set(selectedDrafts.map(delivery => delivery.deliveryNo || t("未填写送货单号")))],
     totalQuantity: selectedDrafts.reduce((sum, delivery) => sum + parseNumericValue(delivery[deliveryQuantityField]), 0),
     unlinkedQuantity,
     overDelivered: orderSummaries.filter(item => item.selectedQuantity > item.remainingBefore + 0.0000001),
   };
 }
 
-function formatDeliveryFinalizeMessage(preview) {
+function formatDeliveryFinalizeMessage(preview, t = defaultTranslator) {
   const orderLines = preview.orderSummaries.slice(0, 8).map(item => (
-    `${item.orderLabel}：本次 ${normalizeCalculatedNumber(item.selectedQuantity)} / 剩余 ${normalizeCalculatedNumber(item.remainingBefore)}`
+    t("{orderLabel}：本次 {selectedQuantity} / 剩余 {remainingQuantity}", {
+      orderLabel: item.orderLabel,
+      selectedQuantity: normalizeCalculatedNumber(item.selectedQuantity),
+      remainingQuantity: normalizeCalculatedNumber(item.remainingBefore),
+    })
   ));
   const draftLines = preview.draftSummaries.slice(0, 8).map(item => (
     `${item.deliveryNo} · ${item.orderLabel} · ${normalizeCalculatedNumber(item.quantity)}`
   ));
   const moreDrafts = preview.draftSummaries.length > draftLines.length
-    ? `\n另有 ${preview.draftSummaries.length - draftLines.length} 条明细未展示`
+    ? t("\n另有 {count} 条明细未展示", { count: preview.draftSummaries.length - draftLines.length })
     : "";
   const unlinkedLine = preview.unlinkedQuantity > 0
-    ? `\n未关联订单数量：${normalizeCalculatedNumber(preview.unlinkedQuantity)}`
+    ? t("\n未关联订单数量：{quantity}", { quantity: normalizeCalculatedNumber(preview.unlinkedQuantity) })
     : "";
 
   return [
-    `将生成 ${preview.deliveryNos.length} 张送货单，共 ${preview.draftSummaries.length} 条明细。`,
-    `送货数量合计：${normalizeCalculatedNumber(preview.totalQuantity)}${unlinkedLine}`,
-    orderLines.length ? `\n关联订单预览：\n${orderLines.join("\n")}` : "",
-    draftLines.length ? `\n草稿明细：\n${draftLines.join("\n")}${moreDrafts}` : "",
-    "\n确认无误后，送货单会进入“送货单”页面，默认状态为“未送”。",
+    t("将生成 {deliveryCount} 张送货单，共 {lineCount} 条明细。", {
+      deliveryCount: preview.deliveryNos.length,
+      lineCount: preview.draftSummaries.length,
+    }),
+    t("送货数量合计：{quantity}{unlinkedLine}", {
+      quantity: normalizeCalculatedNumber(preview.totalQuantity),
+      unlinkedLine,
+    }),
+    orderLines.length ? t("\n关联订单预览：\n{lines}", { lines: orderLines.join("\n") }) : "",
+    draftLines.length ? t("\n草稿明细：\n{lines}{moreDrafts}", { lines: draftLines.join("\n"), moreDrafts }) : "",
+    t("\n确认无误后，送货单会进入“送货单”页面，默认状态为“未送”。"),
   ].filter(Boolean).join("\n");
 }
 
-function formatOverDeliveryMessage(issues) {
+function formatOverDeliveryMessage(issues, t = defaultTranslator) {
   const lines = issues.slice(0, 8).map(issue => (
-    `${issue.orderLabel}：已送 ${normalizeCalculatedNumber(issue.deliveredQuantity)} / 订单 ${normalizeCalculatedNumber(issue.orderQuantity)}，超出 ${normalizeCalculatedNumber(issue.overQuantity)}`
+    t("{orderLabel}：已送 {deliveredQuantity} / 订单 {orderQuantity}，超出 {overQuantity}", {
+      orderLabel: issue.orderLabel,
+      deliveredQuantity: normalizeCalculatedNumber(issue.deliveredQuantity),
+      orderQuantity: normalizeCalculatedNumber(issue.orderQuantity),
+      overQuantity: normalizeCalculatedNumber(issue.overQuantity),
+    })
   ));
-  const more = issues.length > lines.length ? `\n另有 ${issues.length - lines.length} 条订单超量。` : "";
-  return `以下订单送货数量超过订单数量，不能生效：\n${lines.join("\n")}${more}`;
+  const more = issues.length > lines.length ? t("\n另有 {count} 条订单超量。", { count: issues.length - lines.length }) : "";
+  return t("以下订单送货数量超过订单数量，不能生效：\n{lines}{more}", {
+    lines: lines.join("\n"),
+    more,
+  });
 }
 
 function deliveryOrderField(field) {
@@ -971,7 +999,7 @@ function applyDeliveryQuantitiesToOrders(orders = [], deliveries = []) {
   });
 }
 
-function useDialogController() {
+function useDialogController(t = defaultTranslator) {
   const [dialog, setDialog] = useState(null);
   const resolverRef = useRef(null);
 
@@ -990,42 +1018,42 @@ function useDialogController() {
   const showAlert = useCallback((message, options = {}) => (
     openDialog({
       type: "alert",
-      title: options.title || "提示",
-      message,
+      title: t(options.title || "提示"),
+      message: t(message),
       tone: options.tone,
     }).then(() => true)
-  ), [openDialog]);
+  ), [openDialog, t]);
 
   const showConfirm = useCallback((message, options = {}) => (
     openDialog({
       type: "confirm",
-      title: options.title || "确认操作",
-      message,
+      title: t(options.title || "确认操作"),
+      message: t(message),
       tone: options.tone,
     })
-  ), [openDialog]);
+  ), [openDialog, t]);
 
   const showPrompt = useCallback((message, options = {}) => (
     openDialog({
       type: "prompt",
-      title: options.title || "输入内容",
-      message,
+      title: t(options.title || "输入内容"),
+      message: t(message),
       defaultValue: options.defaultValue || "",
-      placeholder: options.placeholder || "",
+      placeholder: t(options.placeholder || ""),
       tone: options.tone,
     })
-  ), [openDialog]);
+  ), [openDialog, t]);
 
   const showSelect = useCallback((message, options = {}) => (
     openDialog({
       type: "select",
-      title: options.title || "选择内容",
-      message,
-      options: options.options || [],
+      title: t(options.title || "选择内容"),
+      message: t(message),
+      options: (options.options || []).map(option => ({ ...option, label: t(option.label) })),
       defaultValue: options.defaultValue || options.options?.[0]?.value || "",
       tone: options.tone,
     })
-  ), [openDialog]);
+  ), [openDialog, t]);
 
   return useMemo(() => ({
     dialog,
@@ -1038,6 +1066,7 @@ function useDialogController() {
 }
 
 function AppDialog({ dialog, onResolve }) {
+  const { t } = useI18n();
   const [inputValue, setInputValue] = useState("");
 
   useEffect(() => {
@@ -1111,7 +1140,7 @@ function AppDialog({ dialog, onResolve }) {
         <div className="app-dialog-actions">
           {(isPrompt || isSelect || isConfirm) && (
             <button type="button" className="secondary-button compact" onClick={() => onResolve(cancelValue)}>
-              取消
+              {t("取消")}
             </button>
           )}
           <button
@@ -1120,7 +1149,7 @@ function AppDialog({ dialog, onResolve }) {
             className={`primary-action compact ${dialog.tone === "danger" ? "danger-confirm" : ""}`}
             disabled={isSelect && !inputValue}
           >
-            {isConfirm ? "确认" : "确定"}
+            {isConfirm ? t("确认") : t("确定")}
           </button>
         </div>
       </form>
@@ -1129,7 +1158,13 @@ function AppDialog({ dialog, onResolve }) {
 }
 
 function App() {
-  const dialogs = useDialogController();
+  const [systemSettings, setSystemSettings] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("foam-crm-settings") || "{}"); } catch { return {}; }
+  });
+  const language = normalizeLanguage(systemSettings.language);
+  const t = useMemo(() => createTranslator(language), [language]);
+  const i18n = useMemo(() => ({ language, t }), [language, t]);
+  const dialogs = useDialogController(t);
   const [customers, setCustomers] = useState([]);
   const [selectedCustomerId, setSelectedCustomerId] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -1139,6 +1174,7 @@ function App() {
   const [quickFilter, setQuickFilter] = useState("");
   const [globalSearchQuery, setGlobalSearchQuery] = useState("");
   const [showGlobalSearchResults, setShowGlobalSearchResults] = useState(false);
+  const [mobileUsers, setMobileUsers] = useState([]);
   const [showCustomerModal, setShowCustomerModal] = useState(false);
   const [showColumnModal, setShowColumnModal] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState(null);
@@ -1146,9 +1182,7 @@ function App() {
   const [printDelivery, setPrintDelivery] = useState(null);
   const [productionScheduleOrders, setProductionScheduleOrders] = useState([]);
   const [showSettings, setShowSettings] = useState(false);
-  const [systemSettings, setSystemSettings] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("foam-crm-settings") || "{}"); } catch { return {}; }
-  });
+  const [collapsedGroups, setCollapsedGroups] = useState(new Set());
   const customersRef = useRef(customers);
   const selectedCustomerIdRef = useRef(selectedCustomerId);
   const activeTableRef = useRef(activeTable);
@@ -1158,6 +1192,48 @@ function App() {
   const rowSaveQueueRef = useRef(new Map());
   const rowSaveRevisionRef = useRef(new Map());
   const fullDataSyncRevisionRef = useRef(0);
+  const customerDragTimerRef = useRef(null);
+  const customerDragSourceRef = useRef(null);
+  const initialCustomerDrag = useMemo(() => ({
+    customerId: null,
+    active: false,
+    x: 0,
+    y: 0,
+    overLevel: "",
+  }), []);
+  const customerDragRef = useRef(initialCustomerDrag);
+  const [customerDrag, setCustomerDrag] = useState(initialCustomerDrag);
+
+  useEffect(() => {
+    document.documentElement.lang = language === "en" ? "en" : "zh-CN";
+    document.title = t("泡沫厂客户管理系统");
+  }, [language, t]);
+
+  useEffect(() => () => {
+    if (customerDragTimerRef.current) {
+      window.clearTimeout(customerDragTimerRef.current);
+    }
+  }, []);
+
+  const updateCustomerDrag = useCallback((updater) => {
+    setCustomerDrag((current) => {
+      const next = typeof updater === "function" ? updater(current) : updater;
+      customerDragRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const clearCustomerDragTimer = useCallback(() => {
+    if (!customerDragTimerRef.current) return;
+    window.clearTimeout(customerDragTimerRef.current);
+    customerDragTimerRef.current = null;
+  }, []);
+
+  const resetCustomerDrag = useCallback(() => {
+    clearCustomerDragTimer();
+    customerDragSourceRef.current = null;
+    updateCustomerDrag(initialCustomerDrag);
+  }, [clearCustomerDragTimer, initialCustomerDrag, updateCustomerDrag]);
 
   useEffect(() => {
     customersRef.current = customers;
@@ -1232,13 +1308,13 @@ function App() {
         await api.replaceAll(customersToSync);
       } catch (err) {
         if (fullDataSyncRevisionRef.current === revision) {
-          void dialogs.alert(`撤销已在界面完成，但同步数据库失败：${err.message}`, { title: "同步失败" });
+          void dialogs.alert(t("撤销已在界面完成，但同步数据库失败：{message}", { message: err.message }), { title: "同步失败" });
         }
       }
     };
 
     run();
-  }, [dialogs.alert]);
+  }, [dialogs.alert, t]);
 
   const restoreLastUndoSnapshot = useCallback(() => {
     if (undoingRef.current || !undoStackRef.current.length) return;
@@ -1285,6 +1361,15 @@ function App() {
     return () => window.removeEventListener("keydown", handleUndoKeyDown, true);
   }, [restoreLastUndoSnapshot]);
 
+  const loadMobileUsers = useCallback(async () => {
+    try {
+      const res = await api.getMobileUsers();
+      setMobileUsers(res.data || res || []);
+    } catch (err) {
+      console.warn("Load mobile users failed:", err);
+    }
+  }, []);
+
   useEffect(() => {
     api.getCustomers({ limit: 200 })
       .then(res => {
@@ -1295,7 +1380,8 @@ function App() {
       })
       .catch(err => dialogs.alert(`加载失败：${err.message}`, { title: "加载失败" }))
       .finally(() => setLoading(false));
-  }, [dialogs.alert]);
+    loadMobileUsers();
+  }, [dialogs.alert, loadMobileUsers]);
 
   const selectedCustomer = useMemo(
     () => customers.find((customer) => customer.id === selectedCustomerId),
@@ -1317,6 +1403,83 @@ function App() {
         .some((text) => text.toLowerCase().includes(keyword)),
     );
   }, [customers, searchText]);
+
+  const customCustomerGroups = useMemo(
+    () => normalizeCustomerGroupList(systemSettings.customerGroups || []),
+    [systemSettings.customerGroups],
+  );
+
+  const customerGroups = useMemo(() => normalizeCustomerGroupList([
+    ...customerLevelOptions,
+    ...customCustomerGroups,
+    ...customers.map(customerGroupLevel),
+    UNGROUPED_CUSTOMER_GROUP,
+  ]), [customCustomerGroups, customers]);
+
+  const groupedCustomers = useMemo(() => {
+    const groups = Object.fromEntries(customerGroups.map(level => [level, []]));
+    for (const customer of filteredCustomers) {
+      const level = customerGroupLevel(customer);
+      if (!groups[level]) groups[level] = [];
+      groups[level].push(customer);
+    }
+    return customerGroups.map((level) => ({ level, customers: groups[level] || [] }));
+  }, [customerGroups, filteredCustomers]);
+
+  const toggleGroup = useCallback((level) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(level)) next.delete(level);
+      else next.add(level);
+      return next;
+    });
+  }, []);
+
+  const persistSystemSettings = useCallback((settings) => {
+    const next = {
+      ...settings,
+      language: normalizeLanguage(settings.language),
+      customerGroups: normalizeCustomerGroupList(settings.customerGroups || []),
+    };
+    setSystemSettings(next);
+    localStorage.setItem("foam-crm-settings", JSON.stringify(next));
+  }, []);
+
+  const updateMobileUserRole = useCallback(async (userId, role) => {
+    try {
+      const res = await api.updateMobileUserRole(userId, role);
+      const nextUser = res.user;
+      setMobileUsers(current => current.map(user => (
+        user.id === userId ? { ...user, ...nextUser } : user
+      )));
+    } catch (err) {
+      await dialogs.alert(t("保存失败：{message}", { message: err.message }), { title: "保存失败" });
+    }
+  }, [dialogs, t]);
+
+  const handleAddCustomerGroup = useCallback(async () => {
+    const input = await dialogs.prompt("新分组名称：", {
+      title: "新增分组",
+      placeholder: "例如：打样客户",
+    });
+    const groupName = String(input || "").trim();
+    if (!groupName) return;
+
+    if (customerGroups.includes(groupName)) {
+      await dialogs.alert("该分组已存在。", { title: "新增分组" });
+      return;
+    }
+
+    persistSystemSettings({
+      ...systemSettings,
+      customerGroups: [...customCustomerGroups, groupName],
+    });
+    setCollapsedGroups(current => {
+      const next = new Set(current);
+      next.delete(groupName);
+      return next;
+    });
+  }, [customCustomerGroups, customerGroups, dialogs, persistSystemSettings, systemSettings]);
 
   const alertMap = useMemo(() => {
     const map = {};
@@ -1342,27 +1505,27 @@ function App() {
     const amount = allOrders.reduce((sum, order) => sum + Number(order.amount || 0), 0);
     return [
       {
-        label: "客户总数",
+        label: t("客户总数"),
         value: customers.length,
-        detail: "按客户独立维护表头",
+        detail: t("按客户独立维护表头"),
       },
       {
-        label: "进行中订单",
+        label: t("进行中订单"),
         value: activeOrders.length,
-        detail: "未完成订单跟进",
+        detail: t("未完成订单跟进"),
       },
       {
-        label: "订单金额",
-        value: formatCurrency(amount),
-        detail: "本地录入订单汇总",
+        label: t("订单金额"),
+        value: formatCurrency(amount, language),
+        detail: t("本地录入订单汇总"),
       },
       {
-        label: "送货单",
+        label: t("送货单"),
         value: allDeliveries.length,
-        detail: "签收与回单状态",
+        detail: t("签收与回单状态"),
       },
     ];
-  }, [customers]);
+  }, [customers, language, t]);
 
   // 全局搜索：搜索订单号、产品名、送货单号、客户名
   const globalSearchResults = useMemo(() => {
@@ -1371,21 +1534,21 @@ function App() {
     const results = [];
     for (const customer of customers) {
       if (customer.name.toLowerCase().includes(q) || customer.contact?.toLowerCase().includes(q)) {
-        results.push({ type: "customer", customerId: customer.id, customerName: customer.name, label: `客户 · ${customer.name}`, detail: customer.contact || "" });
+        results.push({ type: "customer", customerId: customer.id, customerName: customer.name, label: `${t("客户")} · ${customer.name}`, detail: customer.contact || "" });
       }
       for (const order of customer.orders || []) {
         if ((order.orderNo || "").toLowerCase().includes(q) || (order.product || "").toLowerCase().includes(q)) {
-          results.push({ type: "order", customerId: customer.id, customerName: customer.name, label: `订单 · ${order.orderNo || order.product}`, detail: `${order.product || ""} · ${order.status || ""}`, orderId: order.id });
+          results.push({ type: "order", customerId: customer.id, customerName: customer.name, label: `${t("订单")} · ${order.orderNo || order.product}`, detail: `${order.product || ""} · ${t(normalizeOrderStatus(order.status))}`, orderId: order.id });
         }
       }
       for (const delivery of customer.deliveries || []) {
         if ((delivery.deliveryNo || "").toLowerCase().includes(q)) {
-          results.push({ type: "delivery", customerId: customer.id, customerName: customer.name, label: `送货单 · ${delivery.deliveryNo}`, detail: delivery.status || "", deliveryId: delivery.id });
+          results.push({ type: "delivery", customerId: customer.id, customerName: customer.name, label: `${t("送货单")} · ${delivery.deliveryNo}`, detail: t(normalizeFinalDeliveryStatus(delivery.status)), deliveryId: delivery.id });
         }
       }
     }
     return results.slice(0, 20);
-  }, [customers, globalSearchQuery]);
+  }, [customers, globalSearchQuery, t]);
 
   const navigateToSearchResult = useCallback((result) => {
     // 保存当前客户的上下文
@@ -1431,7 +1594,7 @@ function App() {
           ...c,
           deliveries: normalizeDeliveryRows(currentCustomer?.deliveries || []),
         }));
-        await dialogs.alert(formatOverDeliveryMessage(overDeliveryIssues), { title: "送货数量超出订单数量", tone: "danger" });
+        await dialogs.alert(formatOverDeliveryMessage(overDeliveryIssues, t), { title: "送货数量超出订单数量", tone: "danger" });
         return;
       }
 
@@ -1826,7 +1989,7 @@ function App() {
         .map(order => order.orderNo || order.product || order.id)
         .slice(0, 5)
         .join("、");
-      await dialogs.alert(`已完成、已送货、已开对账单或已付款的订单不能再排产。\n请先处理：${orderNos}`, { title: "排产" });
+      await dialogs.alert(t("已完成、已送货、已开对账单或已付款的订单不能再排产。\n请先处理：{orders}", { orders: orderNos }), { title: "排产" });
       return false;
     }
 
@@ -1911,7 +2074,7 @@ function App() {
         .map(order => order.orderNo || order.product || order.id)
         .slice(0, 5)
         .join("、");
-      await dialogs.alert(`只有进度为“已完成”的订单才能生成送货单。\n请先处理：${orderNos}`, { title: "生成送货单" });
+      await dialogs.alert(t("只有进度为“已完成”的订单才能生成送货单。\n请先处理：{orders}", { orders: orderNos }), { title: "生成送货单" });
       return false;
     }
 
@@ -2002,13 +2165,13 @@ function App() {
       return false;
     }
 
-    const preview = buildDeliveryFinalizePreview(currentCustomer, selectedDrafts);
+    const preview = buildDeliveryFinalizePreview(currentCustomer, selectedDrafts, t);
     if (preview.overDelivered.length) {
-      await dialogs.alert(formatOverDeliveryMessage(preview.overDelivered), { title: "送货数量超出订单数量", tone: "danger" });
+      await dialogs.alert(formatOverDeliveryMessage(preview.overDelivered, t), { title: "送货数量超出订单数量", tone: "danger" });
       return false;
     }
 
-    const confirmed = await dialogs.confirm(formatDeliveryFinalizeMessage(preview), { title: "确认生成送货单" });
+    const confirmed = await dialogs.confirm(formatDeliveryFinalizeMessage(preview, t), { title: "确认生成送货单" });
     if (!confirmed) return false;
 
     const rawDeliveries = (currentCustomer.deliveries || []).map(delivery => (
@@ -2066,7 +2229,7 @@ function App() {
     e.target.value = "";
     try {
       const data = await importBackup(file);
-      if (await dialogs.confirm(`恢复备份将覆盖当前所有数据（共 ${data.length} 个客户）。确认继续？`, {
+      if (await dialogs.confirm(t("恢复备份将覆盖当前所有数据（共 {count} 个客户）。确认继续？", { count: data.length }), {
         title: "恢复备份",
         tone: "danger",
       })) {
@@ -2117,10 +2280,113 @@ function App() {
     }
   };
 
+  const moveCustomerToGroup = useCallback(async (customerId, groupLevel) => {
+    const currentCustomer = customersRef.current.find(customer => customer.id === customerId);
+    if (!currentCustomer) return;
+
+    const nextLevel = groupLevel === UNGROUPED_CUSTOMER_GROUP ? "" : groupLevel;
+    if ((currentCustomer.level || "") === nextLevel) return;
+
+    const previousCustomers = customersRef.current;
+    const nextCustomer = { ...currentCustomer, level: nextLevel };
+    const nextCustomers = previousCustomers.map(customer =>
+      customer.id === customerId ? nextCustomer : customer
+    );
+
+    pushUndoSnapshot();
+    customersRef.current = nextCustomers;
+    setCustomers(nextCustomers);
+
+    try {
+      await api.updateCustomer(customerId, nextCustomer);
+    } catch (err) {
+      customersRef.current = previousCustomers;
+      setCustomers(previousCustomers);
+      await dialogs.alert(`保存失败：${err.message}`, { title: "保存失败" });
+    }
+  }, [dialogs.alert, pushUndoSnapshot]);
+
+  const startCustomerLongPress = useCallback((event, customer) => {
+    if (event.button != null && event.button !== 0) return;
+    if (event.target?.closest?.(".customer-delete")) return;
+
+    clearCustomerDragTimer();
+    customerDragSourceRef.current = {
+      customer,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      element: event.currentTarget,
+    };
+    updateCustomerDrag({
+      customerId: customer.id,
+      active: false,
+      x: event.clientX,
+      y: event.clientY,
+      overLevel: "",
+    });
+
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    customerDragTimerRef.current = window.setTimeout(() => {
+      customerDragTimerRef.current = null;
+      const source = customerDragSourceRef.current;
+      if (!source || source.customer.id !== customer.id) return;
+      updateCustomerDrag({
+        customerId: customer.id,
+        active: true,
+        x: source.startX,
+        y: source.startY,
+        overLevel: customerGroupLevel(customer),
+      });
+    }, CUSTOMER_DRAG_HOLD_MS);
+  }, [clearCustomerDragTimer, updateCustomerDrag]);
+
+  const moveCustomerDragPointer = useCallback((event) => {
+    const source = customerDragSourceRef.current;
+    if (!source) return;
+
+    const current = customerDragRef.current;
+    const movedDistance = Math.hypot(event.clientX - source.startX, event.clientY - source.startY);
+    if (!current.active) {
+      if (movedDistance > 8) {
+        clearCustomerDragTimer();
+        source.element?.releasePointerCapture?.(source.pointerId);
+        updateCustomerDrag(initialCustomerDrag);
+        customerDragSourceRef.current = null;
+      }
+      return;
+    }
+
+    event.preventDefault();
+    const targetGroup = document
+      .elementFromPoint(event.clientX, event.clientY)
+      ?.closest?.("[data-customer-group-level]");
+    const overLevel = targetGroup?.getAttribute("data-customer-group-level") || "";
+    updateCustomerDrag({
+      ...current,
+      x: event.clientX,
+      y: event.clientY,
+      overLevel,
+    });
+  }, [clearCustomerDragTimer, initialCustomerDrag, updateCustomerDrag]);
+
+  const endCustomerLongPress = useCallback(async (event) => {
+    const source = customerDragSourceRef.current;
+    const current = customerDragRef.current;
+    clearCustomerDragTimer();
+
+    source?.element?.releasePointerCapture?.(source.pointerId);
+    customerDragSourceRef.current = null;
+    updateCustomerDrag(initialCustomerDrag);
+
+    if (!source || !current.active || !current.overLevel) return;
+    await moveCustomerToGroup(source.customer.id, current.overLevel);
+  }, [clearCustomerDragTimer, initialCustomerDrag, moveCustomerToGroup, updateCustomerDrag]);
+
   if (loading) {
     return (
       <div className="app-shell" style={{ alignItems: 'center', justifyContent: 'center' }}>
-        <p style={{ color: '#82e5ff', fontSize: '1rem' }}>正在连接数据库...</p>
+        <p style={{ color: '#82e5ff', fontSize: '1rem' }}>{t("正在连接数据库...")}</p>
       </div>
     );
   }
@@ -2158,6 +2424,7 @@ function App() {
     return selectedCustomer;
   })();
   return (
+    <I18nContext.Provider value={i18n}>
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand-block">
@@ -2166,7 +2433,7 @@ function App() {
           </div>
           <div>
             <p className="eyebrow">FOAM OPS</p>
-            <h1>泡沫厂客户管理系统</h1>
+            <h1>{t("泡沫厂客户管理系统")}</h1>
           </div>
         </div>
 
@@ -2178,7 +2445,7 @@ function App() {
               onChange={(e) => { setGlobalSearchQuery(e.target.value); setShowGlobalSearchResults(true); }}
               onFocus={() => setShowGlobalSearchResults(true)}
               onBlur={() => setTimeout(() => setShowGlobalSearchResults(false), 200)}
-              placeholder="搜索订单号 / 产品 / 送货单…"
+              placeholder={t("搜索订单号 / 产品 / 送货单…")}
             />
           </label>
           {showGlobalSearchResults && globalSearchResults.length > 0 && (
@@ -2203,7 +2470,7 @@ function App() {
           }}
         >
           <UserRoundPlus size={18} />
-          新增客户
+          {t("新增客户")}
         </button>
 
         <label className="search-box">
@@ -2211,50 +2478,98 @@ function App() {
           <input
             value={searchText}
             onChange={(event) => setSearchText(event.target.value)}
-            placeholder="搜索客户 / 联系人"
+            placeholder={t("搜索客户 / 联系人")}
           />
         </label>
 
-        <div className="customer-list" aria-label="客户列表">
-          {filteredCustomers.map((customer) => (
-            <div
-              className={`customer-item ${customer.id === selectedCustomerId ? "is-active" : ""}`}
-              key={customer.id}
-            >
-              <button
-                className="customer-item-body"
-                type="button"
-                onClick={() => {
-                  if (selectedCustomerId) lastTableByCustomerRef.current[selectedCustomerId] = activeTable;
-                  setSelectedCustomerId(customer.id);
-                  const lastTable = lastTableByCustomerRef.current[customer.id];
-                  if (lastTable) setActiveTable(lastTable);
-                }}
-              >
-                <span className="customer-name">
-                  {customer.name}
-                  {alertMap[customer.id] && (
-                    <span
-                      className={`alert-dot alert-dot--${alertMap[customer.id]}`}
-                      title={alertMap[customer.id] === "danger" ? "有订单已逾期" : "有订单即将到期"}
-                    />
-                  )}
-                </span>
-                <span className="customer-meta">
-                  {customer.contact || "未填联系人"} · {customer.level}
-                </span>
-              </button>
-              <button
-                className="customer-delete"
-                type="button"
-                title="删除客户"
-                onClick={() => deleteCustomer(customer.id)}
-              >
-                <Trash2 size={13} />
-              </button>
-            </div>
-          ))}
+        <div className="customer-list-tools">
+          <button
+            className="ghost-button customer-group-add"
+            type="button"
+            title={t("新增客户分组")}
+            onClick={handleAddCustomerGroup}
+          >
+            <Plus size={14} />
+            {t("新增分组")}
+          </button>
         </div>
+
+        <div className="customer-list" aria-label={t("客户列表")}>
+          {groupedCustomers.map(({ level, customers: groupMembers }) => {
+            const collapsed = collapsedGroups.has(level);
+            const count = groupMembers.length;
+            return (
+              <div
+                className={`customer-group ${customerDrag.active && customerDrag.overLevel === level ? "is-drop-target" : ""}`}
+                key={level}
+                data-customer-group-level={level}
+              >
+                <button
+                  className="customer-group-header"
+                  type="button"
+                  onClick={() => toggleGroup(level)}
+                  title={collapsed ? t("展开") : t("折叠")}
+                >
+                  <span className={`group-arrow ${collapsed ? "" : "is-open"}`}>▸</span>
+                  <span className="group-label">{t(level)}</span>
+                  <span className="group-count">{count}</span>
+                </button>
+                {!collapsed &&
+                  groupMembers.map((customer) => (
+                    <div
+                      className={`customer-item ${customer.id === selectedCustomerId ? "is-active" : ""} ${customerDrag.active && customerDrag.customerId === customer.id ? "is-dragging" : ""} ${customerDrag.customerId === customer.id && !customerDrag.active ? "is-hold-pending" : ""}`}
+                      key={customer.id}
+                      onPointerDown={(event) => startCustomerLongPress(event, customer)}
+                      onPointerMove={moveCustomerDragPointer}
+                      onPointerUp={endCustomerLongPress}
+                      onPointerCancel={endCustomerLongPress}
+                    >
+                      <button
+                        className="customer-item-body"
+                        type="button"
+                        onClick={() => {
+                          if (selectedCustomerId) lastTableByCustomerRef.current[selectedCustomerId] = activeTable;
+                          setSelectedCustomerId(customer.id);
+                          const lastTable = lastTableByCustomerRef.current[customer.id];
+                          if (lastTable) setActiveTable(lastTable);
+                        }}
+                      >
+                        <span className="customer-name">
+                          {customer.name}
+                          {alertMap[customer.id] && (
+                            <span
+                              className={`alert-dot alert-dot--${alertMap[customer.id]}`}
+                              title={alertMap[customer.id] === "danger" ? t("有订单已逾期") : t("有订单即将到期")}
+                            />
+                          )}
+                        </span>
+                        <span className="customer-meta">
+                          {customer.contact || t("未填联系人")}
+                        </span>
+                      </button>
+                      <button
+                        className="customer-delete"
+                        type="button"
+                        title={t("删除客户")}
+                        onClick={() => deleteCustomer(customer.id)}
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  ))}
+              </div>
+            );
+          })}
+        </div>
+        {customerDrag.active && (
+          <div
+            className="customer-drag-ghost"
+            style={{ transform: `translate(${customerDrag.x + 12}px, ${customerDrag.y + 12}px)` }}
+          >
+            <strong>{customers.find(customer => customer.id === customerDrag.customerId)?.name || ""}</strong>
+            <small>{customerDrag.overLevel ? t("移至 {group}", { group: t(customerDrag.overLevel) }) : t("选择分组")}</small>
+          </div>
+        )}
 
         <div className="sidebar-footer">
           <input
@@ -2267,29 +2582,29 @@ function App() {
           <button
             className="ghost-button"
             type="button"
-            title="导出全部客户数据为 JSON 备份文件"
+            title={t("导出全部客户数据为 JSON 备份文件")}
             onClick={() => exportBackup(customers)}
           >
             <Archive size={14} />
-            备份数据
+            {t("备份数据")}
           </button>
           <button
             className="ghost-button"
             type="button"
-            title="从备份文件恢复数据（将覆盖当前数据）"
+            title={t("从备份文件恢复数据（将覆盖当前数据）")}
             onClick={() => backupInputRef.current.click()}
           >
             <Archive size={14} />
-            恢复备份
+            {t("恢复备份")}
           </button>
           <button
             className="ghost-button"
             type="button"
-            title="系统设置"
+            title={t("系统设置")}
             onClick={() => setShowSettings(true)}
           >
             <Settings2 size={14} />
-            系统设置
+            {t("系统设置")}
           </button>
         </div>
       </aside>
@@ -2298,13 +2613,13 @@ function App() {
         <header className="topbar">
           <div>
             <p className="eyebrow">CUSTOMER COMMAND CENTER</p>
-            <h2>{selectedCustomer?.name || "运营仪表盘"}</h2>
+            <h2>{selectedCustomer?.name || t("运营仪表盘")}</h2>
           </div>
           <div className="topbar-actions">
             <button
               className="icon-button"
               type="button"
-              title="编辑客户档案"
+              title={t("编辑客户档案")}
               onClick={() => {
                 setEditingCustomer(selectedCustomer);
                 setShowCustomerModal(true);
@@ -2316,7 +2631,7 @@ function App() {
           </div>
         </header>
 
-        <section className="metrics-grid" aria-label="业务指标">
+        <section className="metrics-grid" aria-label={t("业务指标")}>
           {metrics.map((metric) => (
             <article className="metric-card" key={metric.label}>
               <span>{metric.label}</span>
@@ -2333,23 +2648,23 @@ function App() {
               <section className={`alert-banner alert-banner--${alertMap[selectedCustomer.id]}`}>
                 <AlertTriangle size={15} />
                 {alertMap[selectedCustomer.id] === "danger"
-                  ? "该客户有订单已逾期，请尽快跟进。"
-                  : "该客户有订单 3 天内到期，请注意安排。"}
+                  ? t("该客户有订单已逾期，请尽快跟进。")
+                  : t("该客户有订单 3 天内到期，请注意安排。")}
               </section>
             )}
 
             <section className="customer-panel">
               <div className="profile-strip">
-                <InfoPill label="联系人" value={selectedCustomer?.contact} />
-                <InfoPill label="电话" value={selectedCustomer?.phone} />
-                <InfoPill label="账期" value={selectedCustomer?.paymentTerm} />
-                <InfoPill label="地址" value={selectedCustomer?.address} wide />
+                <InfoPill label={t("联系人")} value={selectedCustomer?.contact} />
+                <InfoPill label={t("电话")} value={selectedCustomer?.phone} />
+                <InfoPill label={t("账期")} value={selectedCustomer?.paymentTerm} />
+                <InfoPill label={t("地址")} value={selectedCustomer?.address} wide />
               </div>
             </section>
 
             <section className="table-section">
               <div className="table-toolbar">
-                <div className="tabs" role="tablist" aria-label="业务模块">
+                <div className="tabs" role="tablist" aria-label={t("业务模块")}>
                   {Object.entries(tableConfigs).map(([key, config]) => {
                     const Icon = config.icon;
                     return (
@@ -2364,7 +2679,7 @@ function App() {
                         }}
                       >
                         <Icon size={17} />
-                        {config.label}
+                        {t(config.label)}
                       </button>
                     );
                   })}
@@ -2374,10 +2689,10 @@ function App() {
                     className={`tab-button ${viewMode === "kanban" ? "is-active" : ""}`}
                     type="button"
                     onClick={() => setViewMode(v => v === "kanban" ? "grid" : "kanban")}
-                    title="看板视图"
+                    title={t("看板视图")}
                   >
                     <KanbanSquare size={16} />
-                    看板
+                    {t("看板")}
                   </button>
                 )}
                 <div className="toolbar-actions">
@@ -2386,13 +2701,14 @@ function App() {
                     <input
                       value={quickFilter}
                       onChange={(event) => setQuickFilter(event.target.value)}
-                      placeholder="筛选当前表格"
+                      placeholder={t("筛选当前表格")}
                     />
                   </label>
                   {selectedCustomer && activeTable === "orders" && (
                     <OrderImportButton
                       disabled={!selectedCustomer}
                       dialogs={dialogs}
+                      t={t}
                       onImport={handleOrderImport}
                     />
                   )}
@@ -2400,26 +2716,26 @@ function App() {
                     <button
                       className="secondary-button"
                       type="button"
-                      title="生成对账单"
-                      onClick={() => generateStatement(selectedCustomer, systemSettings)}
+                      title={t("生成对账单")}
+                      onClick={() => generateStatement(selectedCustomer, systemSettings, t)}
                     >
-                      对账单
+                      {t("对账单")}
                     </button>
                   )}
                   {selectedCustomer && (
                     <button
                       className="secondary-button"
                       type="button"
-                      title="导出当前表格为 Excel"
+                      title={t("导出当前表格为 Excel")}
                       onClick={() =>
                         exportTableToExcel(exportCustomer, activeTable, [
-                          ...activeConfig.defaultColumns,
-                          ...activeCustomColumns,
+                          ...activeConfig.defaultColumns.map(column => ({ ...column, headerName: t(column.headerName) })),
+                          ...activeCustomColumns.map(column => ({ ...column, headerName: t(column.headerName) })),
                         ])
                       }
                     >
                       <Download size={15} />
-                      导出 Excel
+                      {t("导出 Excel")}
                     </button>
                   )}
                   {!isHistoryOrders && (
@@ -2430,7 +2746,7 @@ function App() {
                       disabled={!selectedCustomer}
                     >
                       <Settings2 size={17} />
-                      自定义表头
+                      {t("自定义表头")}
                     </button>
                   )}
                   {canCreateActiveRows && (
@@ -2441,7 +2757,7 @@ function App() {
                       disabled={!selectedCustomer}
                     >
                       <Plus size={17} />
-                      新增{activeConfig.rowLabel}
+                      {t("新增{rowLabel}", { rowLabel: t(activeConfig.rowLabel) })}
                     </button>
                   )}
                 </div>
@@ -2493,6 +2809,7 @@ function App() {
       {showCustomerModal && (
         <CustomerModal
           customer={editingCustomer}
+          customerGroups={customerGroups}
           onClose={() => setShowCustomerModal(false)}
           onSave={(customerInput) => {
             upsertCustomer(customerInput);
@@ -2525,6 +2842,7 @@ function App() {
         <DeliveryPrintModal
           delivery={printDelivery}
           customer={selectedCustomer}
+          t={t}
           onClose={() => setPrintDelivery(null)}
         />
       )}
@@ -2532,10 +2850,12 @@ function App() {
       {showSettings && (
         <SettingsModal
           settings={systemSettings}
+          mobileUsers={mobileUsers}
+          onChangeMobileUserRole={updateMobileUserRole}
+          onRefreshMobileUsers={loadMobileUsers}
           onClose={() => setShowSettings(false)}
           onSave={(s) => {
-            setSystemSettings(s);
-            localStorage.setItem("foam-crm-settings", JSON.stringify(s));
+            persistSystemSettings({ ...systemSettings, ...s });
             setShowSettings(false);
           }}
         />
@@ -2543,6 +2863,7 @@ function App() {
 
       <AppDialog dialog={dialogs.dialog} onResolve={dialogs.resolve} />
     </div>
+    </I18nContext.Provider>
   );
 }
 
@@ -2564,6 +2885,7 @@ function BusinessGrid({
   readOnly = false,
   dialogs,
 }) {
+  const { language, t } = useI18n();
   const gridRef = useRef(null);
   const gridShellRef = useRef(null);
   const dragSelectionRef = useRef(null);
@@ -2582,6 +2904,7 @@ function BusinessGrid({
   const [insertRowCounts, setInsertRowCounts] = useState({ above: "", below: "" });
   const [expandedDeliveryGroups, setExpandedDeliveryGroups] = useState(() => new Set());
   const deferredQuickFilter = useDeferredValue(quickFilter);
+  const localeText = useMemo(() => getGridLocaleText(language), [language]);
   const config = tableConfigs[viewKey];
   const sourceRows = customer[tableKey] || [];
   const rows = useMemo(() => {
@@ -2633,7 +2956,7 @@ function BusinessGrid({
       const statusCounts = finalDeliveryStatusOptions
         .map(status => {
           const count = groupRows.filter(row => normalizeFinalDeliveryStatus(row.status) === status).length;
-          return count ? `${status}${count}` : "";
+          return count ? `${t(status)} ${count}` : "";
         })
         .filter(Boolean)
         .join(" / ");
@@ -2726,7 +3049,7 @@ function BusinessGrid({
       resizable: false,
       editable: false,
       headerComponent: RowNumberHeader,
-      valueGetter: (params) => (params.node?.rowPinned ? "合计" : (params.node?.rowIndex ?? 0) + 1),
+      valueGetter: (params) => (params.node?.rowPinned ? t("合计") : (params.node?.rowIndex ?? 0) + 1),
       cellClass: "row-number-cell",
       cellClassRules: selectionCellClassRules,
     };
@@ -2745,7 +3068,7 @@ function BusinessGrid({
           <button
             className="grid-delete"
             type="button"
-            title="打印送货单"
+            title={t("打印送货单")}
             onClick={() => onPrintRow(params.data)}
           >
             <Printer size={14} />
@@ -2756,10 +3079,10 @@ function BusinessGrid({
 
     const defaultFields = new Set(config.defaultColumns.map(column => column.field));
     const allCols = [
-      ...config.defaultColumns.map(toGridColumn),
+      ...config.defaultColumns.map(column => toGridColumn(column, t, true)),
       ...customColumns
         .filter(column => !defaultFields.has(column.field))
-        .map(toGridColumn),
+        .map(column => toGridColumn(column, t, true)),
     ];
 
     if (savedOrder?.length) {
@@ -2792,24 +3115,24 @@ function BusinessGrid({
             const value = normalizeOrderStatus(params.value);
             const nextStatuses = getNextStatuses(value);
             if (!nextStatuses.length) {
-              return <span className={`status-chip ${statusClass(value)}`}>{value}</span>;
+              return <span className={`status-chip ${statusClass(value)}`}>{t(value)}</span>;
             }
             return (
               <div style={{ display: "flex", alignItems: "center", gap: 4, height: "100%" }}>
-                <span className={`status-chip ${statusClass(value)}`} style={{ flexShrink: 0 }}>{value}</span>
+                <span className={`status-chip ${statusClass(value)}`} style={{ flexShrink: 0 }}>{t(value)}</span>
                 <span className="status-actions">
                   {nextStatuses.map(ns => (
                     <button
                       key={ns}
                       className="status-next-btn"
                       type="button"
-                      title={`流转到：${ns}`}
+                      title={t("流转到：{status}", { status: t(ns) })}
                       onClick={(e) => {
                         e.stopPropagation();
                         advanceOrderStatus(params.data.id, ns, params.data);
                       }}
                     >
-                      → {ns}
+                      → {t(ns)}
                     </button>
                   ))}
                 </span>
@@ -2878,13 +3201,13 @@ function BusinessGrid({
                   event.stopPropagation();
                   toggleDeliveryGroup(params.data.__deliveryGroupKey);
                 }}
-                title={params.data.__expanded ? "收起送货单明细" : "展开送货单明细"}
+                title={params.data.__expanded ? t("收起送货单明细") : t("展开送货单明细")}
               >
                 <span>{params.data.__expanded ? "▾" : "▸"}</span>
                 <strong>{params.value}</strong>
                 <small>
-                  {params.data.__deliveryGroupCount} 行
-                  {params.data.__deliveryGroupOrderCount ? ` / ${params.data.__deliveryGroupOrderCount} 单` : ""}
+                  {t("{count} 行", { count: params.data.__deliveryGroupCount })}
+                  {params.data.__deliveryGroupOrderCount ? ` / ${t("{count} 单", { count: params.data.__deliveryGroupOrderCount })}` : ""}
                   {` / ${normalizeCalculatedNumber(parseNumericValue(params.data[deliveryQuantityField]))}`}
                   {params.data.__deliveryGroupStatusSummary ? ` / ${params.data.__deliveryGroupStatusSummary}` : ""}
                 </small>
@@ -2903,7 +3226,7 @@ function BusinessGrid({
               const value = normalizeFinalDeliveryStatus(params.value);
               return (
                 <span className={`status-chip ${statusClass(value)}`}>
-                  {value}
+                  {t(value)}
                 </span>
               );
             }
@@ -2916,10 +3239,10 @@ function BusinessGrid({
                 onMouseDown={(event) => event.stopPropagation()}
                 onClick={(event) => event.stopPropagation()}
                 onChange={(event) => updateDeliveryGroupStatus(params.data.__deliveryGroupKey, event.target.value)}
-                title="设置整张送货单状态"
+                title={t("设置整张送货单状态")}
               >
                 {finalDeliveryStatusOptions.map(option => (
-                  <option key={option} value={option}>{option}</option>
+                  <option key={option} value={option}>{t(option)}</option>
                 ))}
               </select>
             );
@@ -2941,6 +3264,7 @@ function BusinessGrid({
     readOnly,
     savedOrder,
     tableKey,
+    t,
     toggleDeliveryGroup,
     updateDeliveryGroupStatus,
     viewKey,
@@ -2984,8 +3308,8 @@ function BusinessGrid({
   );
 
   const columnHeaderByField = useMemo(
-    () => new Map(tableColumns.map(column => [column.field, column.headerName])),
-    [tableColumns],
+    () => new Map(tableColumns.map(column => [column.field, t(column.headerName)])),
+    [tableColumns, t],
   );
 
   const summaryRowData = useMemo(() => {
@@ -2993,7 +3317,7 @@ function BusinessGrid({
 
     const summary = {};
     const firstField = selectableColumnFields[0];
-    summary[firstField] = `合计 ${filteredRows.length} 行`;
+    summary[firstField] = t("合计 {count} 行", { count: filteredRows.length });
 
     for (const column of tableColumns) {
       if (column.type !== "number") continue;
@@ -3005,7 +3329,7 @@ function BusinessGrid({
     }
 
     return [summary];
-  }, [filteredRows, selectableColumnFields, tableColumns]);
+  }, [filteredRows, selectableColumnFields, tableColumns, t]);
 
   const canFillDown = selectionRange?.mode === "cells"
     && Math.min(selectionRange.startRowIndex ?? 0, selectionRange.endRowIndex ?? 0)
@@ -3418,6 +3742,57 @@ function BusinessGrid({
     setSelectedIds(selectedRows.map(row => row.id));
   }, []);
 
+  const getSelectedAreaScope = useCallback((selection = selectionRangeRef.current) => {
+    if (!selection) return null;
+
+    const fields = selectableColumnFieldsRef.current;
+    const minCol = Math.min(selection.startColIndex ?? 0, selection.endColIndex ?? 0);
+    const maxCol = Math.max(selection.startColIndex ?? 0, selection.endColIndex ?? 0);
+    const selectedFields = selection.mode === "rows"
+      ? fields
+      : fields.filter((_, index) => index >= minCol && index <= maxCol);
+    if (!selectedFields.length) return null;
+
+    const minRow = Math.min(selection.startRowIndex ?? 0, selection.endRowIndex ?? 0);
+    const maxRow = Math.max(selection.startRowIndex ?? 0, selection.endRowIndex ?? 0);
+    const rowIds = new Set();
+
+    gridRef.current?.api?.forEachNodeAfterFilterAndSort((node) => {
+      if (!node.data?.id || node.data.__isDeliveryGroup) return;
+      if (selection.mode !== "columns" && (node.rowIndex < minRow || node.rowIndex > maxRow)) return;
+      rowIds.add(node.data.id);
+    });
+
+    return rowIds.size ? { fields: selectedFields, rowIds } : null;
+  }, []);
+
+  const selectionAgg = useMemo(() => {
+    const scope = getSelectedAreaScope(selectionRange);
+    const rowIds = scope?.rowIds || new Set(selectedIds);
+    const fields = scope?.fields || selectableColumnFields;
+    if (!rowIds.size || !fields.length) return null;
+
+    const fieldSet = new Set(fields);
+    const selectedRows = gridRows.filter(row => rowIds.has(row.id) && !row.__isDeliveryGroup);
+    const values = [];
+    for (const row of selectedRows) {
+      for (const field of fieldSet) {
+        const value = row[field];
+        if (!isNumericLike(value)) continue;
+        values.push(parseNumericValue(value));
+      }
+    }
+    if (!values.length) return null;
+    const sum = values.reduce((a, b) => a + b, 0);
+    return {
+      sum: normalizeCalculatedNumber(sum),
+      avg: normalizeCalculatedNumber(sum / values.length),
+      count: values.length,
+      min: normalizeCalculatedNumber(Math.min(...values)),
+      max: normalizeCalculatedNumber(Math.max(...values)),
+    };
+  }, [getSelectedAreaScope, gridRows, selectableColumnFields, selectedIds, selectionRange]);
+
   const startColumnSelection = useCallback((field, mouseEvent) => {
     if (mouseEvent.button !== 0) return;
 
@@ -3463,7 +3838,7 @@ function BusinessGrid({
 
   const handleBatchDelete = async () => {
     if (!selectedIds.length) return;
-    if (!(await dialogs.confirm(`确认删除选中的 ${selectedIds.length} 行？此操作不可恢复。`, {
+    if (!(await dialogs.confirm(t("确认删除选中的 {count} 行？此操作不可恢复。", { count: selectedIds.length }), {
       title: "删除选中行",
       tone: "danger",
     }))) return;
@@ -3510,7 +3885,7 @@ function BusinessGrid({
     if (selection.mode === "rows") {
       const rowIds = getVisibleRowIdsInRange(selection.startRowIndex, selection.endRowIndex);
       if (!rowIds.length) return;
-      if (!(await dialogs.confirm(`确认删除选中的 ${rowIds.length} 行？此操作不可恢复。`, {
+      if (!(await dialogs.confirm(t("确认删除选中的 {count} 行？此操作不可恢复。", { count: rowIds.length }), {
         title: "删除选中行",
         tone: "danger",
       }))) return;
@@ -3556,7 +3931,7 @@ function BusinessGrid({
     if (!changed) return;
     onBeforeDataChange?.();
     onRowsChange(tableKey, clearedRows, { formulaRowIds: targetRowIds });
-  }, [dialogs.confirm, getVisibleRowIdsInRange, onBeforeDataChange, onDeleteRows, onRowsChange, sourceRows, tableKey]);
+  }, [dialogs.confirm, getVisibleRowIdsInRange, onBeforeDataChange, onDeleteRows, onRowsChange, sourceRows, tableKey, t]);
 
   const getSelectedAreaForCopy = useCallback(() => {
     const selection = selectionRangeRef.current;
@@ -3743,30 +4118,6 @@ function BusinessGrid({
     fillSelectedCellsRef.current = fillSelectedCells;
   }, [fillSelectedCells]);
 
-  const getSelectedAreaScope = useCallback((selection = selectionRangeRef.current) => {
-    if (!selection) return null;
-
-    const fields = selectableColumnFieldsRef.current;
-    const minCol = Math.min(selection.startColIndex ?? 0, selection.endColIndex ?? 0);
-    const maxCol = Math.max(selection.startColIndex ?? 0, selection.endColIndex ?? 0);
-    const selectedFields = selection.mode === "rows"
-      ? fields
-      : fields.filter((_, index) => index >= minCol && index <= maxCol);
-    if (!selectedFields.length) return null;
-
-    const minRow = Math.min(selection.startRowIndex ?? 0, selection.endRowIndex ?? 0);
-    const maxRow = Math.max(selection.startRowIndex ?? 0, selection.endRowIndex ?? 0);
-    const rowIds = new Set();
-
-    gridRef.current?.api?.forEachNodeAfterFilterAndSort((node) => {
-      if (!node.data?.id || node.data.__isDeliveryGroup) return;
-      if (selection.mode !== "columns" && (node.rowIndex < minRow || node.rowIndex > maxRow)) return;
-      rowIds.add(node.data.id);
-    });
-
-    return rowIds.size ? { fields: selectedFields, rowIds } : null;
-  }, []);
-
   const clearSelectedContents = useCallback(() => {
     const scope = getSelectedAreaScope();
     if (!scope) return false;
@@ -3912,8 +4263,8 @@ function BusinessGrid({
 
     onBeforeDataChange?.();
     onRowsChange(tableKey, updatedRows, { formulaRowIds: targetRowIds });
-    await dialogs.alert(`已替换 ${replaceCount} 个单元格。`, { title: "替换完成" });
-  }, [dialogs.alert, dialogs.prompt, onBeforeDataChange, onRowsChange, sourceRows, tableKey]);
+    await dialogs.alert(t("已替换 {count} 个单元格。", { count: replaceCount }), { title: "替换完成" });
+  }, [dialogs.alert, dialogs.prompt, onBeforeDataChange, onRowsChange, sourceRows, tableKey, t]);
 
   const duplicateSelectedRows = useCallback(() => {
     if (!canCreateRows) return false;
@@ -3991,7 +4342,7 @@ function BusinessGrid({
   const deleteRowsFromMenu = useCallback(async () => {
     const rowIds = getSelectedRowIdsForMenu();
     if (!rowIds.length) return;
-    if (!(await dialogs.confirm(`确认删除选中的 ${rowIds.length} 行？此操作不可恢复。`, {
+    if (!(await dialogs.confirm(t("确认删除选中的 {count} 行？此操作不可恢复。", { count: rowIds.length }), {
       title: "删除选中行",
       tone: "danger",
     }))) return;
@@ -4000,7 +4351,7 @@ function BusinessGrid({
     setSelectedIds([]);
     gridRef.current?.api?.deselectAll();
     setSelectionRange(null);
-  }, [dialogs.confirm, getSelectedRowIdsForMenu, onDeleteRows, tableKey]);
+  }, [dialogs.confirm, getSelectedRowIdsForMenu, onDeleteRows, tableKey, t]);
 
   const deleteSelectedColumnsFromMenu = useCallback(async () => {
     if (!onRemoveColumns || !removableSelectedColumnFields.length) return;
@@ -4010,10 +4361,14 @@ function BusinessGrid({
       .join("、");
     const lockedCount = selectedColumnFields.length - removableSelectedColumnFields.length;
     const lockedMessage = lockedCount > 0
-      ? `\n其中 ${lockedCount} 个默认表头不会删除。`
+      ? t("\n其中 {count} 个默认表头不会删除。", { count: lockedCount })
       : "";
 
-    if (!(await dialogs.confirm(`确认删除选中的 ${removableSelectedColumnFields.length} 个自定义表头？\n${columnNames}${lockedMessage}`, {
+    if (!(await dialogs.confirm(t("确认删除选中的 {count} 个自定义表头？\n{names}{lockedMessage}", {
+      count: removableSelectedColumnFields.length,
+      names: columnNames,
+      lockedMessage,
+    }), {
       title: "删除表头",
       tone: "danger",
     }))) return;
@@ -4027,6 +4382,7 @@ function BusinessGrid({
     removableSelectedColumnFields,
     selectedColumnFields.length,
     tableKey,
+    t,
   ]);
 
   const sortSelectedColumnFromMenu = useCallback((sort) => {
@@ -4236,6 +4592,8 @@ function BusinessGrid({
   }, [restoreLastColumnFilter]);
 
   const gridContext = useMemo(() => ({
+    language,
+    t,
     openColumnFilter,
     activeFilterFields: new Set(Object.keys(columnFilters)),
     selectionRangeRef,
@@ -4246,10 +4604,12 @@ function BusinessGrid({
     openHeaderContextMenu,
   }), [
     columnFilters,
+    language,
     openHeaderContextMenu,
     openColumnFilter,
     selectAllVisibleRows,
     startColumnSelection,
+    t,
     updateColumnSelection,
   ]);
 
@@ -4331,51 +4691,51 @@ function BusinessGrid({
     <>
       {selectedIds.length > 0 && (
         <div className="grid-selection-bar">
-          <span>已选中 {selectedIds.length} 行</span>
+          <span>{t("已选中 {count} 行", { count: selectedIds.length })}</span>
           <div className="grid-selection-actions">
             {canScheduleOrders && (
               <button className="secondary-button compact" type="button" onClick={handleScheduleSelectedRows}>
                 <KanbanSquare size={14} />
-                排产
+                {t("排产")}
               </button>
             )}
             {canCreateDeliveryFromOrders && (
               <button className="secondary-button compact" type="button" onClick={handleCreateDeliveryFromSelectedRows}>
                 <Truck size={14} />
-                生成送货单自动关联订单
+                {t("生成送货单自动关联订单")}
               </button>
             )}
             {canFinalizeDeliveryDrafts && (
               <button className="secondary-button compact" type="button" onClick={handleFinalizeSelectedDeliveryDrafts}>
                 <Truck size={14} />
-                确认生成送货单
+                {t("确认生成送货单")}
               </button>
             )}
             <button className="secondary-button compact" type="button" onClick={() => setShowBulkEdit(!showBulkEdit)}>
               <Pencil size={14} />
-              批量修改
+              {t("批量修改")}
             </button>
             <button className="danger-button compact" type="button" onClick={handleBatchDelete}>
               <Trash2 size={14} />
-              批量删除
+              {t("批量删除")}
             </button>
           </div>
           {showBulkEdit && (
             <div className="bulk-edit-row">
               <select value={bulkEditField} onChange={e => setBulkEditField(e.target.value)}>
-                <option value="">选择字段</option>
+                <option value="">{t("选择字段")}</option>
                 {tableColumns.filter(c => c.field !== "id" && c.field !== "__actions").map(c => (
-                  <option key={c.field} value={c.field}>{c.headerName}</option>
+                  <option key={c.field} value={c.field}>{t(c.headerName)}</option>
                 ))}
               </select>
               <input
                 value={bulkEditValue}
                 onChange={e => setBulkEditValue(e.target.value)}
-                placeholder="新值"
+                placeholder={t("新值")}
                 onKeyDown={e => e.key === "Enter" && applyBulkEdit()}
               />
               <button className="primary-action compact" type="button" onClick={applyBulkEdit} style={{ minHeight: 32 }}>
-                应用
+                {t("应用")}
               </button>
             </div>
           )}
@@ -4426,27 +4786,27 @@ function BusinessGrid({
         >
           <button type="button" role="menuitem" onClick={() => { findInTable(); setContextMenu(null); }}>
             <Search size={14} />
-            查找
+            {t("查找")}
           </button>
           <button type="button" role="menuitem" onClick={() => { replaceInTable(); setContextMenu(null); }}>
             <SquarePen size={14} />
-            替换
+            {t("替换")}
           </button>
           <button type="button" role="menuitem" onClick={() => { copyFromMenu(); setContextMenu(null); }}>
             <Copy size={14} />
-            复制
+            {t("复制")}
           </button>
           <button type="button" role="menuitem" onClick={() => { copyFromMenu(true); setContextMenu(null); }}>
             <ClipboardList size={14} />
-            复制带表头
+            {t("复制带表头")}
           </button>
           <button type="button" role="menuitem" onClick={() => { pasteFromMenu(); setContextMenu(null); }}>
             <ClipboardPaste size={14} />
-            粘贴
+            {t("粘贴")}
           </button>
           <button type="button" role="menuitem" onClick={() => { clearSelectedContents(); setContextMenu(null); }}>
             <Eraser size={14} />
-            清空内容
+            {t("清空内容")}
           </button>
           <button
             type="button"
@@ -4455,7 +4815,7 @@ function BusinessGrid({
             onClick={() => { batchModifySelectedArea(); setContextMenu(null); }}
           >
             <SquarePen size={14} />
-            批量修改选区
+            {t("批量修改选区")}
           </button>
           {selectionRange?.mode === "cells" && (
             <>
@@ -4466,7 +4826,7 @@ function BusinessGrid({
                 onClick={() => { fillSelectedCells("down"); setContextMenu(null); }}
               >
                 <ArrowDown size={14} />
-                向下填充
+                {t("向下填充")}
               </button>
               <button
                 type="button"
@@ -4475,7 +4835,7 @@ function BusinessGrid({
                 onClick={() => { fillSelectedCells("right"); setContextMenu(null); }}
               >
                 <ArrowRight size={14} />
-                向右填充
+                {t("向右填充")}
               </button>
             </>
           )}
@@ -4489,7 +4849,7 @@ function BusinessGrid({
                 onClick={() => { sortSelectedColumnFromMenu("asc"); setContextMenu(null); }}
               >
                 <ArrowUp size={14} />
-                升序排序
+                {t("升序排序")}
               </button>
               <button
                 type="button"
@@ -4498,7 +4858,7 @@ function BusinessGrid({
                 onClick={() => { sortSelectedColumnFromMenu("desc"); setContextMenu(null); }}
               >
                 <ArrowDown size={14} />
-                降序排序
+                {t("降序排序")}
               </button>
               <button
                 type="button"
@@ -4506,7 +4866,7 @@ function BusinessGrid({
                 onClick={() => { clearSortFromMenu(); setContextMenu(null); }}
               >
                 <RotateCcw size={14} />
-                清除排序
+                {t("清除排序")}
               </button>
               <div className="grid-context-menu-separator" />
               <button
@@ -4514,11 +4874,11 @@ function BusinessGrid({
                 type="button"
                 role="menuitem"
                 disabled={!removableSelectedColumnFields.length}
-                title={removableSelectedColumnFields.length ? "删除选中的自定义表头" : "默认表头不可删除"}
+                title={removableSelectedColumnFields.length ? t("删除选中的自定义表头") : t("默认表头不可删除")}
                 onClick={() => { deleteSelectedColumnsFromMenu(); setContextMenu(null); }}
               >
                 <Trash2 size={14} />
-                删除选中列（表头）
+                {t("删除选中列（表头）")}
               </button>
             </>
           ) : (
@@ -4531,17 +4891,17 @@ function BusinessGrid({
                 onClick={() => { duplicateSelectedRows(); setContextMenu(null); }}
               >
                 <Copy size={14} />
-                复制选中行为新行
+                {t("复制选中行为新行")}
               </button>
               {canCreateRows && (
                 <>
                   <form className="grid-context-menu-insert" onSubmit={(event) => submitInsertRows(event, "above")}>
                     <button type="submit" role="menuitem">
                       <Plus size={14} />
-                      在上方插入
+                      {t("在上方插入")}
                     </button>
                     <input
-                      aria-label="上方插入行数"
+                      aria-label={t("上方插入行数")}
                       inputMode="numeric"
                       min="1"
                       placeholder="1"
@@ -4552,15 +4912,15 @@ function BusinessGrid({
                         above: event.target.value,
                       }))}
                     />
-                    <span>行</span>
+                    <span>{t("行")}</span>
                   </form>
                   <form className="grid-context-menu-insert" onSubmit={(event) => submitInsertRows(event, "below")}>
                     <button type="submit" role="menuitem">
                       <Plus size={14} />
-                      在下方插入
+                      {t("在下方插入")}
                     </button>
                     <input
-                      aria-label="下方插入行数"
+                      aria-label={t("下方插入行数")}
                       inputMode="numeric"
                       min="1"
                       placeholder="1"
@@ -4571,7 +4931,7 @@ function BusinessGrid({
                         below: event.target.value,
                       }))}
                     />
-                    <span>行</span>
+                    <span>{t("行")}</span>
                   </form>
                 </>
               )}
@@ -4583,7 +4943,7 @@ function BusinessGrid({
                 onClick={() => { deleteRowsFromMenu(); setContextMenu(null); }}
               >
                 <Trash2 size={14} />
-                删除选中行
+                {t("删除选中行")}
               </button>
             </>
           )}
@@ -4598,6 +4958,34 @@ function BusinessGrid({
           onClear={clearColumnFilter}
           onClose={closeColumnFilter}
         />
+      )}
+      {selectionAgg && (
+        <div className="selection-summary">
+          <span className="selection-summary-item">
+            <span className="selection-summary-label">{t("合计")}</span>
+            <span className="selection-summary-value">{Number(selectionAgg.sum).toLocaleString()}</span>
+          </span>
+          <span className="selection-summary-item">
+            <span className="selection-summary-label">{t("平均")}</span>
+            <span className="selection-summary-value">{Number(selectionAgg.avg).toLocaleString()}</span>
+          </span>
+          <span className="selection-summary-item">
+            <span className="selection-summary-label">{t("计数")}</span>
+            <span className="selection-summary-value">{selectionAgg.count}</span>
+          </span>
+          {selectionAgg.min !== undefined && (
+            <span className="selection-summary-item">
+              <span className="selection-summary-label">{t("最小")}</span>
+              <span className="selection-summary-value">{Number(selectionAgg.min).toLocaleString()}</span>
+            </span>
+          )}
+          {selectionAgg.max !== undefined && (
+            <span className="selection-summary-item">
+              <span className="selection-summary-label">{t("最大")}</span>
+              <span className="selection-summary-value">{Number(selectionAgg.max).toLocaleString()}</span>
+            </span>
+          )}
+        </div>
       )}
     </>
   );
@@ -4659,7 +5047,7 @@ const selectionCellClassRules = {
   },
 };
 
-function toGridColumn(column) {
+function toGridColumn(column, t = defaultTranslator, translateHeader = true) {
   const hasFormula = Boolean(normalizeFormulaInput(column.formula));
   const cellClasses = [
     column.required ? "required-cell" : null,
@@ -4670,7 +5058,7 @@ function toGridColumn(column) {
 
   const gridColumn = {
     field: column.field,
-    headerName: column.headerName,
+    headerName: translateHeader ? t(column.headerName) : column.headerName,
     width: column.width,
     flex: column.flex,
     minWidth: column.minWidth,
@@ -4700,7 +5088,7 @@ function toGridColumn(column) {
         : params.value;
       return (
         <span className={`status-chip ${statusClass(value)}`}>
-          {value || "未设置"}
+          {column.field === "status" ? t(value || "未设置") : (value || t("未设置"))}
         </span>
       );
     };
@@ -4710,6 +5098,7 @@ function toGridColumn(column) {
 }
 
 function ColumnHeader(props) {
+  const t = props.context?.t || defaultTranslator;
   const isFiltered = props.context?.activeFilterFields?.has(props.column.getColId());
   const field = props.column.getColId();
 
@@ -4748,7 +5137,7 @@ function ColumnHeader(props) {
         className="column-header-label"
         type="button"
         onClick={(event) => event.preventDefault()}
-        title={`${props.displayName}${isFiltered ? "（已筛选）" : ""}`}
+        title={`${props.displayName}${isFiltered ? t("（已筛选）") : ""}`}
       >
         {props.displayName}
       </button>
@@ -4757,7 +5146,7 @@ function ColumnHeader(props) {
         type="button"
         onMouseDown={(event) => event.stopPropagation()}
         onClick={openFilter}
-        title={isFiltered ? "已筛选，点击修改筛选" : "筛选"}
+        title={isFiltered ? t("已筛选，点击修改筛选") : t("筛选")}
       >
         ▾
       </button>
@@ -4766,6 +5155,7 @@ function ColumnHeader(props) {
 }
 
 function RowNumberHeader(props) {
+  const t = props.context?.t || defaultTranslator;
   const selectAllRows = (event) => {
     event.preventDefault();
     event.stopPropagation();
@@ -4778,7 +5168,7 @@ function RowNumberHeader(props) {
       type="button"
       onMouseDown={(event) => event.stopPropagation()}
       onClick={selectAllRows}
-      title="选中所有可见行"
+      title={t("选中所有可见行")}
     >
       #
     </button>
@@ -4786,6 +5176,7 @@ function RowNumberHeader(props) {
 }
 
 function ColumnValueFilter({ popup, rows, appliedValues, onApply, onClear, onClose }) {
+  const { t } = useI18n();
   const values = useMemo(() => {
     const seen = new Set();
     const result = [];
@@ -4835,13 +5226,16 @@ function ColumnValueFilter({ popup, rows, appliedValues, onApply, onClear, onClo
       return next;
     });
   };
+  const getDisplayLabel = (value) => (
+    value.key === "" || popup.field === "status" ? t(value.label) : value.label
+  );
 
   return (
     <div className="column-filter-popover" style={{ left: popup.left, top: popup.top }}>
       <div className="column-filter-title">{popup.headerName}</div>
       <div className="column-filter-actions">
-        <button type="button" onClick={() => setDraftValues(new Set(values.map(value => value.key)))}>全选</button>
-        <button type="button" onClick={() => setDraftValues(new Set())}>清空</button>
+        <button type="button" onClick={() => setDraftValues(new Set(values.map(value => value.key)))}>{t("全选")}</button>
+        <button type="button" onClick={() => setDraftValues(new Set())}>{t("清空")}</button>
       </div>
       <div className="column-filter-options">
         {values.map(value => (
@@ -4851,14 +5245,14 @@ function ColumnValueFilter({ popup, rows, appliedValues, onApply, onClear, onClo
               checked={draftValues.has(value.key)}
               onChange={(event) => toggleValue(value.key, event.target.checked)}
             />
-            <span title={value.label}>{value.label}</span>
+            <span title={getDisplayLabel(value)}>{getDisplayLabel(value)}</span>
           </label>
         ))}
       </div>
       <div className="column-filter-footer">
-        <button type="button" onClick={() => onClear(popup.field)}>重置</button>
-        <button type="button" onClick={onClose}>取消</button>
-        <button className="is-primary" type="button" onClick={() => onApply(popup.field, draftValues, values)}>确定</button>
+        <button type="button" onClick={() => onClear(popup.field)}>{t("重置")}</button>
+        <button type="button" onClick={onClose}>{t("取消")}</button>
+        <button className="is-primary" type="button" onClick={() => onApply(popup.field, draftValues, values)}>{t("确定")}</button>
       </div>
     </div>
   );
@@ -4891,15 +5285,17 @@ function statusClass(value = "") {
 }
 
 function InfoPill({ label, value, wide = false }) {
+  const { t } = useI18n();
   return (
     <div className={`info-pill ${wide ? "is-wide" : ""}`}>
       <span>{label}</span>
-      <strong>{value || "未填写"}</strong>
+      <strong>{value || t("未填写")}</strong>
     </div>
   );
 }
 
 function ProductionScheduleModal({ customer, orders, onClose, onSave }) {
+  const { t } = useI18n();
   const [form, setForm] = useState({
     date: today(),
     quantity: "",
@@ -4937,56 +5333,56 @@ function ProductionScheduleModal({ customer, orders, onClose, onSave }) {
         <div className="modal-head">
           <div>
             <p className="eyebrow">PRODUCTION SCHEDULE</p>
-            <h3>{customer.name} · 排产 {orders.length} 条订单</h3>
+            <h3>{t("{customer} · 排产 {count} 条订单", { customer: customer.name, count: orders.length })}</h3>
           </div>
-          <button className="icon-button" type="button" onClick={onClose} title="关闭">
+          <button className="icon-button" type="button" onClick={onClose} title={t("关闭")}>
             <X size={18} />
           </button>
         </div>
 
         <div className="production-summary">
-          <span>订单数：{orders.length}</span>
-          <span>待排数量：{normalizeCalculatedNumber(totalQuantity)}</span>
+          <span>{t("订单数：{count}", { count: orders.length })}</span>
+          <span>{t("待排数量：{quantity}", { quantity: normalizeCalculatedNumber(totalQuantity) })}</span>
         </div>
 
         <div className="form-grid">
-          <Field label="排产日期" required>
+          <Field label={t("排产日期")} required>
             <input
               type="date"
               value={form.date}
               onChange={(event) => update("date", event.target.value)}
             />
           </Field>
-          <Field label="本次排产数量">
+          <Field label={t("本次排产数量")}>
             <input
               value={form.quantity}
               inputMode="decimal"
               onChange={(event) => update("quantity", event.target.value)}
-              placeholder="留空则按各订单数量"
+              placeholder={t("留空则按各订单数量")}
             />
           </Field>
-          <Field label="员工姓名">
+          <Field label={t("员工姓名")}>
             <input
               value={form.line}
               onChange={(event) => update("line", event.target.value)}
-              placeholder="例如：张三、李四"
+              placeholder={t("例如：张三、李四")}
             />
           </Field>
-          <Field label="排产后进度">
+          <Field label={t("排产后进度")}>
             <select
               value={form.status}
               onChange={(event) => update("status", event.target.value)}
             >
               {productionScheduleStatusOptions.map(option => (
-                <option key={option} value={option}>{option}</option>
+                <option key={option} value={option}>{t(option)}</option>
               ))}
             </select>
           </Field>
-          <Field label="排产备注">
+          <Field label={t("排产备注")}>
             <input
               value={form.note}
               onChange={(event) => update("note", event.target.value)}
-              placeholder="例如：优先生产、等料"
+              placeholder={t("例如：优先生产、等料")}
             />
           </Field>
         </div>
@@ -4996,11 +5392,11 @@ function ProductionScheduleModal({ customer, orders, onClose, onSave }) {
             <div className="production-order-row" key={order.id}>
               <div>
                 <strong>{order.orderNo || order.product || order.id}</strong>
-                <span>{order.product || "未填写产品"}</span>
+                <span>{order.product || t("未填写产品")}</span>
               </div>
               <small>
-                数量 {normalizeCalculatedNumber(parseNumericValue(order[orderRemainingQuantityField] || order.quantity))}
-                {order.dueDate ? ` · 交期 ${order.dueDate}` : ""}
+                {t("数量 {quantity}", { quantity: normalizeCalculatedNumber(parseNumericValue(order[orderRemainingQuantityField] || order.quantity)) })}
+                {order.dueDate ? t(" · 交期 {date}", { date: order.dueDate }) : ""}
               </small>
             </div>
           ))}
@@ -5008,11 +5404,11 @@ function ProductionScheduleModal({ customer, orders, onClose, onSave }) {
 
         <div className="modal-actions">
           <button className="ghost-button" type="button" onClick={onClose} disabled={saving}>
-            取消
+            {t("取消")}
           </button>
           <button className="primary-action compact" type="submit" disabled={saving || !form.date}>
             <KanbanSquare size={17} />
-            {saving ? "保存中" : "确认排产"}
+            {saving ? t("保存中") : t("确认排产")}
           </button>
         </div>
       </form>
@@ -5020,7 +5416,8 @@ function ProductionScheduleModal({ customer, orders, onClose, onSave }) {
   );
 }
 
-function CustomerModal({ customer, onClose, onSave }) {
+function CustomerModal({ customer, customerGroups = customerLevelOptions, onClose, onSave }) {
+  const { t } = useI18n();
   const [form, setForm] = useState(
     customer || {
       name: "",
@@ -5048,62 +5445,65 @@ function CustomerModal({ customer, onClose, onSave }) {
         <div className="modal-head">
           <div>
             <p className="eyebrow">CUSTOMER PROFILE</p>
-            <h3>{customer ? "编辑客户档案" : "新增客户档案"}</h3>
+            <h3>{customer ? t("编辑客户档案") : t("新增客户档案")}</h3>
           </div>
-          <button className="icon-button" type="button" onClick={onClose} title="关闭">
+          <button className="icon-button" type="button" onClick={onClose} title={t("关闭")}>
             <X size={18} />
           </button>
         </div>
 
         <div className="form-grid">
-          <Field label="客户名称" required>
+          <Field label={t("客户名称")} required>
             <input
               value={form.name}
               onChange={(event) => update("name", event.target.value)}
-              placeholder="例如：某某包装厂"
+              placeholder={t("例如：某某包装厂")}
             />
           </Field>
-          <Field label="联系人">
+          <Field label={t("联系人")}>
             <input
               value={form.contact}
               onChange={(event) => update("contact", event.target.value)}
             />
           </Field>
-          <Field label="联系电话">
+          <Field label={t("联系电话")}>
             <input
               value={form.phone}
               onChange={(event) => update("phone", event.target.value)}
             />
           </Field>
-          <Field label="客户等级">
-            <select value={form.level} onChange={(event) => update("level", event.target.value)}>
-              {customerLevelOptions.map((level) => (
+          <Field label={t("客户等级")}>
+            <select
+              value={form.level || UNGROUPED_CUSTOMER_GROUP}
+              onChange={(event) => update("level", event.target.value === UNGROUPED_CUSTOMER_GROUP ? "" : event.target.value)}
+            >
+              {customerGroups.map((level) => (
                 <option key={level} value={level}>
-                  {level}
+                  {t(level)}
                 </option>
               ))}
             </select>
           </Field>
-          <Field label="账期">
+          <Field label={t("账期")}>
             <input
               value={form.paymentTerm}
               onChange={(event) => update("paymentTerm", event.target.value)}
-              placeholder="例如：月结30天"
+              placeholder={t("例如：月结30天")}
             />
           </Field>
-          <Field label="税号">
+          <Field label={t("税号")}>
             <input
               value={form.taxNo}
               onChange={(event) => update("taxNo", event.target.value)}
             />
           </Field>
-          <Field label="送货地址" wide>
+          <Field label={t("送货地址")} wide>
             <input
               value={form.address}
               onChange={(event) => update("address", event.target.value)}
             />
           </Field>
-          <Field label="备注" wide>
+          <Field label={t("备注")} wide>
             <textarea
               value={form.note}
               onChange={(event) => update("note", event.target.value)}
@@ -5114,11 +5514,11 @@ function CustomerModal({ customer, onClose, onSave }) {
 
         <div className="modal-actions">
           <button className="ghost-button" type="button" onClick={onClose}>
-            取消
+            {t("取消")}
           </button>
           <button className="primary-action compact" type="submit">
             <Save size={17} />
-            保存客户
+            {t("保存客户")}
           </button>
         </div>
       </form>
@@ -5134,6 +5534,7 @@ function ColumnModal({
   onUpdateColumn,
   onRemoveColumn,
 }) {
+  const { t } = useI18n();
   const [headerName, setHeaderName] = useState("");
   const [type, setType] = useState("text");
   const [formula, setFormula] = useState("");
@@ -5176,34 +5577,34 @@ function ColumnModal({
         <div className="modal-head">
           <div>
             <p className="eyebrow">CUSTOM TABLE HEADER</p>
-            <h3>{customer.name} · {config.label}</h3>
+            <h3>{customer.name} · {t(config.label)}</h3>
           </div>
-          <button className="icon-button" type="button" onClick={onClose} title="关闭">
+          <button className="icon-button" type="button" onClick={onClose} title={t("关闭")}>
             <X size={18} />
           </button>
         </div>
 
         <div className="column-manager">
           <div>
-            <h4>默认表头</h4>
+            <h4>{t("默认表头")}</h4>
             <div className="tag-wrap">
               {config.defaultColumns.map((column) => (
                 <span className="column-tag locked" key={column.field}>
-                  {column.headerName}
+                  {t(column.headerName)}
                 </span>
               ))}
             </div>
           </div>
 
           <div>
-            <h4>当前客户自定义表头</h4>
+            <h4>{t("当前客户自定义表头")}</h4>
             <div className="formula-input-list">
               {customColumns.length ? (
                 customColumns.map((column) => (
                   <div className="column-formula-row" key={column.field}>
                     <div className="column-formula-name">
                       <span>{column.headerName}</span>
-                      {normalizeFormulaInput(column.formula) ? <small>公式</small> : null}
+                      {normalizeFormulaInput(column.formula) ? <small>{t("公式")}</small> : null}
                     </div>
                     <input
                       className="column-formula-input"
@@ -5217,45 +5618,45 @@ function ColumnModal({
                         event.preventDefault();
                         event.currentTarget.blur();
                       }}
-                      placeholder="=采购数量*单价"
-                      aria-label={`${column.headerName}公式`}
+                      placeholder={t("=采购数量*单价")}
+                      aria-label={`${column.headerName}${t("公式")}`}
                     />
                     <button
                       className="icon-button column-delete-button"
                       type="button"
                       onClick={() => onRemoveColumn(tableKey, column.field)}
-                      title="删除该自定义表头"
+                      title={t("删除该自定义表头")}
                     >
                       <X size={15} />
                     </button>
                   </div>
                 ))
               ) : (
-                <span className="muted-text">暂无自定义表头</span>
+                <span className="muted-text">{t("暂无自定义表头")}</span>
               )}
             </div>
           </div>
 
           <div className="add-column-row">
-            <Field label="新表头名称">
+            <Field label={t("新表头名称")}>
               <input
                 value={headerName}
                 onChange={(event) => setHeaderName(event.target.value)}
-                placeholder="例如：图纸编号、模具费、司机"
+                placeholder={t("例如：图纸编号、模具费、司机")}
               />
             </Field>
-            <Field label="字段类型">
+            <Field label={t("字段类型")}>
               <select value={type} onChange={(event) => setType(event.target.value)}>
-                <option value="text">文本</option>
-                <option value="number">数字</option>
-                <option value="date">日期</option>
+                <option value="text">{t("文本")}</option>
+                <option value="number">{t("数字")}</option>
+                <option value="date">{t("日期")}</option>
               </select>
             </Field>
-            <Field label="公式（可选）" wide>
+            <Field label={t("公式（可选）")} wide>
               <input
                 value={formula}
                 onChange={(event) => setFormula(event.target.value)}
-                placeholder="=采购数量*单价"
+                placeholder={t("=采购数量*单价")}
               />
             </Field>
           </div>
@@ -5263,11 +5664,11 @@ function ColumnModal({
 
         <div className="modal-actions">
           <button className="ghost-button" type="button" onClick={onClose}>
-            完成
+            {t("完成")}
           </button>
           <button className="primary-action compact" type="submit">
             <FilePlus2 size={17} />
-            添加表头
+            {t("添加表头")}
           </button>
         </div>
       </form>
@@ -5288,6 +5689,7 @@ function Field({ label, required = false, wide = false, children }) {
 }
 
 function DashboardView({ customers, alertMap, onCreateCustomer, onSelectCustomer }) {
+  const { t } = useI18n();
   const overdueOrders = useMemo(() => {
     const todayTs = new Date().setHours(0, 0, 0, 0);
     const result = [];
@@ -5318,13 +5720,18 @@ function DashboardView({ customers, alertMap, onCreateCustomer, onSelectCustomer
       <div className="dashboard-hero">
         <div className="dashboard-hero-text">
           <h2 style={{ fontSize: "clamp(22px, 2.5vw, 32px)", marginBottom: 8, lineHeight: 1.2 }}>
-            {customers.length ? `${customers.length} 个客户 · ${customers.flatMap(c => c.orders || []).filter(o => isOpenOrder(o.status)).length} 个进行中订单` : "欢迎使用泡沫厂客户管理系统"}
+            {customers.length
+              ? t("{customers} 个客户 · {orders} 个进行中订单", {
+                customers: customers.length,
+                orders: customers.flatMap(c => c.orders || []).filter(o => isOpenOrder(o.status)).length,
+              })
+              : t("欢迎使用泡沫厂客户管理系统")}
           </h2>
-          <p style={{ color: "var(--muted)", margin: 0 }}>选择一个客户开始操作，或使用全局搜索快速定位订单/送货单</p>
+          <p style={{ color: "var(--muted)", margin: 0 }}>{t("选择一个客户开始操作，或使用全局搜索快速定位订单/送货单")}</p>
         </div>
         <button className="primary-action compact" type="button" onClick={onCreateCustomer} style={{ padding: "0 20px", minHeight: 40 }}>
           <UserRoundPlus size={18} />
-          新增客户
+          {t("新增客户")}
         </button>
       </div>
 
@@ -5332,7 +5739,7 @@ function DashboardView({ customers, alertMap, onCreateCustomer, onSelectCustomer
         <section className="dashboard-section">
           <h4 style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <AlertTriangle size={16} style={{ color: "var(--red)" }} />
-            待跟进订单（逾期 & 即将到期）
+            {t("待跟进订单（逾期 & 即将到期）")}
           </h4>
           <div className="dashboard-order-list">
             {overdueOrders.map(order => (
@@ -5348,9 +5755,9 @@ function DashboardView({ customers, alertMap, onCreateCustomer, onSelectCustomer
                 <span className="dashboard-order-qty">{order.quantity || 0}</span>
                 <span className="dashboard-order-due" style={{ color: order.overdue ? "var(--red)" : "var(--amber)" }}>
                   {order.dueDate}
-                  {order.overdue ? " · 已逾期" : " · 即将到期"}
+                  {order.overdue ? t(" · 已逾期") : t(" · 即将到期")}
                 </span>
-                <span className={`status-chip ${statusClass(order.status)}`}>{order.status}</span>
+                <span className={`status-chip ${statusClass(order.status)}`}>{t(normalizeOrderStatus(order.status))}</span>
               </button>
             ))}
           </div>
@@ -5359,7 +5766,7 @@ function DashboardView({ customers, alertMap, onCreateCustomer, onSelectCustomer
 
       {recentOrders.length > 0 && (
         <section className="dashboard-section">
-          <h4>最近订单</h4>
+          <h4>{t("最近订单")}</h4>
           <div className="dashboard-order-list">
             {recentOrders.map(order => (
               <button
@@ -5373,7 +5780,7 @@ function DashboardView({ customers, alertMap, onCreateCustomer, onSelectCustomer
                 <span className="dashboard-order-product">{order.product}</span>
                 <span className="dashboard-order-qty">{order.quantity || 0}</span>
                 <span className="dashboard-order-due">{order.date}</span>
-                <span className={`status-chip ${statusClass(order.status)}`}>{order.status}</span>
+                <span className={`status-chip ${statusClass(order.status)}`}>{t(normalizeOrderStatus(order.status))}</span>
               </button>
             ))}
           </div>
@@ -5383,10 +5790,10 @@ function DashboardView({ customers, alertMap, onCreateCustomer, onSelectCustomer
       {customers.length === 0 && (
         <div className="dashboard-empty">
           <Boxes size={48} style={{ color: "var(--muted)", marginBottom: 16 }} />
-          <p style={{ color: "var(--muted)", fontSize: 16 }}>暂无客户数据</p>
+          <p style={{ color: "var(--muted)", fontSize: 16 }}>{t("暂无客户数据")}</p>
           <button className="primary-action compact" type="button" onClick={onCreateCustomer} style={{ marginTop: 12 }}>
             <UserRoundPlus size={18} />
-            创建第一个客户
+            {t("创建第一个客户")}
           </button>
         </div>
       )}
@@ -5394,14 +5801,16 @@ function DashboardView({ customers, alertMap, onCreateCustomer, onSelectCustomer
   );
 }
 
-function SettingsModal({ settings, onClose, onSave }) {
+function SettingsModal({ settings, mobileUsers = [], onChangeMobileUserRole, onRefreshMobileUsers, onClose, onSave }) {
+  const { t } = useI18n();
   const [form, setForm] = useState({
     companyName: settings.companyName || "",
     companyAddress: settings.companyAddress || "",
     companyPhone: settings.companyPhone || "",
-    companyTaxNo: settings.taxNo || "",
+    companyTaxNo: settings.companyTaxNo || settings.taxNo || "",
     defaultDueDays: settings.defaultDueDays || "7",
     orderNoPrefix: settings.orderNoPrefix || "",
+    language: normalizeLanguage(settings.language),
   });
 
   const update = (field, value) => setForm(c => ({ ...c, [field]: value }));
@@ -5417,54 +5826,101 @@ function SettingsModal({ settings, onClose, onSave }) {
         <div className="modal-head">
           <div>
             <p className="eyebrow">SYSTEM SETTINGS</p>
-            <h3>系统设置</h3>
+            <h3>{t("系统设置")}</h3>
           </div>
-          <button className="icon-button" type="button" onClick={onClose} title="关闭">
+          <button className="icon-button" type="button" onClick={onClose} title={t("关闭")}>
             <X size={18} />
           </button>
         </div>
 
         <div className="settings-section">
-          <h4>公司信息（用于送货单打印）</h4>
+          <h4>{t("语言")}</h4>
           <div className="settings-grid">
             <label className="field">
-              <span>公司名称</span>
-              <input value={form.companyName} onChange={e => update("companyName", e.target.value)} placeholder="例如：XX泡沫包装有限公司" />
-            </label>
-            <label className="field">
-              <span>联系电话</span>
-              <input value={form.companyPhone} onChange={e => update("companyPhone", e.target.value)} placeholder="例如：0757-8888 8888" />
-            </label>
-            <label className="field" style={{ gridColumn: "1 / -1" }}>
-              <span>公司地址</span>
-              <input value={form.companyAddress} onChange={e => update("companyAddress", e.target.value)} placeholder="例如：佛山市南海区XX工业园" />
-            </label>
-            <label className="field">
-              <span>税号</span>
-              <input value={form.companyTaxNo} onChange={e => update("companyTaxNo", e.target.value)} placeholder="纳税人识别号" />
+              <span>{t("界面语言")}</span>
+              <select value={form.language} onChange={e => update("language", e.target.value)}>
+                {languageOptions.map(option => (
+                  <option key={option.value} value={option.value}>
+                    {option.value === "zh" ? t("中文") : t("英文")}
+                  </option>
+                ))}
+              </select>
             </label>
           </div>
         </div>
 
         <div className="settings-section">
-          <h4>订单默认设置</h4>
+          <h4>{t("公司信息（用于送货单打印）")}</h4>
           <div className="settings-grid">
             <label className="field">
-              <span>默认交期天数（新增订单时交期=今天+N天）</span>
-              <input type="number" value={form.defaultDueDays} onChange={e => update("defaultDueDays", e.target.value)} min="0" max="365" />
+              <span>{t("公司名称")}</span>
+              <input value={form.companyName} onChange={e => update("companyName", e.target.value)} placeholder={t("例如：XX泡沫包装有限公司")} />
             </label>
             <label className="field">
-              <span>订单号前缀（自动生成，留空则不自动生成）</span>
-              <input value={form.orderNoPrefix} onChange={e => update("orderNoPrefix", e.target.value)} placeholder="例如：KH-" />
+              <span>{t("联系电话")}</span>
+              <input value={form.companyPhone} onChange={e => update("companyPhone", e.target.value)} placeholder={t("例如：0757-8888 8888")} />
+            </label>
+            <label className="field" style={{ gridColumn: "1 / -1" }}>
+              <span>{t("公司地址")}</span>
+              <input value={form.companyAddress} onChange={e => update("companyAddress", e.target.value)} placeholder={t("例如：佛山市南海区XX工业园")} />
+            </label>
+            <label className="field">
+              <span>{t("税号")}</span>
+              <input value={form.companyTaxNo} onChange={e => update("companyTaxNo", e.target.value)} placeholder={t("纳税人识别号")} />
             </label>
           </div>
         </div>
 
+        <div className="settings-section">
+          <h4>{t("订单默认设置")}</h4>
+          <div className="settings-grid">
+            <label className="field">
+              <span>{t("默认交期天数（新增订单时交期=今天+N天）")}</span>
+              <input type="number" value={form.defaultDueDays} onChange={e => update("defaultDueDays", e.target.value)} min="0" max="365" />
+            </label>
+            <label className="field">
+              <span>{t("订单号前缀（自动生成，留空则不自动生成）")}</span>
+              <input value={form.orderNoPrefix} onChange={e => update("orderNoPrefix", e.target.value)} placeholder={t("例如：KH-")} />
+            </label>
+          </div>
+        </div>
+
+        <div className="settings-section">
+          <div className="settings-section-head">
+            <h4>{t("手机账号角色")}</h4>
+            <button className="ghost-button compact" type="button" onClick={onRefreshMobileUsers}>
+              <RotateCcw size={14} />
+              {t("刷新")}
+            </button>
+          </div>
+          {mobileUsers.length ? (
+            <div className="mobile-user-list">
+              {mobileUsers.map(user => (
+                <div className="mobile-user-row" key={user.id}>
+                  <div className="mobile-user-info">
+                    <strong>{user.name || t("未填写")}</strong>
+                    <span>{user.phone || "—"}</span>
+                  </div>
+                  <select
+                    value={user.role === "admin" ? "admin" : "employee"}
+                    onChange={event => onChangeMobileUserRole(user.id, event.target.value)}
+                  >
+                    <option value="employee">{t("员工")}</option>
+                    <option value="admin">{t("管理员")}</option>
+                  </select>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="settings-empty">{t("暂无手机注册账号。员工先在手机端注册后，这里会显示账号。")}</p>
+          )}
+        </div>
+
         <div className="modal-actions">
-          <button className="ghost-button" type="button" onClick={onClose}>取消</button>
+          <button className="ghost-button" type="button" onClick={onClose}>{t("取消")}</button>
           <button className="primary-action compact" type="submit">
             <Save size={17} />
-            保存设置
+            {t("保存设置")}
           </button>
         </div>
       </form>
@@ -5473,6 +5929,7 @@ function SettingsModal({ settings, onClose, onSave }) {
 }
 
 function KanbanBoard({ customer, onStatusChange, onSelectOrder }) {
+  const { t } = useI18n();
   const orders = (customer.orders || []).filter(o => normalizeOrderStatus(o.status) !== "已付款");
   const columns = statusOptions.filter(s => s !== "已付款");
   const ordersByStatus = Object.fromEntries(columns.map(s => [s, []]));
@@ -5486,7 +5943,7 @@ function KanbanBoard({ customer, onStatusChange, onSelectOrder }) {
       {columns.map(status => (
         <div className="kanban-column" key={status}>
           <div className="kanban-column-header">
-            <span className={`status-chip ${statusClass(status)}`} style={{ fontSize: 12 }}>{status}</span>
+            <span className={`status-chip ${statusClass(status)}`} style={{ fontSize: 12 }}>{t(status)}</span>
             <span className="count">{ordersByStatus[status]?.length || 0}</span>
           </div>
           <div className="kanban-column-body">
@@ -5505,8 +5962,8 @@ function KanbanBoard({ customer, onStatusChange, onSelectOrder }) {
                 onClick={() => onSelectOrder(order.id)}
               >
                 <strong>{order.orderNo || order.product}</strong>
-                <small>{order.product || ""} · {order.quantity || 0} 件</small>
-                <small>{order.dueDate ? `交期 ${order.dueDate}` : ""}</small>
+                <small>{order.product || ""} · {order.quantity || 0} {t("件")}</small>
+                <small>{order.dueDate ? t("交期 {date}", { date: order.dueDate }) : ""}</small>
               </div>
             ))}
           </div>
@@ -5516,19 +5973,20 @@ function KanbanBoard({ customer, onStatusChange, onSelectOrder }) {
   );
 }
 
-function generateStatement(customer, settings = {}) {
+function generateStatement(customer, settings = {}, t = defaultTranslator) {
   const billableOrders = (customer.orders || []).filter(o => {
     const s = normalizeOrderStatus(o.status);
     return s === "已送货" || s === "已开对账单" || s === "已付款";
   });
   if (!billableOrders.length) {
-    alert(`客户 "${customer.name}" 没有可对账的订单（需要已送货/已开对账单/已付款状态）。`);
+    alert(t("客户 \"{name}\" 没有可对账的订单（需要已送货/已开对账单/已付款状态）。", { name: customer.name }));
     return;
   }
 
   const total = billableOrders.reduce((sum, o) => sum + Number(o.amount || 0), 0);
-  const companyName = settings.companyName || "泡沫厂";
-  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>对账单 - ${customer.name}</title>
+  const companyName = settings.companyName || t("泡沫厂");
+  const totalText = formatCurrencyForLanguage(total, settings.language);
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${t("对账单")} - ${customer.name}</title>
 <style>
   body { font-family: "PingFang SC","Microsoft YaHei",sans-serif; padding:40px; max-width:800px; margin:0 auto; color:#111; font-size:13px; }
   h1 { text-align:center; font-size:20px; margin-bottom:4px; }
@@ -5543,22 +6001,22 @@ function generateStatement(customer, settings = {}) {
   .footer { margin-top:24px; padding-top:12px; border-top:1px solid #ddd; display:flex; justify-content:space-between; color:#666; font-size:12px; }
   @media print { body { padding:20px; } }
 </style></head><body>
-<h1>对 账 单</h1>
+<h1>${t("对 账 单")}</h1>
 <p class="subtitle">${companyName}</p>
 <div class="info">
-  <div><strong>客户：</strong>${customer.name}<br/><strong>联系人：</strong>${customer.contact || "-"}<br/><strong>电话：</strong>${customer.phone || "-"}</div>
-  <div><strong>日期：</strong>${today()}<br/><strong>账期：</strong>${customer.paymentTerm || "-"}<br/><strong>地址：</strong>${customer.address || "-"}</div>
+  <div><strong>${t("客户")}：</strong>${customer.name}<br/><strong>${t("联系人")}：</strong>${customer.contact || "-"}<br/><strong>${t("电话")}：</strong>${customer.phone || "-"}</div>
+  <div><strong>${t("日期")}：</strong>${today()}<br/><strong>${t("账期")}：</strong>${customer.paymentTerm || "-"}<br/><strong>${t("地址")}：</strong>${customer.address || "-"}</div>
 </div>
 <table>
-<thead><tr><th>订单号</th><th>日期</th><th>产品</th><th class="num">数量</th><th class="num">金额</th><th>状态</th></tr></thead>
+<thead><tr><th>${t("订单号")}</th><th>${t("日期")}</th><th>${t("产品")}</th><th class="num">${t("数量")}</th><th class="num">${t("金额")}</th><th>${t("状态")}</th></tr></thead>
 <tbody>
-${billableOrders.map(o => `<tr><td>${o.orderNo || "-"}</td><td>${o.date || "-"}</td><td>${o.product || "-"}</td><td class="num">${o.quantity || 0}</td><td class="num">${Number(o.amount || 0).toFixed(2)}</td><td>${normalizeOrderStatus(o.status)}</td></tr>`).join("")}
+${billableOrders.map(o => `<tr><td>${o.orderNo || "-"}</td><td>${o.date || "-"}</td><td>${o.product || "-"}</td><td class="num">${o.quantity || 0}</td><td class="num">${Number(o.amount || 0).toFixed(2)}</td><td>${t(normalizeOrderStatus(o.status))}</td></tr>`).join("")}
 </tbody>
 </table>
-<p class="total">合计金额：¥ ${total.toLocaleString("zh-CN", { minimumFractionDigits: 2 })}</p>
+<p class="total">${t("合计金额：")} ${totalText}</p>
 <div class="footer">
-  <div>制单人：___________</div>
-  <div>客户确认：___________</div>
+  <div>${t("制单人：___________")}</div>
+  <div>${t("客户确认：___________")}</div>
 </div>
 </body></html>`;
 

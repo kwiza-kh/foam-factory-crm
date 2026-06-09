@@ -4,6 +4,18 @@
 const API_KEY = process.env.API_KEY;
 
 export function authMiddleware(req, res, next) {
+  const hasMobileUserToken = Boolean(req.headers['x-mobile-user-token']);
+  const isMobileCustomerRead = req.baseUrl === '/api/customers'
+    && req.method === 'GET'
+    && (req.path === '/' || req.path === '');
+  const isMobileOrderStatusUpdate = req.baseUrl === '/api/customers'
+    && req.method === 'PATCH'
+    && /^\/[^/]+\/orders\/[^/]+\/status$/.test(req.path);
+
+  if (hasMobileUserToken && (isMobileCustomerRead || isMobileOrderStatusUpdate)) {
+    return next();
+  }
+
   // If no API_KEY configured, allow all requests (development-friendly)
   if (!API_KEY) {
     return next();

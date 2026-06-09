@@ -5,6 +5,7 @@ import { dirname, join } from 'path';
 import { prisma } from './db.js';
 import { authMiddleware } from './auth.js';
 import customersRouter from './routes/customers.js';
+import usersRouter from './routes/users.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3001;
@@ -22,6 +23,7 @@ app.use(express.json({ limit: '50mb' }));
 // Health check
 app.get('/api/health', (_req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
 
+app.use('/api/users', usersRouter);
 app.use('/api/customers', authMiddleware, customersRouter);
 
 app.use((err, req, res, next) => {

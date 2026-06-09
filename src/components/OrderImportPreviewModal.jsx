@@ -34,6 +34,9 @@ export function OrderImportPreviewModal({
   headerRowNumber,
   onConfirm,
   onClose,
+  t = (text, vars) => String(text ?? "").replace(/\{(\w+)\}/g, (match, key) => (
+    Object.prototype.hasOwnProperty.call(vars || {}, key) ? String(vars[key]) : match
+  )),
 }) {
   const [rowData, setRowData] = useState(() =>
     rows.map(row => ({ ...row, __previewId: makeId('prev') })),
@@ -77,7 +80,7 @@ export function OrderImportPreviewModal({
         <button
           style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--red)', padding: '4px' }}
           onClick={() => setRowData(current => current.filter(row => row.__previewId !== data.__previewId))}
-          title="删除此行"
+          title={t("删除此行")}
         >
           <X size={13} />
         </button>
@@ -129,9 +132,9 @@ export function OrderImportPreviewModal({
         <div className="modal-head">
           <div>
             <p className="eyebrow">ORDER IMPORT</p>
-            <h3>识别到 {rowData.length} 条订单，表头位于第 {headerRowNumber} 行</h3>
+            <h3>{t("识别到 {count} 条订单，表头位于第 {row} 行", { count: rowData.length, row: headerRowNumber })}</h3>
           </div>
-          <button className="icon-button" type="button" onClick={onClose} title="取消">
+          <button className="icon-button" type="button" onClick={onClose} title={t("取消")}>
             <X size={18} />
           </button>
         </div>
@@ -148,7 +151,7 @@ export function OrderImportPreviewModal({
                 value={column.headerName}
                 disabled={!column.included}
                 onChange={(event) => updateColumn(column.__columnId, { headerName: event.target.value })}
-                aria-label="导入表头名称"
+                aria-label={t("导入表头名称")}
               />
             </label>
           ))}
@@ -158,20 +161,20 @@ export function OrderImportPreviewModal({
           <div className="bulk-edit-panel" style={{ marginBottom: 8 }}>
             <span style={{ color: "var(--accent)", fontWeight: 600, fontSize: 13 }}>
               <Pencil size={13} style={{ verticalAlign: -2, marginRight: 4 }} />
-              已选 {selectedRowIds.size} 行 · 批量填充：
+              {t("已选 {count} 行 · 批量填充：", { count: selectedRowIds.size })}
             </span>
             <select value={batchField} onChange={e => setBatchField(e.target.value)}>
-              <option value="dueDate">交期</option>
-              <option value="status">状态</option>
-              <option value="followUp">跟进记录</option>
-              <option value="quantity">数量</option>
-              <option value="amount">金额</option>
+              <option value="dueDate">{t("交期")}</option>
+              <option value="status">{t("状态")}</option>
+              <option value="followUp">{t("跟进记录")}</option>
+              <option value="quantity">{t("数量")}</option>
+              <option value="amount">{t("金额")}</option>
             </select>
             {batchField === "status" ? (
               <select value={batchValue} onChange={e => setBatchValue(e.target.value)}>
-                <option value="">选择状态</option>
+                <option value="">{t("选择状态")}</option>
                 {["未完成","已排产","已完成","已送货","已开对账单","已付款"].map(s => (
-                  <option key={s} value={s}>{s}</option>
+                  <option key={s} value={s}>{t(s)}</option>
                 ))}
               </select>
             ) : batchField === "dueDate" ? (
@@ -180,12 +183,12 @@ export function OrderImportPreviewModal({
               <input
                 value={batchValue}
                 onChange={e => setBatchValue(e.target.value)}
-                placeholder={batchField === "followUp" ? "统一备注内容" : "值"}
+                placeholder={batchField === "followUp" ? t("统一备注内容") : t("值")}
                 onKeyDown={e => e.key === "Enter" && applyBatchFill()}
               />
             )}
             <button className="secondary-button" type="button" onClick={applyBatchFill} style={{ minHeight: 32 }}>
-              应用
+              {t("应用")}
             </button>
           </div>
         )}
@@ -204,7 +207,7 @@ export function OrderImportPreviewModal({
         </div>
 
         <div className="modal-actions">
-          <button className="ghost-button" type="button" onClick={onClose}>取消</button>
+          <button className="ghost-button" type="button" onClick={onClose}>{t("取消")}</button>
           <button
             className="primary-action compact"
             type="button"
@@ -212,7 +215,7 @@ export function OrderImportPreviewModal({
             disabled={rowData.length === 0 || activeColumns.length === 0}
           >
             <Check size={15} />
-            确认导入 {rowData.length} 条
+            {t("确认导入 {count} 条", { count: rowData.length })}
           </button>
         </div>
       </div>

@@ -276,14 +276,23 @@ describe('Customers API Routes', () => {
       const updatedOrder = {
         id: 'o1',
         customerId: 'c1',
-        data: { status: '已完成', orderNo: 'PO-001', completionTime: '2024-06-01' },
+        data: {
+          status: '已完成',
+          orderNo: 'PO-001',
+          completionTime: '2024-06-01',
+          completionPhoto: { dataUrl: 'data:image/jpeg;base64,test' },
+        },
       };
       mockPrisma.order.findFirst.mockResolvedValue(existingOrder);
       mockPrisma.order.update.mockResolvedValue(updatedOrder);
 
       const res = await request(app)
         .patch('/api/customers/c1/orders/o1/status')
-        .send({ status: '已完成', completionTime: '2024-06-01' });
+        .send({
+          status: '已完成',
+          completionTime: '2024-06-01',
+          completionPhoto: { dataUrl: 'data:image/jpeg;base64,test' },
+        });
 
       expect(res.status).toBe(200);
       expect(res.body).toMatchObject({ ok: true });
@@ -301,6 +310,7 @@ describe('Customers API Routes', () => {
           completionTime: '2024-06-01',
           completionOperator: '张三',
           completionNote: '已交付',
+          completionPhoto: { dataUrl: 'data:image/jpeg;base64,test' },
         },
       };
       mockPrisma.order.findFirst.mockResolvedValue(existingOrder);
@@ -313,11 +323,24 @@ describe('Customers API Routes', () => {
           completionTime: '2024-06-01',
           completionOperator: '张三',
           completionNote: '已交付',
+          completionPhoto: { dataUrl: 'data:image/jpeg;base64,test' },
         });
 
       expect(res.status).toBe(200);
       expect(res.body.row).toHaveProperty('completionOperator', '张三');
       expect(res.body.row).toHaveProperty('completionNote', '已交付');
+    });
+
+    it('should return 400 when completing without a photo', async () => {
+      const existingOrder = { id: 'o1', customerId: 'c1', data: { status: '已排产' } };
+      mockPrisma.order.findFirst.mockResolvedValue(existingOrder);
+
+      const res = await request(app)
+        .patch('/api/customers/c1/orders/o1/status')
+        .send({ status: '已完成', completionTime: '2024-06-01' });
+
+      expect(res.status).toBe(400);
+      expect(res.body).toHaveProperty('error', '完成订单必须上传现场照片');
     });
 
     it('should return 400 when status is missing', async () => {

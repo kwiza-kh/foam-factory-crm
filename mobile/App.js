@@ -1,10 +1,13 @@
 import { StatusBar } from 'expo-status-bar';
 import Constants from 'expo-constants';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as ImagePicker from 'expo-image-picker';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Image,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -22,14 +25,21 @@ const statusOptions = ['未完成', '已排产', '已完成', '已送货', '已�
 const completionTimeField = 'completionTime';
 const completionOperatorField = 'completionOperator';
 const completionNoteField = 'completionNote';
-const defaultMobileDisplayFields = ['product', 'quantity', 'amount', 'dueDate'];
+const completionPhotoField = 'completionPhoto';
+const completionPhotoAtField = 'completionPhotoAt';
+const mobileUserStorageKey = 'foam-crm-mobile-user';
+const mobileApiStorageKey = 'foam-crm-mobile-api-url';
+const defaultMobileCardDisplayFields = [];
+const internalOrderFields = new Set(['id', completionPhotoField]);
 const baseMobileOrderFields = [
+  { field: '_customerName', label: '客户' },
+  { field: 'orderNo', label: '订单号' },
+  { field: 'status', label: '进度' },
+  { field: 'date', label: '订单日期', type: 'date' },
   { field: 'product', label: '产品' },
   { field: 'quantity', label: '数量', type: 'number' },
   { field: 'amount', label: '金额', type: 'amount' },
   { field: 'dueDate', label: '交期', type: 'date' },
-  { field: 'date', label: '订单日期', type: 'date' },
-  { field: 'orderNo', label: '订单号' },
   { field: 'productionDate', label: '排产日期', type: 'date' },
   { field: 'productionQuantity', label: '排产数量', type: 'number' },
   { field: 'productionLine', label: '员工姓名' },
@@ -38,6 +48,8 @@ const baseMobileOrderFields = [
   { field: completionTimeField, label: '完成时间', type: 'datetime' },
   { field: completionOperatorField, label: '完成人' },
   { field: completionNoteField, label: '完成备注' },
+  { field: completionPhotoAtField, label: '完成照片时间', type: 'datetime' },
+  { field: 'completionUserName', label: '完成账号' },
   { field: 'followUp', label: '跟进记录' },
 ];
 
@@ -60,6 +72,14 @@ function normalizeStatus(status = '') {
   if (statusOptions.includes(status)) return status;
   if (status === '已发货') return '已送货';
   return '未完成';
+}
+
+function normalizeUserRole(role = '') {
+  return role === 'admin' ? 'admin' : 'employee';
+}
+
+function roleLabel(role = '') {
+  return normalizeUserRole(role) === 'admin' ? '管理员' : '员工';
 }
 
 function isScheduledProductionOrder(order) {
@@ -110,6 +130,12 @@ function formatMobileFieldValue(order, fieldConfig) {
   return fieldText(value);
 }
 
+function hasOrderFieldValue(order, field) {
+  if (!order) return false;
+  if (field === '_customerName') return Boolean(order._customerName);
+  return Object.prototype.hasOwnProperty.call(order, field);
+}
+
 function buildMobileOrderDisplayFields(customers = []) {
   const fields = new Map(baseMobileOrderFields.map(field => [field.field, field]));
 
@@ -124,13 +150,17 @@ function buildMobileOrderDisplayFields(customers = []) {
     }
     for (const order of customer.orders || []) {
       for (const field of Object.keys(order)) {
-        if (field === 'id' || field.startsWith('_') || fields.has(field)) continue;
+        if (internalOrderFields.has(field) || field.startsWith('_') || fields.has(field)) continue;
         fields.set(field, { field, label: field });
       }
     }
   }
 
   return Array.from(fields.values());
+}
+
+function getOrderDisplayFields(order, fieldOptions = []) {
+  return fieldOptions.filter(option => hasOrderFieldValue(order, option.field));
 }
 
 function flattenOrders(customers = []) {
@@ -158,6 +188,11 @@ function orderSearchText(order) {
 export default function App() {
   const [apiBaseUrl, setApiBaseUrl] = useState(defaultApiBaseUrl);
   const [apiDraft, setApiDraft] = useState(defaultApiBaseUrl);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [currentUser, setCurrentUser] = useState(null);
+  const [registerName, setRegisterName] = useState('');
+  const [registerPhone, setRegisterPhone] = useState('');
+  const [registering, setRegistering] = useState(false);
   const [customers, setCustomers] = useState([]);
   const [selectedCustomerId, setSelectedCustomerId] = useState('all');
   const [activeView, setActiveView] = useState('schedule');
@@ -171,7 +206,10 @@ export default function App() {
   const [completionOrder, setCompletionOrder] = useState(null);
   const [completionOperator, setCompletionOperator] = useState('');
   const [completionNote, setCompletionNote] = useState('');
-  const [mobileDisplayFields, setMobileDisplayFields] = useState(defaultMobileDisplayFields);
+  const [completionPhoto, setCompletionPhoto] = useState(null);
+  const [mobileCardDisplayFields, setMobileCardDisplayFields] = useState(defaultMobileCardDisplayFields);
+  const [detailUsesAllFields, setDetailUsesAllFields] = useState(true);
+  const [detailDisplayFields, setDetailDisplayFields] = useState([]);
 
   const request = useCallback(async (path, options = {}) => {
     const baseUrl = apiBaseUrl.replace(/\/$/, '');
@@ -179,6 +217,7 @@ export default function App() {
       ...options,
       headers: {
         'Content-Type': 'application/json',
+        ...(currentUser?.token ? { 'X-Mobile-User-Token': currentUser.token } : {}),
         ...(options.headers || {}),
       },
     });
@@ -189,53 +228,124 @@ export default function App() {
       throw error;
     }
     return response.json();
-  }, [apiBaseUrl]);
+  }, [apiBaseUrl, currentUser?.token]);
 
   const loadCustomers = useCallback(async ({ silent = false } = {}) => {
+    if (!currentUser?.token) {
+      setCustomers([]);
+      setLoading(false);
+      setRefreshing(false);
+      return;
+    }
     if (!silent) setLoading(true);
     setError('');
     try {
+      const session = await request('/users/me');
+      if (session.user) {
+        setCurrentUser(session.user);
+        await AsyncStorage.setItem(mobileUserStorageKey, JSON.stringify(session.user));
+      }
       const result = await request('/customers?limit=200');
       const list = result.data || result;
       setCustomers(Array.isArray(list) ? list : []);
     } catch (err) {
+      if (err.status === 401) {
+        await AsyncStorage.removeItem(mobileUserStorageKey);
+        setCurrentUser(null);
+        setCustomers([]);
+      }
       setError(err.message || '连接失败');
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [request]);
+  }, [currentUser?.token, request]);
 
   useEffect(() => {
+    let mounted = true;
+    const restoreSession = async () => {
+      try {
+        const [[, savedApiUrl], [, savedUser]] = await AsyncStorage.multiGet([
+          mobileApiStorageKey,
+          mobileUserStorageKey,
+        ]);
+        if (!mounted) return;
+        if (savedApiUrl) {
+          setApiBaseUrl(savedApiUrl);
+          setApiDraft(savedApiUrl);
+        }
+        if (savedUser) {
+          setCurrentUser(JSON.parse(savedUser));
+        }
+      } catch {
+        await AsyncStorage.removeItem(mobileUserStorageKey);
+      } finally {
+        if (mounted) setAuthLoading(false);
+      }
+    };
+    restoreSession();
+    return () => { mounted = false; };
+  }, []);
+
+  useEffect(() => {
+    if (authLoading) return;
+    if (!currentUser?.token) {
+      setLoading(false);
+      return;
+    }
     loadCustomers();
-  }, [loadCustomers]);
+  }, [authLoading, currentUser?.token, loadCustomers]);
 
   const allOrders = useMemo(() => flattenOrders(customers), [customers]);
+  const currentRole = normalizeUserRole(currentUser?.role);
+  const isAdmin = currentRole === 'admin';
   const mobileDisplayFieldOptions = useMemo(() => buildMobileOrderDisplayFields(customers), [customers]);
-  const selectedMobileDisplayFields = useMemo(() => {
+  const selectedMobileCardDisplayFields = useMemo(() => {
     const optionByField = new Map(mobileDisplayFieldOptions.map(option => [option.field, option]));
-    return mobileDisplayFields.map(field => optionByField.get(field)).filter(Boolean);
-  }, [mobileDisplayFieldOptions, mobileDisplayFields]);
-  const toggleMobileDisplayField = useCallback((field) => {
-    setMobileDisplayFields(current => (
+    return mobileCardDisplayFields.map(field => optionByField.get(field)).filter(Boolean);
+  }, [mobileDisplayFieldOptions, mobileCardDisplayFields]);
+  const toggleMobileCardDisplayField = useCallback((field) => {
+    setMobileCardDisplayFields(current => (
       current.includes(field)
         ? current.filter(item => item !== field)
         : [...current, field]
     ));
   }, []);
+  const toggleDetailDisplayField = useCallback((field) => {
+    setDetailUsesAllFields(false);
+    setDetailDisplayFields(current => {
+      const allFields = mobileDisplayFieldOptions.map(option => option.field);
+      const base = detailUsesAllFields ? allFields : current;
+      return base.includes(field)
+        ? base.filter(item => item !== field)
+        : [...base, field];
+    });
+  }, [detailUsesAllFields, mobileDisplayFieldOptions]);
+  const showAllDetailFields = useCallback(() => {
+    setDetailUsesAllFields(true);
+    setDetailDisplayFields([]);
+  }, []);
+  const clearDetailFields = useCallback(() => {
+    setDetailUsesAllFields(false);
+    setDetailDisplayFields([]);
+  }, []);
+  useEffect(() => {
+    if (!isAdmin && activeView !== 'schedule') setActiveView('schedule');
+  }, [activeView, isAdmin]);
   const visibleOrders = useMemo(() => {
     const keyword = query.trim().toLowerCase();
+    const view = isAdmin ? activeView : 'schedule';
     return allOrders
       .filter(order => selectedCustomerId === 'all' || order._customerId === selectedCustomerId)
       .filter(order => {
         const status = normalizeStatus(order.status);
-        if (activeView === 'schedule') return isScheduledProductionOrder(order);
-        if (activeView === 'completed') return status === '已完成';
+        if (view === 'schedule') return isScheduledProductionOrder(order);
+        if (view === 'completed') return status === '已完成';
         return true;
       })
       .filter(order => !keyword || orderSearchText(order).includes(keyword))
       .sort((a, b) => {
-        if (activeView === 'schedule') {
+        if (view === 'schedule') {
           return parseDateValue(a.productionDate || a.dueDate) - parseDateValue(b.productionDate || b.dueDate)
             || parseDateValue(a.date) - parseDateValue(b.date)
             || a._orderIndex - b._orderIndex;
@@ -243,7 +353,7 @@ export default function App() {
         return parseDateValue(b.date) - parseDateValue(a.date)
           || b._orderIndex - a._orderIndex;
       });
-  }, [activeView, allOrders, query, selectedCustomerId]);
+  }, [activeView, allOrders, isAdmin, query, selectedCustomerId]);
 
   const stats = useMemo(() => {
     const open = allOrders.filter(isScheduledProductionOrder).length;
@@ -260,10 +370,64 @@ export default function App() {
     loadCustomers({ silent: true });
   }, [loadCustomers]);
 
+  const registerMobileUser = useCallback(async () => {
+    const name = registerName.trim();
+    const phone = registerPhone.trim();
+    const nextApiUrl = apiDraft.trim().replace(/\/$/, '');
+    if (!nextApiUrl) {
+      Alert.alert('请填写后端地址', '格式例如：http://电脑IP:3001/api');
+      return;
+    }
+    if (!name || !phone) {
+      Alert.alert('请填写注册信息', '姓名和手机号都需要填写。');
+      return;
+    }
+
+    setRegistering(true);
+    setError('');
+    try {
+      const response = await fetch(`${nextApiUrl}/users/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, phone }),
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || `HTTP ${response.status}`);
+      }
+      const result = await response.json();
+      if (!result.user?.token) throw new Error('注册失败，服务端没有返回账号信息');
+      await AsyncStorage.multiSet([
+        [mobileApiStorageKey, nextApiUrl],
+        [mobileUserStorageKey, JSON.stringify(result.user)],
+      ]);
+      setApiBaseUrl(nextApiUrl);
+      setApiDraft(nextApiUrl);
+      setCurrentUser(result.user);
+      setRegisterName('');
+      setRegisterPhone('');
+      setLoading(true);
+    } catch (err) {
+      Alert.alert('注册失败', err.message || '无法连接服务器');
+    } finally {
+      setRegistering(false);
+    }
+  }, [apiDraft, registerName, registerPhone]);
+
+  const logoutMobileUser = useCallback(async () => {
+    await AsyncStorage.removeItem(mobileUserStorageKey);
+    setCurrentUser(null);
+    setCustomers([]);
+    setSelectedOrder(null);
+    setCompletionOrder(null);
+    setActiveView('schedule');
+  }, []);
+
   const applyApiUrl = useCallback(() => {
     const next = apiDraft.trim().replace(/\/$/, '');
     if (!next) return;
     setApiBaseUrl(next);
+    AsyncStorage.setItem(mobileApiStorageKey, next);
     setShowSettings(false);
   }, [apiDraft]);
 
@@ -313,41 +477,108 @@ export default function App() {
 
   const markCompleted = useCallback((order) => {
     setCompletionOrder(order);
-    setCompletionOperator(order[completionOperatorField] || '手机端');
+    setCompletionOperator(order[completionOperatorField] || currentUser?.name || '手机端');
     setCompletionNote(order[completionNoteField] || '');
-  }, []);
+    setCompletionPhoto(null);
+  }, [currentUser?.name]);
 
   const closeCompletionModal = useCallback(() => {
     if (savingOrderId) return;
     setCompletionOrder(null);
     setCompletionOperator('');
     setCompletionNote('');
+    setCompletionPhoto(null);
   }, [savingOrderId]);
+
+  const takeCompletionPhoto = useCallback(async () => {
+    const permission = await ImagePicker.requestCameraPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert('需要相机权限', '请允许相机权限后再拍照上传完成照片。');
+      return;
+    }
+
+    const result = await ImagePicker.launchCameraAsync({
+      allowsEditing: false,
+      base64: true,
+      quality: 0.55,
+    });
+    if (result.canceled || !result.assets?.length) return;
+
+    const asset = result.assets[0];
+    if (!asset.base64) {
+      Alert.alert('拍照失败', '没有拿到照片数据，请重新拍照。');
+      return;
+    }
+    setCompletionPhoto({
+      uri: asset.uri,
+      dataUrl: `data:image/jpeg;base64,${asset.base64}`,
+      width: asset.width,
+      height: asset.height,
+      takenAt: new Date().toISOString(),
+    });
+  }, []);
 
   const submitCompletion = useCallback(async () => {
     if (!completionOrder) return;
+    if (!completionPhoto?.dataUrl) {
+      Alert.alert('需要完成照片', '请先拍照上传，才能确认订单已完成。');
+      return;
+    }
     setSavingOrderId(completionOrder.id);
     try {
       const patch = {
         [completionTimeField]: new Date().toISOString(),
-        [completionOperatorField]: completionOperator.trim() || '手机端',
+        [completionOperatorField]: completionOperator.trim() || currentUser?.name || '手机端',
         [completionNoteField]: completionNote.trim(),
+        [completionPhotoField]: {
+          dataUrl: completionPhoto.dataUrl,
+          width: completionPhoto.width,
+          height: completionPhoto.height,
+          takenAt: completionPhoto.takenAt,
+          uploadedBy: currentUser?.name || completionOperator.trim() || '手机端',
+        },
+        [completionPhotoAtField]: completionPhoto.takenAt || new Date().toISOString(),
       };
       const row = await saveOrderStatus(completionOrder, '已完成', patch);
       updateLocalOrder(completionOrder._customerId, row);
       setCompletionOrder(null);
       setCompletionOperator('');
       setCompletionNote('');
+      setCompletionPhoto(null);
     } catch (err) {
       Alert.alert('更新失败', err.message || '无法连接服务器');
     } finally {
       setSavingOrderId('');
     }
-  }, [completionNote, completionOperator, completionOrder, saveOrderStatus, updateLocalOrder]);
+  }, [completionNote, completionOperator, completionOrder, completionPhoto, currentUser?.name, saveOrderStatus, updateLocalOrder]);
 
   const openDetail = useCallback((order) => {
     setSelectedOrder(order);
   }, []);
+
+  if (authLoading) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <StatusBar style="light" />
+        <LoadingState label="正在读取手机账号..." />
+      </SafeAreaView>
+    );
+  }
+
+  if (!currentUser) {
+    return (
+      <RegisterScreen
+        apiDraft={apiDraft}
+        name={registerName}
+        phone={registerPhone}
+        saving={registering}
+        onChangeApi={setApiDraft}
+        onChangeName={setRegisterName}
+        onChangePhone={setRegisterPhone}
+        onSubmit={registerMobileUser}
+      />
+    );
+  }
 
   const listHeader = (
     <View>
@@ -355,15 +586,25 @@ export default function App() {
         <View>
           <Text style={styles.eyebrow}>FOAM FACTORY</Text>
           <Text style={styles.title}>手机排产</Text>
+          <Text style={styles.userBadge}>{currentUser?.name || '未注册'} · {roleLabel(currentRole)}</Text>
         </View>
         <Pressable style={styles.settingsButton} onPress={() => setShowSettings(current => !current)}>
-          <Text style={styles.settingsButtonText}>接口</Text>
+          <Text style={styles.settingsButtonText}>设置</Text>
         </Pressable>
       </View>
 
       {showSettings ? (
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={styles.settingsPanel}>
+            <View style={styles.accountPanel}>
+              <View>
+                <Text style={styles.panelLabel}>当前账号</Text>
+                <Text style={styles.accountName}>{currentUser?.name || '-'} · {roleLabel(currentRole)}</Text>
+              </View>
+              <Pressable style={styles.secondaryAction} onPress={logoutMobileUser}>
+                <Text style={styles.secondaryActionText}>退出</Text>
+              </Pressable>
+            </View>
             <Text style={styles.panelLabel}>后端 API 地址</Text>
             <TextInput
               style={styles.apiInput}
@@ -385,19 +626,48 @@ export default function App() {
             </View>
             <View style={styles.displayFieldPanel}>
               <View style={styles.displayFieldHead}>
-                <Text style={styles.panelLabel}>订单卡片显示</Text>
-                <Pressable onPress={() => setMobileDisplayFields(defaultMobileDisplayFields)}>
-                  <Text style={styles.resetFieldsText}>恢复默认</Text>
+                <Text style={styles.panelLabel}>订单卡片显示字段</Text>
+                <Pressable onPress={() => setMobileCardDisplayFields([])}>
+                  <Text style={styles.resetFieldsText}>清空</Text>
                 </Pressable>
               </View>
               <View style={styles.displayFieldChips}>
                 {mobileDisplayFieldOptions.map(option => {
-                  const active = mobileDisplayFields.includes(option.field);
+                  const active = mobileCardDisplayFields.includes(option.field);
                   return (
                     <Pressable
                       key={option.field}
                       style={[styles.displayFieldChip, active && styles.displayFieldChipActive]}
-                      onPress={() => toggleMobileDisplayField(option.field)}
+                      onPress={() => toggleMobileCardDisplayField(option.field)}
+                    >
+                      <Text style={[styles.displayFieldChipText, active && styles.displayFieldChipTextActive]}>
+                        {option.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+            <View style={styles.displayFieldPanel}>
+              <View style={styles.displayFieldHead}>
+                <Text style={styles.panelLabel}>详情显示字段</Text>
+                <View style={styles.displayFieldActions}>
+                  <Pressable onPress={showAllDetailFields}>
+                    <Text style={styles.resetFieldsText}>显示全部</Text>
+                  </Pressable>
+                  <Pressable onPress={clearDetailFields}>
+                    <Text style={styles.resetFieldsText}>清空</Text>
+                  </Pressable>
+                </View>
+              </View>
+              <View style={styles.displayFieldChips}>
+                {mobileDisplayFieldOptions.map(option => {
+                  const active = detailUsesAllFields || detailDisplayFields.includes(option.field);
+                  return (
+                    <Pressable
+                      key={option.field}
+                      style={[styles.displayFieldChip, active && styles.displayFieldChipActive]}
+                      onPress={() => toggleDetailDisplayField(option.field)}
                     >
                       <Text style={[styles.displayFieldChipText, active && styles.displayFieldChipTextActive]}>
                         {option.label}
@@ -413,15 +683,21 @@ export default function App() {
 
       <View style={styles.statsRow}>
         <StatCard label="已排产" value={stats.open} tone="blue" />
-        <StatCard label="已完成" value={stats.completed} tone="green" />
-        <StatCard label="订单数" value={stats.all} tone="slate" />
+        {isAdmin ? (
+          <>
+            <StatCard label="已完成" value={stats.completed} tone="green" />
+            <StatCard label="订单数" value={stats.all} tone="slate" />
+          </>
+        ) : null}
       </View>
 
-      <View style={styles.segmented}>
-        <SegmentButton label="排产" active={activeView === 'schedule'} onPress={() => setActiveView('schedule')} />
-        <SegmentButton label="订单" active={activeView === 'orders'} onPress={() => setActiveView('orders')} />
-        <SegmentButton label="完成" active={activeView === 'completed'} onPress={() => setActiveView('completed')} />
-      </View>
+      {isAdmin ? (
+        <View style={styles.segmented}>
+          <SegmentButton label="排产" active={activeView === 'schedule'} onPress={() => setActiveView('schedule')} />
+          <SegmentButton label="订单" active={activeView === 'orders'} onPress={() => setActiveView('orders')} />
+          <SegmentButton label="完成" active={activeView === 'completed'} onPress={() => setActiveView('completed')} />
+        </View>
+      ) : null}
 
       <TextInput
         style={styles.searchInput}
@@ -475,7 +751,7 @@ export default function App() {
           <OrderCard
             order={item}
             saving={savingOrderId === item.id}
-            displayFields={selectedMobileDisplayFields}
+            displayFields={selectedMobileCardDisplayFields}
             onOpen={openDetail}
             onComplete={markCompleted}
           />
@@ -491,6 +767,12 @@ export default function App() {
       <OrderDetailModal
         order={selectedOrder}
         saving={selectedOrder ? savingOrderId === selectedOrder.id : false}
+        fieldOptions={mobileDisplayFieldOptions}
+        detailUsesAllFields={detailUsesAllFields}
+        detailDisplayFields={detailDisplayFields}
+        onToggleDetailField={toggleDetailDisplayField}
+        onShowAllDetailFields={showAllDetailFields}
+        onClearDetailFields={clearDetailFields}
         onClose={() => setSelectedOrder(null)}
         onComplete={markCompleted}
       />
@@ -499,12 +781,80 @@ export default function App() {
         order={completionOrder}
         operator={completionOperator}
         note={completionNote}
+        photo={completionPhoto}
         saving={completionOrder ? savingOrderId === completionOrder.id : false}
         onChangeOperator={setCompletionOperator}
         onChangeNote={setCompletionNote}
+        onTakePhoto={takeCompletionPhoto}
+        onClearPhoto={() => setCompletionPhoto(null)}
         onCancel={closeCompletionModal}
         onSubmit={submitCompletion}
       />
+    </SafeAreaView>
+  );
+}
+
+function RegisterScreen({
+  apiDraft,
+  name,
+  phone,
+  saving,
+  onChangeApi,
+  onChangeName,
+  onChangePhone,
+  onSubmit,
+}) {
+  return (
+    <SafeAreaView style={styles.safeArea}>
+      <StatusBar style="light" />
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.registerWrap}>
+        <View style={styles.registerCard}>
+          <Text style={styles.eyebrow}>MOBILE ACCOUNT</Text>
+          <Text style={styles.registerTitle}>手机注册</Text>
+          <Text style={styles.registerHint}>注册后由电脑端在系统设置里分配管理员或员工角色。</Text>
+
+          <View style={styles.completionField}>
+            <Text style={styles.completionLabel}>后端 API 地址</Text>
+            <TextInput
+              style={styles.completionInput}
+              value={apiDraft}
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="url"
+              onChangeText={onChangeApi}
+              placeholder="http://电脑IP:3001/api"
+              placeholderTextColor="#7a8495"
+            />
+          </View>
+
+          <View style={styles.completionField}>
+            <Text style={styles.completionLabel}>姓名</Text>
+            <TextInput
+              style={styles.completionInput}
+              value={name}
+              onChangeText={onChangeName}
+              placeholder="填写员工姓名"
+              placeholderTextColor="#7a8495"
+            />
+          </View>
+
+          <View style={styles.completionField}>
+            <Text style={styles.completionLabel}>手机号</Text>
+            <TextInput
+              style={styles.completionInput}
+              value={phone}
+              onChangeText={onChangePhone}
+              keyboardType="phone-pad"
+              placeholder="用于识别账号"
+              placeholderTextColor="#7a8495"
+            />
+          </View>
+
+          <Pressable style={[styles.registerButton, saving && styles.doneButtonDisabled]} onPress={onSubmit} disabled={saving}>
+            <Text style={styles.doneButtonText}>{saving ? '注册中' : '注册并进入'}</Text>
+          </Pressable>
+        </View>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
@@ -529,18 +879,10 @@ function SegmentButton({ label, active, onPress }) {
 function OrderCard({ order, saving, displayFields, onOpen, onComplete }) {
   const status = normalizeStatus(order.status);
   const canComplete = status !== '已完成';
-  const visibleFields = displayFields || [];
+  const visibleFields = getOrderDisplayFields(order, displayFields || []);
 
   return (
     <Pressable style={styles.orderCard} onPress={() => onOpen(order)}>
-      <View style={styles.cardTopRow}>
-        <View style={styles.cardTitleWrap}>
-          <Text style={styles.orderNo}>{fieldText(order.orderNo || order.id)}</Text>
-          <Text style={styles.customerName}>{order._customerName}</Text>
-        </View>
-        <StatusChip status={status} />
-      </View>
-
       {visibleFields.length > 0 ? (
         <View style={styles.metaGrid}>
           {visibleFields.map(fieldConfig => (
@@ -551,7 +893,9 @@ function OrderCard({ order, saving, displayFields, onOpen, onComplete }) {
             />
           ))}
         </View>
-      ) : null}
+      ) : (
+        <Text style={styles.cardEmptyHint}>未选择卡片显示字段</Text>
+      )}
 
       <View style={styles.cardActions}>
         <Pressable style={styles.lightButton} onPress={() => onOpen(order)}>
@@ -610,7 +954,29 @@ function StatusChip({ status }) {
   );
 }
 
-function OrderDetailModal({ order, saving, onClose, onComplete }) {
+function OrderDetailModal({
+  order,
+  saving,
+  fieldOptions,
+  detailUsesAllFields,
+  detailDisplayFields,
+  onToggleDetailField,
+  onShowAllDetailFields,
+  onClearDetailFields,
+  onClose,
+  onComplete,
+}) {
+  const orderFieldOptions = useMemo(
+    () => getOrderDisplayFields(order, fieldOptions),
+    [fieldOptions, order],
+  );
+  const visibleDetailFields = useMemo(() => {
+    if (!order) return [];
+    if (detailUsesAllFields) return orderFieldOptions;
+    const optionByField = new Map(orderFieldOptions.map(option => [option.field, option]));
+    return detailDisplayFields.map(field => optionByField.get(field)).filter(Boolean);
+  }, [detailDisplayFields, detailUsesAllFields, order, orderFieldOptions]);
+
   return (
     <Modal visible={Boolean(order)} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
       <SafeAreaView style={styles.modalSafeArea}>
@@ -619,7 +985,7 @@ function OrderDetailModal({ order, saving, onClose, onComplete }) {
             <View style={styles.modalHeader}>
               <View>
                 <Text style={styles.eyebrow}>ORDER DETAIL</Text>
-                <Text style={styles.modalTitle}>{fieldText(order.orderNo || order.id)}</Text>
+                <Text style={styles.modalTitle}>订单详情</Text>
               </View>
               <Pressable style={styles.closeButton} onPress={onClose}>
                 <Text style={styles.closeButtonText}>关闭</Text>
@@ -627,17 +993,51 @@ function OrderDetailModal({ order, saving, onClose, onComplete }) {
             </View>
 
             <ScrollView contentContainerStyle={styles.detailList}>
-              <DetailRow label="客户" value={order._customerName} />
-              <DetailRow label="产品" value={fieldText(order.product)} />
-              <DetailRow label="数量" value={formatNumber(order.quantity)} />
-              <DetailRow label="金额" value={formatNumber(order.amount)} />
-              <DetailRow label="订单日期" value={fieldText(order.date)} />
-              <DetailRow label="交期" value={fieldText(order.dueDate)} />
-              <DetailRow label="进度" value={normalizeStatus(order.status)} />
-              <DetailRow label="完成时间" value={formatDateTime(order[completionTimeField])} />
-              <DetailRow label="完成人" value={fieldText(order[completionOperatorField])} />
-              <DetailRow label="完成备注" value={fieldText(order[completionNoteField])} multiline />
-              <DetailRow label="跟进记录" value={fieldText(order.followUp)} multiline />
+              <View style={styles.detailFieldPanel}>
+                <View style={styles.detailFieldHead}>
+                  <Text style={styles.panelLabel}>详情字段显示</Text>
+                  <View style={styles.displayFieldActions}>
+                    <Pressable onPress={onShowAllDetailFields}>
+                      <Text style={styles.resetFieldsText}>显示全部</Text>
+                    </Pressable>
+                    <Pressable onPress={onClearDetailFields}>
+                      <Text style={styles.resetFieldsText}>清空</Text>
+                    </Pressable>
+                  </View>
+                </View>
+                <View style={styles.displayFieldChips}>
+                  {orderFieldOptions.map(option => {
+                    const active = detailUsesAllFields || detailDisplayFields.includes(option.field);
+                    return (
+                      <Pressable
+                        key={option.field}
+                        style={[styles.displayFieldChip, active && styles.displayFieldChipActive]}
+                        onPress={() => onToggleDetailField(option.field)}
+                      >
+                        <Text style={[styles.displayFieldChipText, active && styles.displayFieldChipTextActive]}>
+                          {option.label}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </View>
+
+              {visibleDetailFields.length ? (
+                visibleDetailFields.map(fieldConfig => (
+                  <DetailRow
+                    key={fieldConfig.field}
+                    label={fieldConfig.label}
+                    value={formatMobileFieldValue(order, fieldConfig)}
+                    multiline={String(order?.[fieldConfig.field] ?? '').length > 28}
+                  />
+                ))
+              ) : (
+                <View style={styles.detailRow}>
+                  <Text style={styles.detailLabel}>未选择详情显示字段</Text>
+                  <Text style={styles.detailValue}>请在上方选择需要显示的订单数据。</Text>
+                </View>
+              )}
             </ScrollView>
 
             <Pressable
@@ -658,9 +1058,12 @@ function CompletionModal({
   order,
   operator,
   note,
+  photo,
   saving,
   onChangeOperator,
   onChangeNote,
+  onTakePhoto,
+  onClearPhoto,
   onCancel,
   onSubmit,
 }) {
@@ -696,11 +1099,28 @@ function CompletionModal({
               />
             </View>
 
+            <View style={styles.completionField}>
+              <Text style={styles.completionLabel}>完成照片</Text>
+              {photo?.uri ? (
+                <View style={styles.photoPreviewWrap}>
+                  <Image source={{ uri: photo.uri }} style={styles.photoPreview} />
+                  <Pressable style={styles.lightButton} onPress={onClearPhoto} disabled={saving}>
+                    <Text style={styles.lightButtonText}>删除照片</Text>
+                  </Pressable>
+                </View>
+              ) : (
+                <Text style={styles.photoHint}>必须拍照上传后才能确认完成。</Text>
+              )}
+              <Pressable style={styles.photoButton} onPress={onTakePhoto} disabled={saving}>
+                <Text style={styles.photoButtonText}>{photo?.uri ? '重新拍照' : '拍照上传'}</Text>
+              </Pressable>
+            </View>
+
             <View style={styles.completionActions}>
               <Pressable style={styles.lightButton} onPress={onCancel} disabled={saving}>
                 <Text style={styles.lightButtonText}>取消</Text>
               </Pressable>
-              <Pressable style={[styles.doneButton, saving && styles.doneButtonDisabled]} onPress={onSubmit} disabled={saving}>
+              <Pressable style={[styles.doneButton, (saving || !photo?.uri) && styles.doneButtonDisabled]} onPress={onSubmit} disabled={saving || !photo?.uri}>
                 <Text style={styles.doneButtonText}>{saving ? '保存中' : '确认完成'}</Text>
               </Pressable>
             </View>
@@ -720,11 +1140,11 @@ function DetailRow({ label, value, multiline = false }) {
   );
 }
 
-function LoadingState() {
+function LoadingState({ label = '正在加载订单...' }) {
   return (
     <View style={styles.stateBox}>
       <ActivityIndicator color="#42e8ff" />
-      <Text style={styles.stateText}>正在加载订单...</Text>
+      <Text style={styles.stateText}>{label}</Text>
     </View>
   );
 }
@@ -765,6 +1185,12 @@ const styles = StyleSheet.create({
     fontSize: 28,
     fontWeight: '800',
   },
+  userBadge: {
+    marginTop: 6,
+    color: '#9eb3c8',
+    fontSize: 12,
+    fontWeight: '700',
+  },
   settingsButton: {
     height: 36,
     justifyContent: 'center',
@@ -786,6 +1212,24 @@ const styles = StyleSheet.create({
     backgroundColor: '#101827',
     borderWidth: 1,
     borderColor: '#243755',
+  },
+  accountPanel: {
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    borderRadius: 8,
+    padding: 10,
+    backgroundColor: '#081223',
+    borderWidth: 1,
+    borderColor: '#243755',
+  },
+  accountName: {
+    marginTop: 4,
+    color: '#f4fbff',
+    fontSize: 14,
+    fontWeight: '900',
   },
   panelLabel: {
     color: '#9eb3c8',
@@ -817,6 +1261,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+  },
+  displayFieldActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
   },
   resetFieldsText: {
     color: '#42e8ff',
@@ -871,6 +1320,37 @@ const styles = StyleSheet.create({
   secondaryActionText: {
     color: '#d9f4ff',
     fontWeight: '700',
+  },
+  registerWrap: {
+    flex: 1,
+    justifyContent: 'center',
+    padding: 18,
+  },
+  registerCard: {
+    borderRadius: 8,
+    padding: 16,
+    backgroundColor: '#101827',
+    borderWidth: 1,
+    borderColor: '#2a3d5c',
+  },
+  registerTitle: {
+    marginTop: 6,
+    color: '#f4fbff',
+    fontSize: 24,
+    fontWeight: '900',
+  },
+  registerHint: {
+    marginTop: 8,
+    color: '#9eb3c8',
+    lineHeight: 20,
+  },
+  registerButton: {
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 8,
+    marginTop: 16,
+    backgroundColor: '#2ed47a',
   },
   statsRow: {
     flexDirection: 'row',
@@ -994,6 +1474,17 @@ const styles = StyleSheet.create({
     backgroundColor: '#101827',
     borderWidth: 1,
     borderColor: '#22334d',
+  },
+  cardEmptyHint: {
+    minHeight: 46,
+    borderRadius: 8,
+    padding: 12,
+    color: '#8fa4ba',
+    backgroundColor: '#0b1424',
+    borderWidth: 1,
+    borderColor: '#1c2d46',
+    fontSize: 13,
+    fontWeight: '700',
   },
   cardTopRow: {
     flexDirection: 'row',
@@ -1178,6 +1669,20 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingBottom: 18,
   },
+  detailFieldPanel: {
+    gap: 10,
+    borderRadius: 8,
+    padding: 12,
+    backgroundColor: '#101827',
+    borderWidth: 1,
+    borderColor: '#22334d',
+  },
+  detailFieldHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
   detailRow: {
     borderRadius: 8,
     padding: 12,
@@ -1255,6 +1760,35 @@ const styles = StyleSheet.create({
     minHeight: 86,
     paddingTop: 10,
     textAlignVertical: 'top',
+  },
+  photoHint: {
+    borderRadius: 8,
+    padding: 12,
+    color: '#ffd6a3',
+    backgroundColor: '#332512',
+    borderWidth: 1,
+    borderColor: '#8a5a18',
+    fontWeight: '700',
+  },
+  photoButton: {
+    minHeight: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 8,
+    backgroundColor: '#42e8ff',
+  },
+  photoButtonText: {
+    color: '#05101d',
+    fontWeight: '900',
+  },
+  photoPreviewWrap: {
+    gap: 8,
+  },
+  photoPreview: {
+    width: '100%',
+    height: 180,
+    borderRadius: 8,
+    backgroundColor: '#081223',
   },
   completionActions: {
     flexDirection: 'row',
