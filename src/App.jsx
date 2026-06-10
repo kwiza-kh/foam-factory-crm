@@ -288,6 +288,37 @@ function formatNumberForDisplay(value, column = {}) {
   return isAmountColumn(column) ? normalized.toFixed(2) : normalized.toString();
 }
 
+function formatDateTimeForDisplay(value) {
+  if (value === "" || value == null) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
+
+function getImageSource(value) {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  if (typeof value !== "object") return "";
+  return value.dataUrl || value.url || value.src || "";
+}
+
+function formatGridValueForDisplay(value, column = {}, t = defaultTranslator) {
+  if (column.type === "datetime") return formatDateTimeForDisplay(value);
+  if (column.type === "image") return getImageSource(value) ? t("有照片") : "";
+  if (value && typeof value === "object") {
+    if (getImageSource(value)) return t("有照片");
+    return JSON.stringify(value);
+  }
+  return value ?? "";
+}
+
 const formulaReferenceAliases = {
   采购数量: "quantity",
   订单数量: "quantity",
@@ -2903,6 +2934,7 @@ function BusinessGrid({
   const [contextMenu, setContextMenu] = useState(null);
   const [insertRowCounts, setInsertRowCounts] = useState({ above: "", below: "" });
   const [expandedDeliveryGroups, setExpandedDeliveryGroups] = useState(() => new Set());
+  const [photoPreview, setPhotoPreview] = useState(null);
   const deferredQuickFilter = useDeferredValue(quickFilter);
   const localeText = useMemo(() => getGridLocaleText(language), [language]);
   const config = tableConfigs[viewKey];
@@ -4531,6 +4563,29 @@ function BusinessGrid({
     setFilterPopup(null);
   }, []);
 
+  const openImagePreview = useCallback((src, title) => {
+    if (!src) return;
+    setPhotoPreview({
+      src,
+      title: title || t("照片证明"),
+    });
+  }, [t]);
+
+  const closeImagePreview = useCallback(() => {
+    setPhotoPreview(null);
+  }, []);
+
+  useEffect(() => {
+    if (!photoPreview) return undefined;
+
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") closeImagePreview();
+    };
+
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [closeImagePreview, photoPreview]);
+
   const cloneColumnFilters = useCallback((filters) => (
     Object.fromEntries(
       Object.entries(filters).map(([field, values]) => [field, new Set(values)]),
@@ -4595,6 +4650,7 @@ function BusinessGrid({
     language,
     t,
     openColumnFilter,
+    openImagePreview,
     activeFilterFields: new Set(Object.keys(columnFilters)),
     selectionRangeRef,
     selectableColumnFieldsRef,
@@ -4607,6 +4663,7 @@ function BusinessGrid({
     language,
     openHeaderContextMenu,
     openColumnFilter,
+    openImagePreview,
     selectAllVisibleRows,
     startColumnSelection,
     t,
@@ -4777,6 +4834,34 @@ function BusinessGrid({
           getRowId={getGridRowId}
         />
       </div>
+      {photoPreview && (
+        <div
+          className="photo-preview-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-label={photoPreview.title}
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeImagePreview();
+          }}
+        >
+          <div className="photo-preview-card">
+            <div className="photo-preview-head">
+              <strong>{photoPreview.title}</strong>
+              <button
+                className="photo-preview-close"
+                type="button"
+                onClick={closeImagePreview}
+                title={t("关闭")}
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="photo-preview-body">
+              <img src={photoPreview.src} alt={photoPreview.title} />
+            </div>
+          </div>
+        </div>
+      )}
       {contextMenu && (
         <div
           className="grid-context-menu"
@@ -5049,11 +5134,13 @@ const selectionCellClassRules = {
 
 function toGridColumn(column, t = defaultTranslator, translateHeader = true) {
   const hasFormula = Boolean(normalizeFormulaInput(column.formula));
+  const isEditable = column.editable !== false;
   const cellClasses = [
     column.required ? "required-cell" : null,
     (column.type === "number" || hasFormula) ? "number-cell" : null,
     hasFormula ? "formula-cell" : null,
     column.field === "status" ? "status-cell" : null,
+    column.type === "image" ? "image-cell" : null,
   ].filter(Boolean);
 
   const gridColumn = {
@@ -5062,7 +5149,7 @@ function toGridColumn(column, t = defaultTranslator, translateHeader = true) {
     width: column.width,
     flex: column.flex,
     minWidth: column.minWidth,
-    editable: (params) => !hasFormula && !params.node?.rowPinned,
+    editable: (params) => isEditable && !hasFormula && !params.node?.rowPinned,
     filter: false,
     headerComponent: ColumnHeader,
     headerTooltip: hasFormula ? column.formula : undefined,
@@ -5077,6 +5164,38 @@ function toGridColumn(column, t = defaultTranslator, translateHeader = true) {
 
   if (column.type === "date") {
     gridColumn.cellEditor = "agDateStringCellEditor";
+  }
+
+  if (column.type === "datetime") {
+    gridColumn.valueFormatter = (params) => formatDateTimeForDisplay(params.value);
+  }
+
+  if (column.type === "image") {
+    gridColumn.editable = false;
+    gridColumn.cellRenderer = (params) => {
+      const src = getImageSource(params.value);
+      if (!src) {
+        return <span className="completion-photo-empty">{t("暂无照片")}</span>;
+      }
+
+      const openPhoto = (event) => {
+        event.stopPropagation();
+        params.context?.openImagePreview?.(src, t("照片证明"));
+      };
+
+      return (
+        <button
+          className="completion-photo-button"
+          type="button"
+          onMouseDown={(event) => event.stopPropagation()}
+          onClick={openPhoto}
+          title={t("查看照片")}
+        >
+          <img src={src} alt={t("照片证明")} />
+          <span>{t("查看照片")}</span>
+        </button>
+      );
+    };
   }
 
   if (column.type === "select") {
@@ -5259,7 +5378,7 @@ function ColumnValueFilter({ popup, rows, appliedValues, onApply, onClear, onClo
 }
 
 function filterValue(value) {
-  const raw = value == null || value === "" ? "" : String(value);
+  const raw = value == null || value === "" ? "" : String(formatGridValueForDisplay(value, {}));
   return {
     key: raw,
     label: raw || "(空白)",

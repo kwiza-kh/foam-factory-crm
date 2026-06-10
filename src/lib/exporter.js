@@ -3,7 +3,7 @@ export async function exportTableToExcel(customer, tableKey, columns) {
   const rows = customer[tableKey] || [];
   const cols = columns.filter(c => c.field !== '__actions' && c.field !== 'id');
   const headers = cols.map(c => c.headerName);
-  const data = rows.map(row => cols.map(col => row[col.field] ?? ''));
+  const data = rows.map(row => cols.map(col => formatExportCell(row[col.field], col)));
 
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet(tableKey);
@@ -26,4 +26,38 @@ export async function exportTableToExcel(customer, tableKey, columns) {
   a.download = `${customer.name}_${tableKey}_${date}.xlsx`;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+function formatExportCell(value, column = {}) {
+  if (value == null || value === '') return '';
+
+  if (column.type === 'datetime') {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return String(value);
+    return date.toLocaleString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+  }
+
+  if (column.type === 'image') {
+    return getExportImageSource(value) ? '有照片' : '';
+  }
+
+  if (typeof value === 'object') {
+    return getExportImageSource(value) ? '有照片' : JSON.stringify(value);
+  }
+
+  return value;
+}
+
+function getExportImageSource(value) {
+  if (!value) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value !== 'object') return '';
+  return value.dataUrl || value.url || value.src || '';
 }

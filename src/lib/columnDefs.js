@@ -8,6 +8,9 @@ const orderDefaultColumns = [
     type: "select",
     options: statusOptions,
   },
+  { field: "completionTime", headerName: "完成时间", width: 170, type: "datetime", editable: false },
+  { field: "completionOperator", headerName: "员工姓名", width: 120, editable: false },
+  { field: "completionPhoto", headerName: "照片证明", width: 130, type: "image", editable: false },
 ];
 const deliveryQuantityField = "deliveryQuantity";
 const orderDeliveredQuantityField = "deliveredQuantity";
