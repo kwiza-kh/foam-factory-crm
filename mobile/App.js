@@ -29,6 +29,7 @@ const completionPhotoField = 'completionPhoto';
 const completionPhotoAtField = 'completionPhotoAt';
 const mobileUserStorageKey = 'foam-crm-mobile-user';
 const mobileApiStorageKey = 'foam-crm-mobile-api-url';
+const mobileOfflineQueueStorageKey = 'foam-crm-mobile-offline-queue';
 const defaultMobileCardDisplayFields = [];
 const internalOrderFields = new Set(['id', completionPhotoField]);
 const baseMobileOrderFields = [
@@ -202,6 +203,63 @@ function flattenOrders(customers = []) {
   );
 }
 
+function flattenDeliveries(customers = []) {
+  return customers.flatMap(customer =>
+    (customer.deliveries || [])
+      .filter(delivery => delivery?._finalDelivery !== false)
+      .map((delivery, deliveryIndex) => ({
+        ...delivery,
+        _customerId: customer.id,
+        _customerName: customer.name,
+        _deliveryIndex: deliveryIndex,
+      })),
+  );
+}
+
+function flattenCostEntries(customers = []) {
+  return customers.flatMap(customer =>
+    (customer.costEntries || []).map((entry, entryIndex) => ({
+      ...entry,
+      _customerId: customer.id,
+      _customerName: customer.name,
+      _entryIndex: entryIndex,
+    })),
+  );
+}
+
+function isDeliverySigned(delivery = {}) {
+  return delivery.status === '已送' || Boolean(delivery.signedAt);
+}
+
+function makeQueueId(type) {
+  return `${type}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function summarizeCustomers(customers = []) {
+  const allOrders = flattenOrders(customers);
+  const allCosts = flattenCostEntries(customers);
+  const pendingCosts = allCosts.filter(entry => (entry.approvalStatus || '待审核') === '待审核');
+  const approvedCosts = allCosts.filter(entry => entry.approvalStatus === '已通过');
+  const deliveries = flattenDeliveries(customers);
+  return {
+    orderCount: allOrders.length,
+    scheduled: allOrders.filter(isScheduledProductionOrder).length,
+    completed: allOrders.filter(order => normalizeStatus(order.status) === '已完成').length,
+    overdue: allOrders.filter(order => {
+      if (!isScheduledProductionOrder(order) || !order.dueDate) return false;
+      return new Date(order.dueDate).setHours(0, 0, 0, 0) < new Date().setHours(0, 0, 0, 0);
+    }).length,
+    deliveryPending: deliveries.filter(delivery => !isDeliverySigned(delivery)).length,
+    pendingCostCount: pendingCosts.length,
+    pendingCostAmount: pendingCosts.reduce((sum, entry) => sum + parseMobileNumber(entry.amount), 0),
+    approvedCostAmount: approvedCosts.reduce((sum, entry) => sum + parseMobileNumber(entry.amount), 0),
+    orderAmount: allOrders.reduce((sum, order) => sum + parseMobileNumber(order.amount), 0),
+    paidAmount: allOrders
+      .filter(order => normalizeStatus(order.status) === '已付款')
+      .reduce((sum, order) => sum + parseMobileNumber(order.amount), 0),
+  };
+}
+
 function orderSearchText(order) {
   return [
     order.orderNo,
@@ -225,7 +283,7 @@ export default function App() {
   const [registering, setRegistering] = useState(false);
   const [customers, setCustomers] = useState([]);
   const [selectedCustomerId, setSelectedCustomerId] = useState('all');
-  const [activeView, setActiveView] = useState('schedule');
+  const [activeView, setActiveView] = useState('workbench');
   const [query, setQuery] = useState('');
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -246,6 +304,14 @@ export default function App() {
   const [costNote, setCostNote] = useState('');
   const [costPhoto, setCostPhoto] = useState(null);
   const [savingCost, setSavingCost] = useState(false);
+  const [offlineQueue, setOfflineQueue] = useState([]);
+  const [syncingQueue, setSyncingQueue] = useState(false);
+  const [deliverySign, setDeliverySign] = useState(null);
+  const [deliverySigner, setDeliverySigner] = useState('');
+  const [deliverySignNote, setDeliverySignNote] = useState('');
+  const [deliverySignPhoto, setDeliverySignPhoto] = useState(null);
+  const [savingDeliveryId, setSavingDeliveryId] = useState('');
+  const [approvalNoteByEntry, setApprovalNoteByEntry] = useState({});
 
   const request = useCallback(async (path, options = {}) => {
     const baseUrl = apiBaseUrl.replace(/\/$/, '');
@@ -305,9 +371,10 @@ export default function App() {
     let mounted = true;
     const restoreSession = async () => {
       try {
-        const [[, savedApiUrl], [, savedUser]] = await AsyncStorage.multiGet([
+        const [[, savedApiUrl], [, savedUser], [, savedQueue]] = await AsyncStorage.multiGet([
           mobileApiStorageKey,
           mobileUserStorageKey,
+          mobileOfflineQueueStorageKey,
         ]);
         if (!mounted) return;
         if (savedApiUrl) {
@@ -316,6 +383,10 @@ export default function App() {
         }
         if (savedUser) {
           setCurrentUser(JSON.parse(savedUser));
+        }
+        if (savedQueue) {
+          const parsedQueue = JSON.parse(savedQueue);
+          setOfflineQueue(Array.isArray(parsedQueue) ? parsedQueue : []);
         }
       } catch {
         await AsyncStorage.removeItem(mobileUserStorageKey);
@@ -336,10 +407,28 @@ export default function App() {
     loadCustomers();
   }, [authLoading, currentUser?.token, loadCustomers]);
 
+  const persistOfflineQueue = useCallback(async (nextQueue) => {
+    setOfflineQueue(nextQueue);
+    await AsyncStorage.setItem(mobileOfflineQueueStorageKey, JSON.stringify(nextQueue));
+  }, []);
+
+  const enqueueOfflineAction = useCallback(async (action) => {
+    const item = {
+      id: makeQueueId(action.type || 'offline'),
+      createdAt: new Date().toISOString(),
+      ...action,
+    };
+    await persistOfflineQueue([...offlineQueue, item]);
+    return item;
+  }, [offlineQueue, persistOfflineQueue]);
+
   const allOrders = useMemo(() => flattenOrders(customers), [customers]);
+  const allDeliveries = useMemo(() => flattenDeliveries(customers), [customers]);
+  const allCostEntries = useMemo(() => flattenCostEntries(customers), [customers]);
   const currentRole = normalizeUserRole(currentUser?.role);
   const isRoleAssigned = isAssignedUserRole(currentRole);
   const isAdmin = currentRole === 'admin';
+  const dashboardSummary = useMemo(() => summarizeCustomers(customers), [customers]);
   const selectedCostCustomer = useMemo(() => (
     customers.find(customer => customer.id === costCustomerId)
     || (selectedCustomerId !== 'all' ? customers.find(customer => customer.id === selectedCustomerId) : null)
@@ -360,6 +449,41 @@ export default function App() {
       .sort((a, b) => parseDateValue(b.enteredAt || b.date) - parseDateValue(a.enteredAt || a.date))
       .slice(0, 12)
   ), [selectedCostCustomer?.costEntries]);
+  const pendingCostEntries = useMemo(() => (
+    allCostEntries
+      .filter(entry => (entry.approvalStatus || '待审核') === '待审核')
+      .sort((a, b) => parseDateValue(a.enteredAt || a.date) - parseDateValue(b.enteredAt || b.date))
+  ), [allCostEntries]);
+  const pendingDeliveries = useMemo(() => (
+    allDeliveries
+      .filter(delivery => !isDeliverySigned(delivery))
+      .sort((a, b) => parseDateValue(a.date) - parseDateValue(b.date) || a._deliveryIndex - b._deliveryIndex)
+  ), [allDeliveries]);
+  const reminders = useMemo(() => {
+    const todayTs = new Date().setHours(0, 0, 0, 0);
+    const threeDaysTs = todayTs + 3 * 86400000;
+    const list = [];
+    for (const order of allOrders) {
+      if (!isScheduledProductionOrder(order)) continue;
+      if (!order.dueDate) continue;
+      const dueTs = new Date(order.dueDate).setHours(0, 0, 0, 0);
+      if (dueTs < todayTs) {
+        list.push({ id: `overdue-${order._customerId}-${order.id}`, tone: 'danger', title: '订单已逾期', text: `${order._customerName} · ${order.orderNo || order.product}` });
+      } else if (dueTs <= threeDaysTs) {
+        list.push({ id: `due-${order._customerId}-${order.id}`, tone: 'warning', title: '订单即将到期', text: `${order._customerName} · ${order.orderNo || order.product} · ${order.dueDate}` });
+      }
+    }
+    if (offlineQueue.length) {
+      list.unshift({ id: 'offline-queue', tone: 'warning', title: '有离线记录待同步', text: `${offlineQueue.length} 条记录会在网络恢复后同步` });
+    }
+    if (isAdmin && pendingCostEntries.length) {
+      list.unshift({ id: 'cost-approval', tone: 'info', title: '成本待审批', text: `${pendingCostEntries.length} 条成本记录等待审批` });
+    }
+    if (pendingDeliveries.length) {
+      list.push({ id: 'delivery-sign', tone: 'info', title: '送货待签收', text: `${pendingDeliveries.length} 张送货单未签收` });
+    }
+    return list.slice(0, 8);
+  }, [allOrders, isAdmin, offlineQueue.length, pendingCostEntries.length, pendingDeliveries.length]);
   const mobileDisplayFieldOptions = useMemo(() => buildMobileOrderDisplayFields(customers), [customers]);
   const selectedMobileCardDisplayFields = useMemo(() => {
     const optionByField = new Map(mobileDisplayFieldOptions.map(option => [option.field, option]));
@@ -391,7 +515,8 @@ export default function App() {
     setDetailDisplayFields([]);
   }, []);
   useEffect(() => {
-    if (!isAdmin && activeView !== 'schedule' && activeView !== 'cost') setActiveView('schedule');
+    const employeeViews = new Set(['workbench', 'alerts', 'schedule', 'delivery', 'cost']);
+    if (!isAdmin && !employeeViews.has(activeView)) setActiveView('workbench');
   }, [activeView, isAdmin]);
   useEffect(() => {
     const preferredCustomerId = selectedCustomerId !== 'all'
@@ -513,7 +638,7 @@ export default function App() {
     setCustomers([]);
     setSelectedOrder(null);
     setCompletionOrder(null);
-    setActiveView('schedule');
+    setActiveView('workbench');
   }, []);
 
   const applyApiUrl = useCallback(() => {
@@ -536,6 +661,29 @@ export default function App() {
       if (!current || current.id !== row.id || current._customerId !== customerId) return current;
       return { ...row, _customerId: customerId, _customerName: current._customerName };
     });
+  }, []);
+
+  const updateLocalDelivery = useCallback((customerId, row) => {
+    setCustomers(current => current.map(customer => (
+      customer.id === customerId
+        ? { ...customer, deliveries: (customer.deliveries || []).map(delivery => delivery.id === row.id ? row : delivery) }
+        : customer
+    )));
+    setDeliverySign(current => {
+      if (!current || current.id !== row.id || current._customerId !== customerId) return current;
+      return { ...row, _customerId: customerId, _customerName: current._customerName };
+    });
+  }, []);
+
+  const updateLocalCostEntry = useCallback((customerId, row) => {
+    setCustomers(current => current.map(customer => (
+      customer.id === customerId
+        ? {
+          ...customer,
+          costEntries: (customer.costEntries || []).map(entry => entry.id === row.id ? row : entry),
+        }
+        : customer
+    )));
   }, []);
 
   const saveOrderStatus = useCallback(async (order, status, patch = {}) => {
@@ -567,6 +715,62 @@ export default function App() {
       return savedRows.find(row => row.id === order.id) || { ...order, ...patch, status };
     }
   }, [customers, request]);
+
+  const syncOfflineQueue = useCallback(async () => {
+    if (syncingQueue || !offlineQueue.length || !currentUser?.token) return;
+    setSyncingQueue(true);
+    let nextQueue = [...offlineQueue];
+    try {
+      for (const item of offlineQueue) {
+        try {
+          if (item.type === 'complete-order') {
+            const result = await request(`/customers/${item.customerId}/orders/${item.orderId}/status`, {
+              method: 'PATCH',
+              body: JSON.stringify({ status: '已完成', ...(item.payload || {}) }),
+            });
+            updateLocalOrder(item.customerId, result.row || { ...(item.payload || {}), id: item.orderId, status: '已完成' });
+          }
+          if (item.type === 'cost-entry') {
+            const result = await request(`/customers/${item.customerId}/cost-entries`, {
+              method: 'POST',
+              body: JSON.stringify(item.payload || {}),
+            });
+            setCustomers(current => current.map(customer => (
+              customer.id === item.customerId
+                ? { ...customer, costEntries: [...(customer.costEntries || []), result.row || item.payload] }
+                : customer
+            )));
+          }
+          if (item.type === 'delivery-sign') {
+            const result = await request(`/customers/${item.customerId}/deliveries/${item.deliveryId}/sign`, {
+              method: 'PATCH',
+              body: JSON.stringify(item.payload || {}),
+            });
+            updateLocalDelivery(item.customerId, result.row || { ...(item.payload || {}), id: item.deliveryId, status: '已送' });
+          }
+          nextQueue = nextQueue.filter(queued => queued.id !== item.id);
+          await persistOfflineQueue(nextQueue);
+        } catch {
+          break;
+        }
+      }
+    } finally {
+      setSyncingQueue(false);
+    }
+  }, [
+    currentUser?.token,
+    offlineQueue,
+    persistOfflineQueue,
+    request,
+    syncingQueue,
+    updateLocalDelivery,
+    updateLocalOrder,
+  ]);
+
+  useEffect(() => {
+    if (!offlineQueue.length || !currentUser?.token || loading) return;
+    syncOfflineQueue();
+  }, [currentUser?.token, loading, offlineQueue.length, syncOfflineQueue]);
 
   const markCompleted = useCallback((order) => {
     setCompletionOrder(order);
@@ -639,11 +843,28 @@ export default function App() {
       setCompletionNote('');
       setCompletionPhoto(null);
     } catch (err) {
-      Alert.alert('更新失败', err.message || '无法连接服务器');
+      const offlineRow = {
+        ...completionOrder,
+        ...patch,
+        status: '已完成',
+        _offlinePending: true,
+      };
+      updateLocalOrder(completionOrder._customerId, offlineRow);
+      await enqueueOfflineAction({
+        type: 'complete-order',
+        customerId: completionOrder._customerId,
+        orderId: completionOrder.id,
+        payload: patch,
+      });
+      setCompletionOrder(null);
+      setCompletionOperator('');
+      setCompletionNote('');
+      setCompletionPhoto(null);
+      Alert.alert('已离线暂存', '网络不可用，订单完成记录会在恢复连接后自动同步。');
     } finally {
       setSavingOrderId('');
     }
-  }, [completionNote, completionOperator, completionOrder, completionPhoto, currentUser?.name, saveOrderStatus, updateLocalOrder]);
+  }, [completionNote, completionOperator, completionOrder, completionPhoto, currentUser?.name, enqueueOfflineAction, saveOrderStatus, updateLocalOrder]);
 
   const takeCostPhoto = useCallback(async () => {
     const permission = await ImagePicker.requestCameraPermissionsAsync();
@@ -672,6 +893,114 @@ export default function App() {
       takenAt: new Date().toISOString(),
     });
   }, []);
+
+  const openDeliverySign = useCallback((delivery) => {
+    setDeliverySign(delivery);
+    setDeliverySigner(delivery.signedBy || '');
+    setDeliverySignNote(delivery.signedNote || '');
+    setDeliverySignPhoto(null);
+  }, []);
+
+  const closeDeliverySign = useCallback(() => {
+    if (savingDeliveryId) return;
+    setDeliverySign(null);
+    setDeliverySigner('');
+    setDeliverySignNote('');
+    setDeliverySignPhoto(null);
+  }, [savingDeliveryId]);
+
+  const takeDeliverySignPhoto = useCallback(async () => {
+    const permission = await ImagePicker.requestCameraPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert('需要相机权限', '请允许相机权限后再拍照上传签收照片。');
+      return;
+    }
+    const result = await ImagePicker.launchCameraAsync({
+      allowsEditing: false,
+      base64: true,
+      quality: 0.55,
+    });
+    if (result.canceled || !result.assets?.length) return;
+    const asset = result.assets[0];
+    if (!asset.base64) {
+      Alert.alert('拍照失败', '没有拿到照片数据，请重新拍照。');
+      return;
+    }
+    setDeliverySignPhoto({
+      uri: asset.uri,
+      dataUrl: `data:image/jpeg;base64,${asset.base64}`,
+      width: asset.width,
+      height: asset.height,
+      takenAt: new Date().toISOString(),
+    });
+  }, []);
+
+  const submitDeliverySign = useCallback(async () => {
+    if (!deliverySign) return;
+    const signer = deliverySigner.trim();
+    if (!signer) {
+      Alert.alert('请填写签收人', '送货签收需要填写客户或收货人姓名。');
+      return;
+    }
+    if (!deliverySignPhoto?.dataUrl) {
+      Alert.alert('需要签收照片', '请先拍照上传后再确认签收。');
+      return;
+    }
+    const payload = {
+      signer,
+      note: deliverySignNote.trim(),
+      photo: {
+        dataUrl: deliverySignPhoto.dataUrl,
+        width: deliverySignPhoto.width,
+        height: deliverySignPhoto.height,
+        takenAt: deliverySignPhoto.takenAt,
+        uploadedBy: currentUser?.name || '手机端',
+      },
+    };
+    setSavingDeliveryId(deliverySign.id);
+    try {
+      const result = await request(`/customers/${deliverySign._customerId}/deliveries/${deliverySign.id}/sign`, {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      });
+      updateLocalDelivery(deliverySign._customerId, result.row || { ...deliverySign, status: '已送', ...payload });
+      closeDeliverySign();
+    } catch {
+      const offlineRow = {
+        ...deliverySign,
+        status: '已送',
+        signedAt: new Date().toISOString(),
+        signedBy: signer,
+        signedNote: payload.note,
+        signedPhoto: payload.photo,
+        signedUserId: currentUser?.id || '',
+        signedUserName: currentUser?.name || '',
+        _offlinePending: true,
+      };
+      updateLocalDelivery(deliverySign._customerId, offlineRow);
+      await enqueueOfflineAction({
+        type: 'delivery-sign',
+        customerId: deliverySign._customerId,
+        deliveryId: deliverySign.id,
+        payload,
+      });
+      closeDeliverySign();
+      Alert.alert('已离线暂存', '网络不可用，送货签收会在恢复连接后自动同步。');
+    } finally {
+      setSavingDeliveryId('');
+    }
+  }, [
+    closeDeliverySign,
+    currentUser?.id,
+    currentUser?.name,
+    deliverySign,
+    deliverySignNote,
+    deliverySignPhoto,
+    deliverySigner,
+    enqueueOfflineAction,
+    request,
+    updateLocalDelivery,
+  ]);
 
   const submitCostEntry = useCallback(async () => {
     if (!selectedCostCustomer?.id) {
@@ -725,7 +1054,29 @@ export default function App() {
       setCostPhoto(null);
       Alert.alert('录入成功', '成本记录已同步到电脑端。');
     } catch (err) {
-      Alert.alert('录入失败', err.message || '无法连接服务器');
+      const offlineRow = {
+        ...payload,
+        id: makeQueueId('costEntries'),
+        enteredAt: new Date().toISOString(),
+        enteredBy: currentUser?.name || '手机端',
+        enteredUserId: currentUser?.id || '',
+        approvalStatus: '待审核',
+        _offlinePending: true,
+      };
+      setCustomers(current => current.map(customer => (
+        customer.id === selectedCostCustomer.id
+          ? { ...customer, costEntries: [...(customer.costEntries || []), offlineRow] }
+          : customer
+      )));
+      await enqueueOfflineAction({
+        type: 'cost-entry',
+        customerId: selectedCostCustomer.id,
+        payload,
+      });
+      setCostQuantity('1');
+      setCostNote('');
+      setCostPhoto(null);
+      Alert.alert('已离线暂存', '网络不可用，成本记录会在恢复连接后自动同步。');
     } finally {
       setSavingCost(false);
     }
@@ -735,10 +1086,33 @@ export default function App() {
     costQuantity,
     costUnitCost,
     currentUser?.name,
+    currentUser?.id,
+    enqueueOfflineAction,
     request,
     selectedCostCustomer,
     selectedCostMaterial,
   ]);
+
+  const approveCostEntry = useCallback(async (entry, approvalStatus) => {
+    if (!isAdmin || !entry?._customerId || !entry?.id) return;
+    try {
+      const result = await request(`/customers/${entry._customerId}/cost-entries/${entry.id}/approval`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          approvalStatus,
+          approvalNote: approvalNoteByEntry[entry.id] || '',
+        }),
+      });
+      updateLocalCostEntry(entry._customerId, result.row || { ...entry, approvalStatus });
+      setApprovalNoteByEntry(current => {
+        const next = { ...current };
+        delete next[entry.id];
+        return next;
+      });
+    } catch (err) {
+      Alert.alert('审批失败', err.message || '无法连接服务器');
+    }
+  }, [approvalNoteByEntry, isAdmin, request, updateLocalCostEntry]);
 
   const openDetail = useCallback((order) => {
     setSelectedOrder(order);
@@ -792,7 +1166,7 @@ export default function App() {
       <View style={styles.header}>
         <View>
           <Text style={styles.eyebrow}>FOAM FACTORY</Text>
-          <Text style={styles.title}>手机排产</Text>
+          <Text style={styles.title}>手机工作台</Text>
           <Text style={styles.userBadge}>{currentUser?.name || '未注册'} · {roleLabel(currentRole)}</Text>
         </View>
         <Pressable style={styles.settingsButton} onPress={() => setShowSettings(current => !current)}>
@@ -889,27 +1263,30 @@ export default function App() {
       ) : null}
 
       <View style={styles.statsRow}>
-        <StatCard label="已排产" value={stats.open} tone="blue" />
+        <StatCard label="待完成" value={stats.open} tone="blue" />
+        <StatCard label="待签收" value={dashboardSummary.deliveryPending} tone="slate" />
         {isAdmin ? (
           <>
-            <StatCard label="已完成" value={stats.completed} tone="green" />
-            <StatCard label="订单数" value={stats.all} tone="slate" />
+            <StatCard label="待审批" value={dashboardSummary.pendingCostCount} tone="green" />
           </>
         ) : null}
       </View>
 
       <View style={styles.segmented}>
+        <SegmentButton label="工作台" active={activeView === 'workbench'} onPress={() => setActiveView('workbench')} />
+        <SegmentButton label="提醒" active={activeView === 'alerts'} onPress={() => setActiveView('alerts')} />
         <SegmentButton label="排产" active={activeView === 'schedule'} onPress={() => setActiveView('schedule')} />
+        <SegmentButton label="签收" active={activeView === 'delivery'} onPress={() => setActiveView('delivery')} />
+        <SegmentButton label="成本" active={activeView === 'cost'} onPress={() => setActiveView('cost')} />
         {isAdmin ? (
           <>
-            <SegmentButton label="订单" active={activeView === 'orders'} onPress={() => setActiveView('orders')} />
-            <SegmentButton label="完成" active={activeView === 'completed'} onPress={() => setActiveView('completed')} />
+            <SegmentButton label="看板" active={activeView === 'dashboard'} onPress={() => setActiveView('dashboard')} />
+            <SegmentButton label="审批" active={activeView === 'approval'} onPress={() => setActiveView('approval')} />
           </>
         ) : null}
-        <SegmentButton label="成本" active={activeView === 'cost'} onPress={() => setActiveView('cost')} />
       </View>
 
-      {activeView !== 'cost' ? (
+      {['schedule', 'orders', 'completed'].includes(activeView) ? (
         <TextInput
           style={styles.searchInput}
           value={query}
@@ -919,7 +1296,7 @@ export default function App() {
         />
       ) : null}
 
-      {activeView !== 'cost' ? (
+      {['schedule', 'orders', 'completed'].includes(activeView) ? (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.customerChips}>
           <Pressable
             style={[styles.customerChip, selectedCustomerId === 'all' && styles.customerChipActive]}
@@ -952,6 +1329,119 @@ export default function App() {
       ) : null}
     </View>
   );
+
+  if (activeView === 'workbench') {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <StatusBar style="light" />
+        <ScrollView
+          contentContainerStyle={styles.listContent}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor="#42e8ff" />}
+        >
+          {listHeader}
+          <WorkbenchPanel
+            summary={dashboardSummary}
+            reminders={reminders}
+            scheduledOrders={visibleOrders}
+            pendingDeliveries={pendingDeliveries}
+            offlineQueue={offlineQueue}
+            syncing={syncingQueue}
+            onViewSchedule={() => setActiveView('schedule')}
+            onViewDelivery={() => setActiveView('delivery')}
+            onViewAlerts={() => setActiveView('alerts')}
+            onSync={syncOfflineQueue}
+          />
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
+  if (activeView === 'alerts') {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <StatusBar style="light" />
+        <ScrollView
+          contentContainerStyle={styles.listContent}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor="#42e8ff" />}
+        >
+          {listHeader}
+          <ReminderPanel reminders={reminders} offlineQueue={offlineQueue} syncing={syncingQueue} onSync={syncOfflineQueue} />
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
+  if (activeView === 'delivery') {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <StatusBar style="light" />
+        <FlatList
+          data={pendingDeliveries}
+          keyExtractor={(item) => `${item._customerId}-${item.id}`}
+          ListHeaderComponent={listHeader}
+          ListEmptyComponent={loading ? <LoadingState /> : <EmptyState title="没有待签收送货单" text="当前没有需要手机端签收的送货单。" />}
+          renderItem={({ item }) => (
+            <DeliveryCard delivery={item} saving={savingDeliveryId === item.id} onSign={openDeliverySign} />
+          )}
+          contentContainerStyle={styles.listContent}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor="#42e8ff" />}
+        />
+        <DeliverySignModal
+          delivery={deliverySign}
+          signer={deliverySigner}
+          note={deliverySignNote}
+          photo={deliverySignPhoto}
+          saving={deliverySign ? savingDeliveryId === deliverySign.id : false}
+          onChangeSigner={setDeliverySigner}
+          onChangeNote={setDeliverySignNote}
+          onTakePhoto={takeDeliverySignPhoto}
+          onClearPhoto={() => setDeliverySignPhoto(null)}
+          onCancel={closeDeliverySign}
+          onSubmit={submitDeliverySign}
+        />
+      </SafeAreaView>
+    );
+  }
+
+  if (activeView === 'dashboard' && isAdmin) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <StatusBar style="light" />
+        <ScrollView
+          contentContainerStyle={styles.listContent}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor="#42e8ff" />}
+        >
+          {listHeader}
+          <ManagementDashboard summary={dashboardSummary} customers={customers} />
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
+  if (activeView === 'approval' && isAdmin) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <StatusBar style="light" />
+        <FlatList
+          data={pendingCostEntries}
+          keyExtractor={(item) => `${item._customerId}-${item.id}`}
+          ListHeaderComponent={listHeader}
+          ListEmptyComponent={loading ? <LoadingState /> : <EmptyState title="暂无待审批成本" text="员工提交的成本记录会显示在这里。" />}
+          renderItem={({ item }) => (
+            <CostApprovalCard
+              entry={item}
+              note={approvalNoteByEntry[item.id] || ''}
+              onChangeNote={(text) => setApprovalNoteByEntry(current => ({ ...current, [item.id]: text }))}
+              onApprove={() => approveCostEntry(item, '已通过')}
+              onReject={() => approveCostEntry(item, '已拒绝')}
+            />
+          )}
+          contentContainerStyle={styles.listContent}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor="#42e8ff" />}
+        />
+      </SafeAreaView>
+    );
+  }
 
   if (activeView === 'cost') {
     return (
@@ -1213,6 +1703,187 @@ function PendingRoleScreen({
         </View>
       </ScrollView>
     </SafeAreaView>
+  );
+}
+
+function WorkbenchPanel({
+  summary,
+  reminders,
+  scheduledOrders,
+  pendingDeliveries,
+  offlineQueue,
+  syncing,
+  onViewSchedule,
+  onViewDelivery,
+  onViewAlerts,
+  onSync,
+}) {
+  return (
+    <View style={styles.workbenchPanel}>
+      <View style={styles.workbenchHero}>
+        <Text style={styles.eyebrow}>WORKBENCH</Text>
+        <Text style={styles.costTitle}>今日工作台</Text>
+        <Text style={styles.costHint}>集中处理排产任务、送货签收、离线同步和系统提醒。</Text>
+      </View>
+      <View style={styles.actionGrid}>
+        <Pressable style={styles.actionTile} onPress={onViewSchedule}>
+          <Text style={styles.actionTileValue}>{summary.scheduled}</Text>
+          <Text style={styles.actionTileLabel}>待完成排产</Text>
+        </Pressable>
+        <Pressable style={styles.actionTile} onPress={onViewDelivery}>
+          <Text style={styles.actionTileValue}>{summary.deliveryPending}</Text>
+          <Text style={styles.actionTileLabel}>待签收送货</Text>
+        </Pressable>
+        <Pressable style={styles.actionTile} onPress={onViewAlerts}>
+          <Text style={styles.actionTileValue}>{reminders.length}</Text>
+          <Text style={styles.actionTileLabel}>消息提醒</Text>
+        </Pressable>
+        <Pressable style={styles.actionTile} onPress={onSync} disabled={!offlineQueue.length || syncing}>
+          <Text style={styles.actionTileValue}>{offlineQueue.length}</Text>
+          <Text style={styles.actionTileLabel}>{syncing ? '同步中' : '离线暂存'}</Text>
+        </Pressable>
+      </View>
+      <View style={styles.mobileSection}>
+        <Text style={styles.panelLabel}>最近任务</Text>
+        {scheduledOrders.slice(0, 5).map(order => (
+          <View key={`${order._customerId}-${order.id}`} style={styles.compactRow}>
+            <View style={styles.recentCostText}>
+              <Text style={styles.recentCostName}>{order.orderNo || order.product || '未命名订单'}</Text>
+              <Text style={styles.recentCostMeta}>{order._customerName} · 交期 {order.dueDate || '-'}</Text>
+            </View>
+            <StatusChip status={normalizeStatus(order.status)} />
+          </View>
+        ))}
+        {!scheduledOrders.length ? <Text style={styles.stateText}>暂无待完成排产任务。</Text> : null}
+      </View>
+    </View>
+  );
+}
+
+function ReminderPanel({ reminders, offlineQueue, syncing, onSync }) {
+  return (
+    <View style={styles.mobileSection}>
+      <View style={styles.sectionHeadRow}>
+        <Text style={styles.panelLabel}>消息提醒</Text>
+        {offlineQueue.length ? (
+          <Pressable style={styles.secondaryAction} onPress={onSync} disabled={syncing}>
+            <Text style={styles.secondaryActionText}>{syncing ? '同步中' : '同步离线记录'}</Text>
+          </Pressable>
+        ) : null}
+      </View>
+      {reminders.map(item => (
+        <View key={item.id} style={[styles.reminderCard, item.tone === 'danger' && styles.reminderDanger, item.tone === 'warning' && styles.reminderWarning]}>
+          <Text style={styles.reminderTitle}>{item.title}</Text>
+          <Text style={styles.reminderText}>{item.text}</Text>
+        </View>
+      ))}
+      {!reminders.length ? <Text style={styles.stateText}>暂无新的提醒。</Text> : null}
+    </View>
+  );
+}
+
+function DeliveryCard({ delivery, saving, onSign }) {
+  return (
+    <View style={styles.orderCard}>
+      <View style={styles.cardTopRow}>
+        <View style={styles.cardTitleWrap}>
+          <Text style={styles.orderNo}>{delivery.deliveryNo || delivery.id}</Text>
+          <Text style={styles.customerName}>{delivery._customerName}</Text>
+        </View>
+        <StatusChip status={isDeliverySigned(delivery) ? '已送货' : '未送'} />
+      </View>
+      <View style={styles.metaGrid}>
+        <Meta label="送货日期" value={delivery.date || '-'} />
+        <Meta label="签收人" value={delivery.signedBy || '-'} />
+        <Meta label="签收时间" value={formatDateTime(delivery.signedAt)} />
+      </View>
+      <View style={styles.cardActions}>
+        <Pressable style={[styles.doneButton, saving && styles.doneButtonDisabled]} onPress={() => onSign(delivery)} disabled={saving || isDeliverySigned(delivery)}>
+          <Text style={styles.doneButtonText}>{saving ? '保存中' : isDeliverySigned(delivery) ? '已签收' : '签收'}</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+function CostApprovalCard({ entry, note, onChangeNote, onApprove, onReject }) {
+  return (
+    <View style={styles.orderCard}>
+      <View style={styles.cardTopRow}>
+        <View style={styles.cardTitleWrap}>
+          <Text style={styles.orderNo}>{entry.materialName || '未命名物料'}</Text>
+          <Text style={styles.customerName}>{entry._customerName} · {entry.enteredBy || '手机端'}</Text>
+        </View>
+        <Text style={styles.costAmountText}>{formatMoney(entry.amount)}</Text>
+      </View>
+      <View style={styles.metaGrid}>
+        <Meta label="数量" value={`${entry.quantity || 0} ${entry.unit || ''}`} />
+        <Meta label="单价" value={formatMoney(entry.unitCost)} />
+        <Meta label="录入时间" value={formatDateTime(entry.enteredAt || entry.date)} />
+      </View>
+      <TextInput
+        style={[styles.completionInput, styles.approvalNoteInput]}
+        value={note}
+        onChangeText={onChangeNote}
+        placeholder="审批备注（可选）"
+        placeholderTextColor="#7a8495"
+      />
+      <View style={styles.cardActions}>
+        <Pressable style={styles.lightButton} onPress={onReject}>
+          <Text style={styles.lightButtonText}>拒绝</Text>
+        </Pressable>
+        <Pressable style={styles.doneButton} onPress={onApprove}>
+          <Text style={styles.doneButtonText}>通过</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+function ManagementDashboard({ summary, customers }) {
+  const topCustomers = [...customers]
+    .map(customer => ({
+      id: customer.id,
+      name: customer.name,
+      amount: (customer.orders || []).reduce((sum, order) => sum + parseMobileNumber(order.amount), 0),
+    }))
+    .sort((a, b) => b.amount - a.amount)
+    .slice(0, 8);
+
+  return (
+    <View style={styles.workbenchPanel}>
+      <View style={styles.workbenchHero}>
+        <Text style={styles.eyebrow}>MANAGEMENT</Text>
+        <Text style={styles.costTitle}>管理层看板</Text>
+        <Text style={styles.costHint}>手机端查看订单、回款、送货签收和成本审批的关键指标。</Text>
+      </View>
+      <View style={styles.actionGrid}>
+        <MetricTile label="订单额" value={formatMoney(summary.orderAmount)} />
+        <MetricTile label="已付金额" value={formatMoney(summary.paidAmount)} />
+        <MetricTile label="待审成本" value={formatMoney(summary.pendingCostAmount)} />
+        <MetricTile label="已审成本" value={formatMoney(summary.approvedCostAmount)} />
+        <MetricTile label="未完成" value={summary.scheduled} />
+        <MetricTile label="已完成" value={summary.completed} />
+      </View>
+      <View style={styles.mobileSection}>
+        <Text style={styles.panelLabel}>客户订单额排行</Text>
+        {topCustomers.map(customer => (
+          <View key={customer.id} style={styles.compactRow}>
+            <Text style={styles.recentCostName}>{customer.name}</Text>
+            <Text style={styles.costAmountText}>{formatMoney(customer.amount)}</Text>
+          </View>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+function MetricTile({ label, value }) {
+  return (
+    <View style={styles.actionTile}>
+      <Text style={styles.actionTileValue}>{value}</Text>
+      <Text style={styles.actionTileLabel}>{label}</Text>
+    </View>
   );
 }
 
@@ -1665,6 +2336,83 @@ function CompletionModal({
   );
 }
 
+function DeliverySignModal({
+  delivery,
+  signer,
+  note,
+  photo,
+  saving,
+  onChangeSigner,
+  onChangeNote,
+  onTakePhoto,
+  onClearPhoto,
+  onCancel,
+  onSubmit,
+}) {
+  return (
+    <Modal visible={Boolean(delivery)} animationType="fade" transparent onRequestClose={onCancel}>
+      <View style={styles.completionBackdrop}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.completionKeyboard}>
+          <View style={styles.completionCard}>
+            <Text style={styles.eyebrow}>DELIVERY SIGN</Text>
+            <Text style={styles.completionTitle}>{fieldText(delivery?.deliveryNo || delivery?.id)}</Text>
+            <Text style={styles.completionMeta}>{delivery?._customerName || ''}</Text>
+
+            <View style={styles.completionField}>
+              <Text style={styles.completionLabel}>签收人</Text>
+              <TextInput
+                style={styles.completionInput}
+                value={signer}
+                onChangeText={onChangeSigner}
+                placeholder="填写客户或收货人姓名"
+                placeholderTextColor="#7a8495"
+              />
+            </View>
+
+            <View style={styles.completionField}>
+              <Text style={styles.completionLabel}>签收备注</Text>
+              <TextInput
+                style={[styles.completionInput, styles.completionTextarea]}
+                value={note}
+                onChangeText={onChangeNote}
+                placeholder="例如：货物已收、数量无误"
+                placeholderTextColor="#7a8495"
+                multiline
+              />
+            </View>
+
+            <View style={styles.completionField}>
+              <Text style={styles.completionLabel}>签收照片</Text>
+              {photo?.uri ? (
+                <View style={styles.photoPreviewWrap}>
+                  <Image source={{ uri: photo.uri }} style={styles.photoPreview} />
+                  <Pressable style={styles.lightButton} onPress={onClearPhoto} disabled={saving}>
+                    <Text style={styles.lightButtonText}>删除照片</Text>
+                  </Pressable>
+                </View>
+              ) : (
+                <Text style={styles.photoHint}>必须拍照上传后才能确认签收。</Text>
+              )}
+              <Pressable style={styles.photoButton} onPress={onTakePhoto} disabled={saving}>
+                <Text style={styles.photoButtonText}>{photo?.uri ? '重新拍照' : '拍照上传'}</Text>
+              </Pressable>
+            </View>
+
+            <View style={styles.completionActions}>
+              <Pressable style={styles.lightButton} onPress={onCancel} disabled={saving}>
+                <Text style={styles.lightButtonText}>取消</Text>
+              </Pressable>
+              <Pressable style={[styles.doneButton, (saving || !photo?.uri) && styles.doneButtonDisabled]} onPress={onSubmit} disabled={saving || !photo?.uri}>
+                <Text style={styles.doneButtonText}>{saving ? '保存中' : '确认签收'}</Text>
+              </Pressable>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </View>
+    </Modal>
+  );
+}
+
 function DetailRow({ label, value, multiline = false }) {
   return (
     <View style={styles.detailRow}>
@@ -1683,11 +2431,11 @@ function LoadingState({ label = '正在加载订单...' }) {
   );
 }
 
-function EmptyState() {
+function EmptyState({ title = '没有订单', text = '当前筛选条件下没有需要显示的订单。' }) {
   return (
     <View style={styles.stateBox}>
-      <Text style={styles.emptyTitle}>没有订单</Text>
-      <Text style={styles.stateText}>当前筛选条件下没有需要显示的订单。</Text>
+      <Text style={styles.emptyTitle}>{title}</Text>
+      <Text style={styles.stateText}>{text}</Text>
     </View>
   );
 }
@@ -2005,6 +2753,104 @@ const styles = StyleSheet.create({
   pendingLogoutText: {
     color: '#9eb3c8',
     fontWeight: '800',
+  },
+  workbenchPanel: {
+    gap: 14,
+  },
+  workbenchHero: {
+    gap: 7,
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#2d8cff',
+    backgroundColor: '#0c2442',
+  },
+  actionGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  actionTile: {
+    flexGrow: 1,
+    flexBasis: '45%',
+    minHeight: 86,
+    justifyContent: 'center',
+    borderRadius: 14,
+    padding: 14,
+    backgroundColor: '#101827',
+    borderWidth: 1,
+    borderColor: '#22334d',
+  },
+  actionTileValue: {
+    color: '#f4fbff',
+    fontSize: 22,
+    fontWeight: '900',
+  },
+  actionTileLabel: {
+    marginTop: 5,
+    color: '#9eb3c8',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  mobileSection: {
+    gap: 10,
+    borderRadius: 14,
+    padding: 14,
+    backgroundColor: '#0d1829',
+    borderWidth: 1,
+    borderColor: '#22334d',
+  },
+  sectionHeadRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  compactRow: {
+    minHeight: 58,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    borderRadius: 10,
+    padding: 10,
+    backgroundColor: '#081223',
+    borderWidth: 1,
+    borderColor: '#1c2d46',
+  },
+  reminderCard: {
+    gap: 4,
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#2f456a',
+    backgroundColor: '#081223',
+  },
+  reminderDanger: {
+    borderColor: '#ff6b6b',
+    backgroundColor: '#35161b',
+  },
+  reminderWarning: {
+    borderColor: '#d29922',
+    backgroundColor: '#2c210d',
+  },
+  reminderTitle: {
+    color: '#f4fbff',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  reminderText: {
+    color: '#9eb3c8',
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  costAmountText: {
+    color: '#42e8ff',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  approvalNoteInput: {
+    marginTop: 12,
   },
   costPanel: {
     gap: 14,

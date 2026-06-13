@@ -14,8 +14,20 @@ export function authMiddleware(req, res, next) {
   const isMobileCostEntryCreate = req.baseUrl === '/api/customers'
     && req.method === 'POST'
     && /^\/[^/]+\/cost-entries$/.test(req.path);
+  const isMobileDeliverySign = req.baseUrl === '/api/customers'
+    && req.method === 'PATCH'
+    && /^\/[^/]+\/deliveries\/[^/]+\/sign$/.test(req.path);
+  const isMobileCostEntryApproval = req.baseUrl === '/api/customers'
+    && req.method === 'PATCH'
+    && /^\/[^/]+\/cost-entries\/[^/]+\/approval$/.test(req.path);
 
-  if (hasMobileUserToken && (isMobileCustomerRead || isMobileOrderStatusUpdate || isMobileCostEntryCreate)) {
+  if (hasMobileUserToken && (
+    isMobileCustomerRead
+    || isMobileOrderStatusUpdate
+    || isMobileCostEntryCreate
+    || isMobileDeliverySign
+    || isMobileCostEntryApproval
+  )) {
     return next();
   }
 

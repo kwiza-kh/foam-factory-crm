@@ -14,6 +14,10 @@ const mockPrisma = vi.hoisted(() => ({
     findFirst: vi.fn(),
     update: vi.fn(),
   },
+  delivery: {
+    findFirst: vi.fn(),
+    update: vi.fn(),
+  },
   mobileUser: {
     findUnique: vi.fn(),
   },
@@ -24,6 +28,8 @@ const mockPrisma = vi.hoisted(() => ({
   costEntry: {
     aggregate: vi.fn(),
     create: vi.fn(),
+    findFirst: vi.fn(),
+    update: vi.fn(),
     deleteMany: vi.fn(),
   },
   $transaction: vi.fn(),
@@ -456,6 +462,7 @@ describe('Customers API Routes', () => {
         unit: '件',
         unitCost: 8.5,
         amount: 25.5,
+        approvalStatus: '待审核',
         enteredBy: 'Worker',
         enteredUserId: 'u1',
         photo: { dataUrl: 'data:image/jpeg;base64,test' },
@@ -465,6 +472,78 @@ describe('Customers API Routes', () => {
           customerId: 'c1',
           sortOrder: 3,
         }),
+      });
+    });
+  });
+
+  describe('PATCH /api/customers/:id/cost-entries/:entryId/approval', () => {
+    it('should allow admin to approve a cost entry', async () => {
+      mockPrisma.mobileUser.findUnique.mockResolvedValue({
+        id: 'admin-1',
+        name: 'Boss',
+        role: 'admin',
+        token: 'admin-token',
+      });
+      mockPrisma.costEntry.findFirst.mockResolvedValue({
+        id: 'ce1',
+        customerId: 'c1',
+        data: { id: 'ce1', materialName: 'EPS', approvalStatus: '待审核' },
+      });
+      mockPrisma.costEntry.update.mockImplementation(async ({ data }) => ({
+        data: data.data,
+      }));
+
+      const res = await request(app)
+        .patch('/api/customers/c1/cost-entries/ce1/approval')
+        .set('X-Mobile-User-Token', 'admin-token')
+        .send({ approvalStatus: '已通过', approvalNote: 'OK' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.row).toMatchObject({
+        id: 'ce1',
+        approvalStatus: '已通过',
+        approvalNote: 'OK',
+        approvedBy: 'Boss',
+        approvedUserId: 'admin-1',
+      });
+    });
+  });
+
+  describe('PATCH /api/customers/:id/deliveries/:deliveryId/sign', () => {
+    it('should sign a delivery with photo proof', async () => {
+      mockPrisma.mobileUser.findUnique.mockResolvedValue({
+        id: 'u1',
+        name: 'Worker',
+        role: 'employee',
+        token: 'token-1',
+      });
+      mockPrisma.delivery.findFirst.mockResolvedValue({
+        id: 'd1',
+        customerId: 'c1',
+        data: { id: 'd1', deliveryNo: 'DN-001', status: '未送' },
+      });
+      mockPrisma.delivery.update.mockImplementation(async ({ data }) => ({
+        data: data.data,
+      }));
+
+      const res = await request(app)
+        .patch('/api/customers/c1/deliveries/d1/sign')
+        .set('X-Mobile-User-Token', 'token-1')
+        .send({
+          signer: '客户张三',
+          note: '已收货',
+          photo: { dataUrl: 'data:image/jpeg;base64,sign' },
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.row).toMatchObject({
+        id: 'd1',
+        status: '已送',
+        signedBy: '客户张三',
+        signedNote: '已收货',
+        signedUserId: 'u1',
+        signedUserName: 'Worker',
+        signedPhoto: { dataUrl: 'data:image/jpeg;base64,sign' },
       });
     });
   });

@@ -80,6 +80,18 @@ function normalizeOrderStatus(status = '') {
   return value || '未完成';
 }
 
+function normalizeFinalDeliveryStatus(status = '') {
+  const value = String(status || '').trim();
+  if (value === '已送' || value === '已送货' || value === '已发货' || value.includes('签收')) return '已送';
+  if (value === '作废' || value.includes('作废') || value.includes('取消') || value.includes('无效')) return '作废';
+  return value || '未送';
+}
+
+function isMobileVisibleDelivery(delivery = {}) {
+  const finalDelivery = delivery._finalDelivery !== false;
+  return finalDelivery && normalizeFinalDeliveryStatus(delivery.status) !== '作废';
+}
+
 function filterCustomerForMobileUser(customer, user) {
   const role = normalizeRole(user?.role);
   if (!user || role === 'admin') return customer;
@@ -89,7 +101,7 @@ function filterCustomerForMobileUser(customer, user) {
   return {
     ...customer,
     products: [],
-    deliveries: [],
+    deliveries: (customer.deliveries || []).filter(isMobileVisibleDelivery),
     materialCosts: customer.materialCosts || [],
     costEntries: customer.costEntries || [],
     orders: (customer.orders || []).filter(order => normalizeOrderStatus(order.status) === '已排产'),
@@ -392,6 +404,10 @@ router.post('/:id/cost-entries', async (req, res) => {
       amount: Number(body.amount || 0),
       note: String(body.note || '').trim(),
       photo,
+      approvalStatus: '待审核',
+      approvedAt: '',
+      approvedBy: '',
+      approvalNote: '',
       enteredAt: new Date().toISOString(),
       enteredBy: mobileUser.name || '手机端',
       enteredUserId: mobileUser.id || '',
@@ -410,6 +426,88 @@ router.post('/:id/cost-entries', async (req, res) => {
       },
     });
     res.json({ ok: true, row: created.data });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PATCH /api/customers/:id/cost-entries/:entryId/approval - admin mobile cost approval
+router.patch('/:id/cost-entries/:entryId/approval', async (req, res) => {
+  const { id, entryId } = req.params;
+  const status = String(req.body?.approvalStatus || '').trim();
+  const note = String(req.body?.approvalNote || '').trim();
+  if (!['已通过', '已拒绝'].includes(status)) {
+    return res.status(400).json({ error: 'Invalid approval status' });
+  }
+
+  try {
+    const mobileUser = await findUserByMobileToken(req);
+    if (!mobileUser) return res.status(401).json({ error: '手机账号不存在或已失效' });
+    if (normalizeRole(mobileUser.role) !== 'admin') {
+      return res.status(403).json({ error: '只有管理员可以审批成本' });
+    }
+
+    const entry = await prisma.costEntry.findFirst({
+      where: { id: entryId, customerId: id },
+    });
+    if (!entry) return res.status(404).json({ error: 'Cost entry not found' });
+
+    const data = {
+      ...(entry.data || {}),
+      approvalStatus: status,
+      approvalNote: note,
+      approvedAt: new Date().toISOString(),
+      approvedBy: mobileUser.name || '管理员',
+      approvedUserId: mobileUser.id,
+    };
+    const updated = await prisma.costEntry.update({
+      where: { id: entryId },
+      data: { data },
+    });
+    res.json({ ok: true, row: updated.data });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PATCH /api/customers/:id/deliveries/:deliveryId/sign - mobile delivery sign-off
+router.patch('/:id/deliveries/:deliveryId/sign', async (req, res) => {
+  const { id, deliveryId } = req.params;
+  const signer = String(req.body?.signer || '').trim();
+  const note = String(req.body?.note || '').trim();
+  const photo = req.body?.photo;
+
+  if (!signer) return res.status(400).json({ error: '请填写签收人' });
+  if (!photo?.dataUrl) return res.status(400).json({ error: '送货签收必须上传照片' });
+
+  try {
+    const mobileUser = await findUserByMobileToken(req);
+    if (!mobileUser) return res.status(401).json({ error: '手机账号不存在或已失效' });
+    const mobileRole = normalizeRole(mobileUser.role);
+    if (mobileRole === 'pending') {
+      return res.status(403).json({ error: '账号尚未分配角色，请联系管理员' });
+    }
+
+    const delivery = await prisma.delivery.findFirst({
+      where: { id: deliveryId, customerId: id },
+    });
+    if (!delivery) return res.status(404).json({ error: 'Delivery not found' });
+
+    const data = {
+      ...(delivery.data || {}),
+      status: '已送',
+      signedAt: new Date().toISOString(),
+      signedBy: signer,
+      signedNote: note,
+      signedPhoto: photo,
+      signedUserId: mobileUser.id,
+      signedUserName: mobileUser.name || '',
+    };
+    const updated = await prisma.delivery.update({
+      where: { id: deliveryId },
+      data: { data },
+    });
+    res.json({ ok: true, row: updated.data });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
