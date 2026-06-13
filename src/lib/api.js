@@ -63,7 +63,7 @@ export const api = {
   getMobileUsers: () =>
     req('GET', '/users'),
 
-  /** @param {string} id @param {'admin' | 'employee'} role */
+  /** @param {string} id @param {'pending' | 'admin' | 'employee'} role */
   updateMobileUserRole: (id, role) =>
     req('PATCH', `/users/${id}/role`, { role }),
 };

@@ -11,8 +11,11 @@ export function authMiddleware(req, res, next) {
   const isMobileOrderStatusUpdate = req.baseUrl === '/api/customers'
     && req.method === 'PATCH'
     && /^\/[^/]+\/orders\/[^/]+\/status$/.test(req.path);
+  const isMobileCostEntryCreate = req.baseUrl === '/api/customers'
+    && req.method === 'POST'
+    && /^\/[^/]+\/cost-entries$/.test(req.path);
 
-  if (hasMobileUserToken && (isMobileCustomerRead || isMobileOrderStatusUpdate)) {
+  if (hasMobileUserToken && (isMobileCustomerRead || isMobileOrderStatusUpdate || isMobileCostEntryCreate)) {
     return next();
   }
 

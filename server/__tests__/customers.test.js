@@ -4,6 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mockPrisma = vi.hoisted(() => ({
   customer: {
     findMany: vi.fn(),
+    findUnique: vi.fn(),
     count: vi.fn(),
     create: vi.fn(),
     update: vi.fn(),
@@ -12,6 +13,18 @@ const mockPrisma = vi.hoisted(() => ({
   order: {
     findFirst: vi.fn(),
     update: vi.fn(),
+  },
+  mobileUser: {
+    findUnique: vi.fn(),
+  },
+  materialCost: {
+    create: vi.fn(),
+    deleteMany: vi.fn(),
+  },
+  costEntry: {
+    aggregate: vi.fn(),
+    create: vi.fn(),
+    deleteMany: vi.fn(),
   },
   $transaction: vi.fn(),
 }));
@@ -38,6 +51,7 @@ describe('Customers API Routes', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockPrisma.mobileUser.findUnique.mockResolvedValue(null);
     app = createApp();
   });
 
@@ -381,6 +395,77 @@ describe('Customers API Routes', () => {
 
       expect(res.status).toBe(500);
       expect(res.body).toHaveProperty('error', 'DB error');
+    });
+  });
+
+  describe('POST /api/customers/:id/cost-entries', () => {
+    it('should return 400 when photo is missing', async () => {
+      mockPrisma.mobileUser.findUnique.mockResolvedValue({
+        id: 'u1',
+        name: 'Worker',
+        role: 'employee',
+        token: 'token-1',
+      });
+
+      const res = await request(app)
+        .post('/api/customers/c1/cost-entries')
+        .set('X-Mobile-User-Token', 'token-1')
+        .send({ materialName: 'EPS', quantity: 2 });
+
+      expect(res.status).toBe(400);
+      expect(res.body).toHaveProperty('error', '成本录入必须上传照片');
+    });
+
+    it('should create a cost entry with mobile user and photo proof', async () => {
+      mockPrisma.mobileUser.findUnique.mockResolvedValue({
+        id: 'u1',
+        name: 'Worker',
+        role: 'employee',
+        token: 'token-1',
+      });
+      mockPrisma.customer.findUnique.mockResolvedValue({ id: 'c1' });
+      mockPrisma.costEntry.aggregate.mockResolvedValue({ _max: { sortOrder: 2 } });
+      mockPrisma.costEntry.create.mockImplementation(async ({ data }) => ({
+        ...data,
+        data: {
+          ...data.data,
+          id: 'costEntries-test',
+        },
+      }));
+
+      const res = await request(app)
+        .post('/api/customers/c1/cost-entries')
+        .set('X-Mobile-User-Token', 'token-1')
+        .send({
+          date: '2026-06-13',
+          materialName: 'EPS',
+          quantity: 3,
+          unit: '件',
+          unitCost: 8.5,
+          amount: 25.5,
+          note: '入库',
+          photo: { dataUrl: 'data:image/jpeg;base64,test' },
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ ok: true });
+      expect(res.body.row).toMatchObject({
+        id: 'costEntries-test',
+        materialName: 'EPS',
+        quantity: 3,
+        unit: '件',
+        unitCost: 8.5,
+        amount: 25.5,
+        enteredBy: 'Worker',
+        enteredUserId: 'u1',
+        photo: { dataUrl: 'data:image/jpeg;base64,test' },
+      });
+      expect(mockPrisma.costEntry.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          customerId: 'c1',
+          sortOrder: 3,
+        }),
+      });
     });
   });
 });

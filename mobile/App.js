@@ -75,11 +75,20 @@ function normalizeStatus(status = '') {
 }
 
 function normalizeUserRole(role = '') {
-  return role === 'admin' ? 'admin' : 'employee';
+  if (role === 'admin' || role === 'employee') return role;
+  return 'pending';
 }
 
 function roleLabel(role = '') {
-  return normalizeUserRole(role) === 'admin' ? '管理员' : '员工';
+  const normalized = normalizeUserRole(role);
+  if (normalized === 'admin') return '管理员';
+  if (normalized === 'employee') return '员工';
+  return '普通用户';
+}
+
+function isAssignedUserRole(role = '') {
+  const normalized = normalizeUserRole(role);
+  return normalized === 'admin' || normalized === 'employee';
 }
 
 function isScheduledProductionOrder(order) {
@@ -96,6 +105,15 @@ function formatNumber(value) {
   if (value === '' || value == null) return '-';
   const number = Number(value);
   return Number.isFinite(number) ? number.toLocaleString('zh-CN') : String(value);
+}
+
+function parseMobileNumber(value) {
+  const number = Number(String(value ?? '').replace(/,/g, '').trim());
+  return Number.isFinite(number) ? number : 0;
+}
+
+function formatMoney(value) {
+  return `¥${parseMobileNumber(value).toFixed(2)}`;
 }
 
 function fieldText(value) {
@@ -134,6 +152,16 @@ function hasOrderFieldValue(order, field) {
   if (!order) return false;
   if (field === '_customerName') return Boolean(order._customerName);
   return Object.prototype.hasOwnProperty.call(order, field);
+}
+
+function getPhotoUri(photo) {
+  if (!photo) return '';
+  if (typeof photo === 'string') return photo;
+  return photo.uri || photo.dataUrl || photo.url || photo.src || '';
+}
+
+function materialOptionKey(material = {}, index = 0) {
+  return String(material.id || `${material.materialName || 'material'}-${material.unit || ''}-${material.unitCost || ''}-${index}`);
 }
 
 function buildMobileOrderDisplayFields(customers = []) {
@@ -192,6 +220,8 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
   const [registerName, setRegisterName] = useState('');
   const [registerPhone, setRegisterPhone] = useState('');
+  const [registerPassword, setRegisterPassword] = useState('');
+  const [registerConfirmPassword, setRegisterConfirmPassword] = useState('');
   const [registering, setRegistering] = useState(false);
   const [customers, setCustomers] = useState([]);
   const [selectedCustomerId, setSelectedCustomerId] = useState('all');
@@ -210,6 +240,12 @@ export default function App() {
   const [mobileCardDisplayFields, setMobileCardDisplayFields] = useState(defaultMobileCardDisplayFields);
   const [detailUsesAllFields, setDetailUsesAllFields] = useState(true);
   const [detailDisplayFields, setDetailDisplayFields] = useState([]);
+  const [costCustomerId, setCostCustomerId] = useState('');
+  const [costMaterialKey, setCostMaterialKey] = useState('');
+  const [costQuantity, setCostQuantity] = useState('1');
+  const [costNote, setCostNote] = useState('');
+  const [costPhoto, setCostPhoto] = useState(null);
+  const [savingCost, setSavingCost] = useState(false);
 
   const request = useCallback(async (path, options = {}) => {
     const baseUrl = apiBaseUrl.replace(/\/$/, '');
@@ -244,6 +280,10 @@ export default function App() {
       if (session.user) {
         setCurrentUser(session.user);
         await AsyncStorage.setItem(mobileUserStorageKey, JSON.stringify(session.user));
+      }
+      if (!isAssignedUserRole(session.user?.role)) {
+        setCustomers([]);
+        return;
       }
       const result = await request('/customers?limit=200');
       const list = result.data || result;
@@ -298,7 +338,28 @@ export default function App() {
 
   const allOrders = useMemo(() => flattenOrders(customers), [customers]);
   const currentRole = normalizeUserRole(currentUser?.role);
+  const isRoleAssigned = isAssignedUserRole(currentRole);
   const isAdmin = currentRole === 'admin';
+  const selectedCostCustomer = useMemo(() => (
+    customers.find(customer => customer.id === costCustomerId)
+    || (selectedCustomerId !== 'all' ? customers.find(customer => customer.id === selectedCustomerId) : null)
+    || customers.find(customer => (customer.materialCosts || []).length > 0)
+    || customers[0]
+    || null
+  ), [costCustomerId, customers, selectedCustomerId]);
+  const costMaterialOptions = selectedCostCustomer?.materialCosts || [];
+  const selectedCostMaterial = useMemo(() => (
+    costMaterialOptions.find((material, index) => materialOptionKey(material, index) === costMaterialKey)
+    || costMaterialOptions[0]
+    || null
+  ), [costMaterialKey, costMaterialOptions]);
+  const costUnitCost = parseMobileNumber(selectedCostMaterial?.unitCost);
+  const costAmount = parseMobileNumber(costQuantity) * costUnitCost;
+  const recentCostEntries = useMemo(() => (
+    [...(selectedCostCustomer?.costEntries || [])]
+      .sort((a, b) => parseDateValue(b.enteredAt || b.date) - parseDateValue(a.enteredAt || a.date))
+      .slice(0, 12)
+  ), [selectedCostCustomer?.costEntries]);
   const mobileDisplayFieldOptions = useMemo(() => buildMobileOrderDisplayFields(customers), [customers]);
   const selectedMobileCardDisplayFields = useMemo(() => {
     const optionByField = new Map(mobileDisplayFieldOptions.map(option => [option.field, option]));
@@ -330,8 +391,28 @@ export default function App() {
     setDetailDisplayFields([]);
   }, []);
   useEffect(() => {
-    if (!isAdmin && activeView !== 'schedule') setActiveView('schedule');
+    if (!isAdmin && activeView !== 'schedule' && activeView !== 'cost') setActiveView('schedule');
   }, [activeView, isAdmin]);
+  useEffect(() => {
+    const preferredCustomerId = selectedCustomerId !== 'all'
+      && customers.some(customer => customer.id === selectedCustomerId)
+      ? selectedCustomerId
+      : '';
+    const nextCustomerId = preferredCustomerId
+      || (customers.some(customer => customer.id === costCustomerId) ? costCustomerId : '')
+      || customers.find(customer => (customer.materialCosts || []).length > 0)?.id
+      || customers[0]?.id
+      || '';
+    if (nextCustomerId !== costCustomerId) setCostCustomerId(nextCustomerId);
+  }, [costCustomerId, customers, selectedCustomerId]);
+  useEffect(() => {
+    if (!costMaterialOptions.length) {
+      if (costMaterialKey) setCostMaterialKey('');
+      return;
+    }
+    const hasSelected = costMaterialOptions.some((material, index) => materialOptionKey(material, index) === costMaterialKey);
+    if (!hasSelected) setCostMaterialKey(materialOptionKey(costMaterialOptions[0], 0));
+  }, [costMaterialKey, costMaterialOptions]);
   const visibleOrders = useMemo(() => {
     const keyword = query.trim().toLowerCase();
     const view = isAdmin ? activeView : 'schedule';
@@ -373,6 +454,8 @@ export default function App() {
   const registerMobileUser = useCallback(async () => {
     const name = registerName.trim();
     const phone = registerPhone.trim();
+    const password = registerPassword;
+    const confirmPassword = registerConfirmPassword;
     const nextApiUrl = apiDraft.trim().replace(/\/$/, '');
     if (!nextApiUrl) {
       Alert.alert('请填写后端地址', '格式例如：http://电脑IP:3001/api');
@@ -382,6 +465,14 @@ export default function App() {
       Alert.alert('请填写注册信息', '姓名和手机号都需要填写。');
       return;
     }
+    if (password.length < 6) {
+      Alert.alert('密码太短', '密码至少需要 6 位。');
+      return;
+    }
+    if (password !== confirmPassword) {
+      Alert.alert('两次密码不一致', '请重新输入并确认密码。');
+      return;
+    }
 
     setRegistering(true);
     setError('');
@@ -389,7 +480,7 @@ export default function App() {
       const response = await fetch(`${nextApiUrl}/users/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, phone }),
+        body: JSON.stringify({ name, phone, password }),
       });
       if (!response.ok) {
         const text = await response.text();
@@ -406,13 +497,15 @@ export default function App() {
       setCurrentUser(result.user);
       setRegisterName('');
       setRegisterPhone('');
+      setRegisterPassword('');
+      setRegisterConfirmPassword('');
       setLoading(true);
     } catch (err) {
       Alert.alert('注册失败', err.message || '无法连接服务器');
     } finally {
       setRegistering(false);
     }
-  }, [apiDraft, registerName, registerPhone]);
+  }, [apiDraft, registerConfirmPassword, registerName, registerPassword, registerPhone]);
 
   const logoutMobileUser = useCallback(async () => {
     await AsyncStorage.removeItem(mobileUserStorageKey);
@@ -552,6 +645,101 @@ export default function App() {
     }
   }, [completionNote, completionOperator, completionOrder, completionPhoto, currentUser?.name, saveOrderStatus, updateLocalOrder]);
 
+  const takeCostPhoto = useCallback(async () => {
+    const permission = await ImagePicker.requestCameraPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert('需要相机权限', '请允许相机权限后再拍照上传物料照片。');
+      return;
+    }
+
+    const result = await ImagePicker.launchCameraAsync({
+      allowsEditing: false,
+      base64: true,
+      quality: 0.55,
+    });
+    if (result.canceled || !result.assets?.length) return;
+
+    const asset = result.assets[0];
+    if (!asset.base64) {
+      Alert.alert('拍照失败', '没有拿到照片数据，请重新拍照。');
+      return;
+    }
+    setCostPhoto({
+      uri: asset.uri,
+      dataUrl: `data:image/jpeg;base64,${asset.base64}`,
+      width: asset.width,
+      height: asset.height,
+      takenAt: new Date().toISOString(),
+    });
+  }, []);
+
+  const submitCostEntry = useCallback(async () => {
+    if (!selectedCostCustomer?.id) {
+      Alert.alert('请选择客户', '成本录入需要先选择客户。');
+      return;
+    }
+    if (!selectedCostMaterial?.materialName) {
+      Alert.alert('没有可录入物料', '请先在电脑端为该客户添加物料名称和成本价格。');
+      return;
+    }
+    const quantity = parseMobileNumber(costQuantity);
+    if (quantity <= 0) {
+      Alert.alert('数量不正确', '请输入大于 0 的数量。');
+      return;
+    }
+    if (!costPhoto?.dataUrl) {
+      Alert.alert('需要照片证明', '每次物料录入都必须拍照上传。');
+      return;
+    }
+
+    setSavingCost(true);
+    try {
+      const payload = {
+        date: new Date().toISOString().slice(0, 10),
+        materialName: selectedCostMaterial.materialName,
+        quantity,
+        unit: selectedCostMaterial.unit || '',
+        unitCost: costUnitCost,
+        amount: quantity * costUnitCost,
+        note: costNote.trim(),
+        photo: {
+          dataUrl: costPhoto.dataUrl,
+          width: costPhoto.width,
+          height: costPhoto.height,
+          takenAt: costPhoto.takenAt,
+          uploadedBy: currentUser?.name || '手机端',
+        },
+      };
+      const result = await request(`/customers/${selectedCostCustomer.id}/cost-entries`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      const row = result.row || payload;
+      setCustomers(current => current.map(customer => (
+        customer.id === selectedCostCustomer.id
+          ? { ...customer, costEntries: [...(customer.costEntries || []), row] }
+          : customer
+      )));
+      setCostQuantity('1');
+      setCostNote('');
+      setCostPhoto(null);
+      Alert.alert('录入成功', '成本记录已同步到电脑端。');
+    } catch (err) {
+      Alert.alert('录入失败', err.message || '无法连接服务器');
+    } finally {
+      setSavingCost(false);
+    }
+  }, [
+    costNote,
+    costPhoto,
+    costQuantity,
+    costUnitCost,
+    currentUser?.name,
+    request,
+    selectedCostCustomer,
+    selectedCostMaterial,
+  ]);
+
   const openDetail = useCallback((order) => {
     setSelectedOrder(order);
   }, []);
@@ -571,11 +759,30 @@ export default function App() {
         apiDraft={apiDraft}
         name={registerName}
         phone={registerPhone}
+        password={registerPassword}
+        confirmPassword={registerConfirmPassword}
         saving={registering}
         onChangeApi={setApiDraft}
         onChangeName={setRegisterName}
         onChangePhone={setRegisterPhone}
+        onChangePassword={setRegisterPassword}
+        onChangeConfirmPassword={setRegisterConfirmPassword}
         onSubmit={registerMobileUser}
+      />
+    );
+  }
+
+  if (!isRoleAssigned) {
+    return (
+      <PendingRoleScreen
+        apiDraft={apiDraft}
+        currentUser={currentUser}
+        refreshing={refreshing || loading}
+        onChangeApi={setApiDraft}
+        onApplyApi={applyApiUrl}
+        onResetApi={() => setApiDraft(defaultApiBaseUrl)}
+        onRefresh={refresh}
+        onLogout={logoutMobileUser}
       />
     );
   }
@@ -691,43 +898,50 @@ export default function App() {
         ) : null}
       </View>
 
-      {isAdmin ? (
-        <View style={styles.segmented}>
-          <SegmentButton label="排产" active={activeView === 'schedule'} onPress={() => setActiveView('schedule')} />
-          <SegmentButton label="订单" active={activeView === 'orders'} onPress={() => setActiveView('orders')} />
-          <SegmentButton label="完成" active={activeView === 'completed'} onPress={() => setActiveView('completed')} />
-        </View>
+      <View style={styles.segmented}>
+        <SegmentButton label="排产" active={activeView === 'schedule'} onPress={() => setActiveView('schedule')} />
+        {isAdmin ? (
+          <>
+            <SegmentButton label="订单" active={activeView === 'orders'} onPress={() => setActiveView('orders')} />
+            <SegmentButton label="完成" active={activeView === 'completed'} onPress={() => setActiveView('completed')} />
+          </>
+        ) : null}
+        <SegmentButton label="成本" active={activeView === 'cost'} onPress={() => setActiveView('cost')} />
+      </View>
+
+      {activeView !== 'cost' ? (
+        <TextInput
+          style={styles.searchInput}
+          value={query}
+          onChangeText={setQuery}
+          placeholder="搜索订单号、客户、产品"
+          placeholderTextColor="#7a8495"
+        />
       ) : null}
 
-      <TextInput
-        style={styles.searchInput}
-        value={query}
-        onChangeText={setQuery}
-        placeholder="搜索订单号、客户、产品"
-        placeholderTextColor="#7a8495"
-      />
-
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.customerChips}>
-        <Pressable
-          style={[styles.customerChip, selectedCustomerId === 'all' && styles.customerChipActive]}
-          onPress={() => setSelectedCustomerId('all')}
-        >
-          <Text style={[styles.customerChipText, selectedCustomerId === 'all' && styles.customerChipTextActive]}>
-            全部客户
-          </Text>
-        </Pressable>
-        {customers.map(customer => (
+      {activeView !== 'cost' ? (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.customerChips}>
           <Pressable
-            key={customer.id}
-            style={[styles.customerChip, selectedCustomerId === customer.id && styles.customerChipActive]}
-            onPress={() => setSelectedCustomerId(customer.id)}
+            style={[styles.customerChip, selectedCustomerId === 'all' && styles.customerChipActive]}
+            onPress={() => setSelectedCustomerId('all')}
           >
-            <Text style={[styles.customerChipText, selectedCustomerId === customer.id && styles.customerChipTextActive]}>
-              {customer.name}
+            <Text style={[styles.customerChipText, selectedCustomerId === 'all' && styles.customerChipTextActive]}>
+              全部客户
             </Text>
           </Pressable>
-        ))}
-      </ScrollView>
+          {customers.map(customer => (
+            <Pressable
+              key={customer.id}
+              style={[styles.customerChip, selectedCustomerId === customer.id && styles.customerChipActive]}
+              onPress={() => setSelectedCustomerId(customer.id)}
+            >
+              <Text style={[styles.customerChipText, selectedCustomerId === customer.id && styles.customerChipTextActive]}>
+                {customer.name}
+              </Text>
+            </Pressable>
+          ))}
+        </ScrollView>
+      ) : null}
 
       {error ? (
         <View style={styles.errorBox}>
@@ -738,6 +952,45 @@ export default function App() {
       ) : null}
     </View>
   );
+
+  if (activeView === 'cost') {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <StatusBar style="light" />
+        <ScrollView
+          contentContainerStyle={styles.listContent}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor="#42e8ff" />}
+          keyboardShouldPersistTaps="handled"
+        >
+          {listHeader}
+          <CostEntryPanel
+            customers={customers}
+            selectedCustomer={selectedCostCustomer}
+            selectedCustomerId={selectedCostCustomer?.id || costCustomerId}
+            materialOptions={costMaterialOptions}
+            selectedMaterialKey={costMaterialKey}
+            selectedMaterial={selectedCostMaterial}
+            quantity={costQuantity}
+            note={costNote}
+            photo={costPhoto}
+            amount={costAmount}
+            saving={savingCost}
+            recentEntries={recentCostEntries}
+            onSelectCustomer={(id) => {
+              setCostCustomerId(id);
+              if (id) setSelectedCustomerId(id);
+            }}
+            onSelectMaterial={setCostMaterialKey}
+            onChangeQuantity={setCostQuantity}
+            onChangeNote={setCostNote}
+            onTakePhoto={takeCostPhoto}
+            onClearPhoto={() => setCostPhoto(null)}
+            onSubmit={submitCostEntry}
+          />
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -798,64 +1051,345 @@ function RegisterScreen({
   apiDraft,
   name,
   phone,
+  password,
+  confirmPassword,
   saving,
   onChangeApi,
   onChangeName,
   onChangePhone,
+  onChangePassword,
+  onChangeConfirmPassword,
   onSubmit,
 }) {
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar style="light" />
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.registerWrap}>
-        <View style={styles.registerCard}>
-          <Text style={styles.eyebrow}>MOBILE ACCOUNT</Text>
-          <Text style={styles.registerTitle}>手机注册</Text>
-          <Text style={styles.registerHint}>注册后由电脑端在系统设置里分配管理员或员工角色。</Text>
+        <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.registerScroll}>
+          <View style={styles.registerHero}>
+            <Text style={styles.registerKicker}>FOAM FACTORY CRM</Text>
+            <Text style={styles.registerTitle}>创建手机账号</Text>
+            <Text style={styles.registerHint}>提交后账号为普通用户，管理员分配角色前不会显示任何订单数据。</Text>
+          </View>
 
-          <View style={styles.completionField}>
-            <Text style={styles.completionLabel}>后端 API 地址</Text>
+          <View style={styles.registerCard}>
+            <View style={styles.registerField}>
+              <Text style={styles.registerLabel}>后端 API 地址</Text>
+              <TextInput
+                style={styles.registerInput}
+                value={apiDraft}
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="url"
+                onChangeText={onChangeApi}
+                placeholder="http://电脑IP:3001/api"
+                placeholderTextColor="#69758a"
+              />
+            </View>
+
+            <View style={styles.registerField}>
+              <Text style={styles.registerLabel}>手机号</Text>
+              <TextInput
+                style={styles.registerInput}
+                value={phone}
+                onChangeText={onChangePhone}
+                keyboardType="phone-pad"
+                textContentType="telephoneNumber"
+                placeholder="请输入手机号"
+                placeholderTextColor="#69758a"
+              />
+            </View>
+
+            <View style={styles.registerField}>
+              <Text style={styles.registerLabel}>姓名</Text>
+              <TextInput
+                style={styles.registerInput}
+                value={name}
+                onChangeText={onChangeName}
+                textContentType="name"
+                placeholder="请输入真实姓名"
+                placeholderTextColor="#69758a"
+              />
+            </View>
+
+            <View style={styles.registerField}>
+              <Text style={styles.registerLabel}>密码</Text>
+              <TextInput
+                style={styles.registerInput}
+                value={password}
+                onChangeText={onChangePassword}
+                secureTextEntry
+                textContentType="newPassword"
+                placeholder="至少 6 位"
+                placeholderTextColor="#69758a"
+              />
+            </View>
+
+            <View style={styles.registerField}>
+              <Text style={styles.registerLabel}>重复输入密码</Text>
+              <TextInput
+                style={styles.registerInput}
+                value={confirmPassword}
+                onChangeText={onChangeConfirmPassword}
+                secureTextEntry
+                textContentType="newPassword"
+                placeholder="再次输入密码"
+                placeholderTextColor="#69758a"
+              />
+            </View>
+
+            <View style={styles.registerNotice}>
+              <Text style={styles.registerNoticeTitle}>注册后需要管理员审核</Text>
+              <Text style={styles.registerNoticeText}>管理员在电脑端“系统设置 → 手机账号角色”中把账号改为员工或管理员后，手机端才会显示数据。</Text>
+            </View>
+
+            <Pressable style={[styles.registerButton, saving && styles.doneButtonDisabled]} onPress={onSubmit} disabled={saving}>
+              <Text style={styles.doneButtonText}>{saving ? '提交中' : '注册账号'}</Text>
+            </Pressable>
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
+  );
+}
+
+function PendingRoleScreen({
+  apiDraft,
+  currentUser,
+  refreshing,
+  onChangeApi,
+  onApplyApi,
+  onResetApi,
+  onRefresh,
+  onLogout,
+}) {
+  return (
+    <SafeAreaView style={styles.safeArea}>
+      <StatusBar style="light" />
+      <ScrollView contentContainerStyle={styles.pendingWrap}>
+        <View style={styles.pendingCard}>
+          <View style={styles.pendingIcon}>
+            <Text style={styles.pendingIconText}>!</Text>
+          </View>
+          <Text style={styles.registerKicker}>ACCOUNT PENDING</Text>
+          <Text style={styles.pendingTitle}>等待管理员分配角色</Text>
+          <Text style={styles.pendingText}>当前账号已注册为普通用户。管理员分配“员工”或“管理员”角色前，手机端不会显示订单、客户或生产数据。</Text>
+
+          <View style={styles.pendingAccount}>
+            <Text style={styles.panelLabel}>当前账号</Text>
+            <Text style={styles.accountName}>{currentUser?.name || '-'} · {currentUser?.phone || '-'}</Text>
+            <Text style={styles.pendingRoleText}>角色：普通用户</Text>
+          </View>
+
+          <View style={styles.registerField}>
+            <Text style={styles.registerLabel}>后端 API 地址</Text>
             <TextInput
-              style={styles.completionInput}
+              style={styles.registerInput}
               value={apiDraft}
               autoCapitalize="none"
               autoCorrect={false}
               keyboardType="url"
               onChangeText={onChangeApi}
               placeholder="http://电脑IP:3001/api"
-              placeholderTextColor="#7a8495"
+              placeholderTextColor="#69758a"
             />
           </View>
 
-          <View style={styles.completionField}>
-            <Text style={styles.completionLabel}>姓名</Text>
-            <TextInput
-              style={styles.completionInput}
-              value={name}
-              onChangeText={onChangeName}
-              placeholder="填写员工姓名"
-              placeholderTextColor="#7a8495"
-            />
+          <View style={styles.pendingActions}>
+            <Pressable style={styles.secondaryAction} onPress={onResetApi}>
+              <Text style={styles.secondaryActionText}>自动地址</Text>
+            </Pressable>
+            <Pressable style={styles.primaryAction} onPress={onApplyApi}>
+              <Text style={styles.primaryActionText}>连接</Text>
+            </Pressable>
           </View>
 
-          <View style={styles.completionField}>
-            <Text style={styles.completionLabel}>手机号</Text>
-            <TextInput
-              style={styles.completionInput}
-              value={phone}
-              onChangeText={onChangePhone}
-              keyboardType="phone-pad"
-              placeholder="用于识别账号"
-              placeholderTextColor="#7a8495"
-            />
-          </View>
-
-          <Pressable style={[styles.registerButton, saving && styles.doneButtonDisabled]} onPress={onSubmit} disabled={saving}>
-            <Text style={styles.doneButtonText}>{saving ? '注册中' : '注册并进入'}</Text>
+          <Pressable style={[styles.registerButton, refreshing && styles.doneButtonDisabled]} onPress={onRefresh} disabled={refreshing}>
+            <Text style={styles.doneButtonText}>{refreshing ? '检查中' : '检查授权状态'}</Text>
+          </Pressable>
+          <Pressable style={styles.pendingLogout} onPress={onLogout}>
+            <Text style={styles.pendingLogoutText}>退出当前账号</Text>
           </Pressable>
         </View>
-      </KeyboardAvoidingView>
+      </ScrollView>
     </SafeAreaView>
+  );
+}
+
+function CostEntryPanel({
+  customers,
+  selectedCustomer,
+  selectedCustomerId,
+  materialOptions,
+  selectedMaterialKey,
+  selectedMaterial,
+  quantity,
+  note,
+  photo,
+  amount,
+  saving,
+  recentEntries,
+  onSelectCustomer,
+  onSelectMaterial,
+  onChangeQuantity,
+  onChangeNote,
+  onTakePhoto,
+  onClearPhoto,
+  onSubmit,
+}) {
+  const hasMaterials = materialOptions.length > 0;
+  const photoUri = getPhotoUri(photo);
+
+  return (
+    <View style={styles.costPanel}>
+      <View style={styles.costHero}>
+        <Text style={styles.eyebrow}>COST ENTRY</Text>
+        <Text style={styles.costTitle}>成本管理专区</Text>
+        <Text style={styles.costHint}>选择电脑端维护的物料，填写数量并现场拍照，提交后电脑端成本录入表会同步显示。</Text>
+      </View>
+
+      <View style={styles.completionField}>
+        <Text style={styles.completionLabel}>客户</Text>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.customerChips}>
+          {customers.map(customer => (
+            <Pressable
+              key={customer.id}
+              style={[styles.customerChip, selectedCustomerId === customer.id && styles.customerChipActive]}
+              onPress={() => onSelectCustomer(customer.id)}
+              disabled={saving}
+            >
+              <Text style={[styles.customerChipText, selectedCustomerId === customer.id && styles.customerChipTextActive]}>
+                {customer.name}
+              </Text>
+            </Pressable>
+          ))}
+        </ScrollView>
+      </View>
+
+      {selectedCustomer ? (
+        <View style={styles.costCard}>
+          <View style={styles.costCardHead}>
+            <View>
+              <Text style={styles.panelLabel}>当前客户</Text>
+              <Text style={styles.accountName}>{selectedCustomer.name}</Text>
+            </View>
+            <Text style={styles.costCount}>{materialOptions.length} 个物料</Text>
+          </View>
+
+          {hasMaterials ? (
+            <>
+              <View style={styles.completionField}>
+                <Text style={styles.completionLabel}>物料</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.materialChips}>
+                  {materialOptions.map((material, index) => {
+                    const key = materialOptionKey(material, index);
+                    const active = key === selectedMaterialKey;
+                    return (
+                      <Pressable
+                        key={key}
+                        style={[styles.materialChip, active && styles.materialChipActive]}
+                        onPress={() => onSelectMaterial(key)}
+                        disabled={saving}
+                      >
+                        <Text style={[styles.materialChipName, active && styles.materialChipNameActive]}>
+                          {material.materialName || '未命名物料'}
+                        </Text>
+                        <Text style={[styles.materialChipPrice, active && styles.materialChipPriceActive]}>
+                          {formatMoney(material.unitCost)} / {material.unit || '-'}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+
+              <View style={styles.costSummary}>
+                <Meta label="成本单价" value={`${formatMoney(selectedMaterial?.unitCost)} / ${selectedMaterial?.unit || '-'}`} />
+                <Meta label="成本金额" value={formatMoney(amount)} />
+              </View>
+
+              <View style={styles.completionField}>
+                <Text style={styles.completionLabel}>数量</Text>
+                <TextInput
+                  style={styles.completionInput}
+                  value={quantity}
+                  onChangeText={onChangeQuantity}
+                  keyboardType="decimal-pad"
+                  placeholder="请输入数量"
+                  placeholderTextColor="#7a8495"
+                  editable={!saving}
+                />
+              </View>
+
+              <View style={styles.completionField}>
+                <Text style={styles.completionLabel}>备注</Text>
+                <TextInput
+                  style={[styles.completionInput, styles.completionTextarea]}
+                  value={note}
+                  onChangeText={onChangeNote}
+                  placeholder="例如：本批次入库、消耗、采购说明"
+                  placeholderTextColor="#7a8495"
+                  multiline
+                  editable={!saving}
+                />
+              </View>
+
+              <View style={styles.completionField}>
+                <Text style={styles.completionLabel}>照片证明</Text>
+                {photoUri ? (
+                  <View style={styles.photoPreviewWrap}>
+                    <Image source={{ uri: photoUri }} style={styles.photoPreview} />
+                    <Pressable style={styles.lightButton} onPress={onClearPhoto} disabled={saving}>
+                      <Text style={styles.lightButtonText}>删除照片</Text>
+                    </Pressable>
+                  </View>
+                ) : (
+                  <Text style={styles.photoHint}>每次物料录入必须拍照上传，不能空提交。</Text>
+                )}
+                <Pressable style={styles.photoButton} onPress={onTakePhoto} disabled={saving}>
+                  <Text style={styles.photoButtonText}>{photoUri ? '重新拍照' : '拍照上传'}</Text>
+                </Pressable>
+              </View>
+
+              <Pressable
+                style={[styles.costSubmitButton, (saving || !photoUri) && styles.doneButtonDisabled]}
+                onPress={onSubmit}
+                disabled={saving || !photoUri}
+              >
+                <Text style={styles.doneButtonText}>{saving ? '保存中' : '提交成本记录'}</Text>
+              </Pressable>
+            </>
+          ) : (
+            <View style={styles.costEmptyBox}>
+              <Text style={styles.emptyTitle}>暂无物料档案</Text>
+              <Text style={styles.stateText}>请先在电脑端进入该客户的“物料档案”，添加物料名称和成本价格。</Text>
+            </View>
+          )}
+        </View>
+      ) : (
+        <View style={styles.costEmptyBox}>
+          <Text style={styles.emptyTitle}>暂无客户</Text>
+          <Text style={styles.stateText}>电脑端添加客户和物料后，手机端刷新即可录入成本。</Text>
+        </View>
+      )}
+
+      {recentEntries.length ? (
+        <View style={styles.recentCostList}>
+          <Text style={styles.panelLabel}>最近成本记录</Text>
+          {recentEntries.map(entry => (
+            <View key={entry.id || `${entry.materialName}-${entry.enteredAt || entry.date}`} style={styles.recentCostRow}>
+              <View style={styles.recentCostText}>
+                <Text style={styles.recentCostName}>{entry.materialName || '-'}</Text>
+                <Text style={styles.recentCostMeta}>
+                  {entry.quantity || 0} {entry.unit || ''} · {formatMoney(entry.amount)} · {formatDateTime(entry.enteredAt || entry.date)}
+                </Text>
+              </View>
+              {getPhotoUri(entry.photo) ? <Image source={{ uri: getPhotoUri(entry.photo) }} style={styles.recentCostPhoto} /> : null}
+            </View>
+          ))}
+        </View>
+      ) : null}
+    </View>
   );
 }
 
@@ -1323,34 +1857,288 @@ const styles = StyleSheet.create({
   },
   registerWrap: {
     flex: 1,
+    backgroundColor: '#07111f',
+  },
+  registerScroll: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    gap: 18,
+    padding: 18,
+  },
+  registerHero: {
+    gap: 8,
+    paddingHorizontal: 2,
+  },
+  registerKicker: {
+    color: '#42e8ff',
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 1.2,
+  },
+  registerCard: {
+    gap: 14,
+    borderRadius: 20,
+    padding: 18,
+    backgroundColor: '#0d1829',
+    borderWidth: 1,
+    borderColor: '#284466',
+    shadowColor: '#000',
+    shadowOpacity: 0.28,
+    shadowRadius: 22,
+    shadowOffset: { width: 0, height: 12 },
+  },
+  registerTitle: {
+    color: '#f4fbff',
+    fontSize: 30,
+    fontWeight: '900',
+  },
+  registerHint: {
+    color: '#9eb3c8',
+    fontSize: 14,
+    lineHeight: 22,
+  },
+  registerField: {
+    gap: 7,
+  },
+  registerLabel: {
+    color: '#c7d7ea',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  registerInput: {
+    minHeight: 48,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#2c4263',
+    paddingHorizontal: 14,
+    color: '#f4fbff',
+    backgroundColor: '#081223',
+    fontSize: 15,
+  },
+  registerNotice: {
+    gap: 4,
+    borderRadius: 14,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#2b6f8f',
+    backgroundColor: '#0b2738',
+  },
+  registerNoticeTitle: {
+    color: '#dff8ff',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  registerNoticeText: {
+    color: '#9eb3c8',
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  registerButton: {
+    minHeight: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 12,
+    marginTop: 2,
+    backgroundColor: '#2ed47a',
+  },
+  pendingWrap: {
+    flexGrow: 1,
     justifyContent: 'center',
     padding: 18,
   },
-  registerCard: {
-    borderRadius: 8,
-    padding: 16,
-    backgroundColor: '#101827',
+  pendingCard: {
+    gap: 16,
+    borderRadius: 22,
+    padding: 20,
     borderWidth: 1,
-    borderColor: '#2a3d5c',
+    borderColor: '#284466',
+    backgroundColor: '#0d1829',
   },
-  registerTitle: {
-    marginTop: 6,
+  pendingIcon: {
+    width: 56,
+    height: 56,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#d29922',
+    backgroundColor: '#2c210d',
+  },
+  pendingIconText: {
+    color: '#ffd166',
+    fontSize: 30,
+    fontWeight: '900',
+  },
+  pendingTitle: {
+    color: '#f4fbff',
+    fontSize: 26,
+    fontWeight: '900',
+  },
+  pendingText: {
+    color: '#9eb3c8',
+    fontSize: 14,
+    lineHeight: 22,
+  },
+  pendingAccount: {
+    gap: 4,
+    borderRadius: 14,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#243755',
+    backgroundColor: '#081223',
+  },
+  pendingRoleText: {
+    color: '#ffd166',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  pendingActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 8,
+  },
+  pendingLogout: {
+    minHeight: 42,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pendingLogoutText: {
+    color: '#9eb3c8',
+    fontWeight: '800',
+  },
+  costPanel: {
+    gap: 14,
+  },
+  costHero: {
+    gap: 7,
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#2b6f8f',
+    backgroundColor: '#0b2738',
+  },
+  costTitle: {
     color: '#f4fbff',
     fontSize: 24,
     fontWeight: '900',
   },
-  registerHint: {
-    marginTop: 8,
+  costHint: {
     color: '#9eb3c8',
+    fontSize: 13,
     lineHeight: 20,
   },
-  registerButton: {
-    minHeight: 44,
+  costCard: {
+    gap: 14,
+    borderRadius: 14,
+    padding: 14,
+    backgroundColor: '#101827',
+    borderWidth: 1,
+    borderColor: '#22334d',
+  },
+  costCardHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  costCount: {
+    color: '#42e8ff',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  materialChips: {
+    gap: 8,
+    paddingBottom: 2,
+  },
+  materialChip: {
+    minWidth: 142,
+    borderRadius: 12,
+    padding: 11,
+    borderWidth: 1,
+    borderColor: '#2f456a',
+    backgroundColor: '#081223',
+  },
+  materialChipActive: {
+    borderColor: '#42e8ff',
+    backgroundColor: '#143149',
+  },
+  materialChipName: {
+    color: '#d9f4ff',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  materialChipNameActive: {
+    color: '#ffffff',
+  },
+  materialChipPrice: {
+    marginTop: 5,
+    color: '#8fa4ba',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  materialChipPriceActive: {
+    color: '#bff7ff',
+  },
+  costSummary: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  costSubmitButton: {
+    minHeight: 48,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 8,
-    marginTop: 16,
+    borderRadius: 10,
     backgroundColor: '#2ed47a',
+  },
+  costEmptyBox: {
+    gap: 8,
+    borderRadius: 14,
+    padding: 16,
+    backgroundColor: '#101827',
+    borderWidth: 1,
+    borderColor: '#22334d',
+  },
+  recentCostList: {
+    gap: 10,
+    borderRadius: 14,
+    padding: 14,
+    backgroundColor: '#0d1829',
+    borderWidth: 1,
+    borderColor: '#22334d',
+  },
+  recentCostRow: {
+    minHeight: 64,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    borderRadius: 10,
+    padding: 10,
+    backgroundColor: '#081223',
+    borderWidth: 1,
+    borderColor: '#1c2d46',
+  },
+  recentCostText: {
+    flex: 1,
+    minWidth: 0,
+  },
+  recentCostName: {
+    color: '#f4fbff',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  recentCostMeta: {
+    marginTop: 4,
+    color: '#9eb3c8',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  recentCostPhoto: {
+    width: 46,
+    height: 46,
+    borderRadius: 8,
+    backgroundColor: '#101827',
   },
   statsRow: {
     flexDirection: 'row',

@@ -7,19 +7,21 @@ datasource db {
 }
 
 model Customer {
-  id            String     @id
+  id            String         @id
   name          String
-  contact       String     @default("")
-  phone         String     @default("")
-  address       String     @default("")
-  level         String     @default("")
-  paymentTerm   String     @default("") @map("payment_term")
-  taxNo         String     @default("") @map("tax_no")
-  note          String     @default("")
-  customColumns Json       @default("{\"products\":[],\"orders\":[],\"deliveries\":[]}") @map("custom_columns")
+  contact       String         @default("")
+  phone         String         @default("")
+  address       String         @default("")
+  level         String         @default("")
+  paymentTerm   String         @default("") @map("payment_term")
+  taxNo         String         @default("") @map("tax_no")
+  note          String         @default("")
+  customColumns Json           @default("{\"products\":[],\"orders\":[],\"deliveries\":[],\"materialCosts\":[],\"costEntries\":[]}") @map("custom_columns")
   products      Product[]
   orders        Order[]
   deliveries    Delivery[]
+  materialCosts MaterialCost[]
+  costEntries   CostEntry[]
 
   @@map("customers")
 }
@@ -57,14 +59,37 @@ model Delivery {
   @@map("deliveries")
 }
 
+model MaterialCost {
+  id         String   @id
+  customerId String   @map("customer_id")
+  sortOrder  Int      @default(0) @map("sort_order")
+  data       Json     @default("{}")
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId], map: "material_costs_customer_idx")
+  @@map("material_costs")
+}
+
+model CostEntry {
+  id         String   @id
+  customerId String   @map("customer_id")
+  sortOrder  Int      @default(0) @map("sort_order")
+  data       Json     @default("{}")
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId], map: "cost_entries_customer_idx")
+  @@map("cost_entries")
+}
+
 model MobileUser {
-  id        String   @id
-  name      String   @default("")
-  phone     String   @unique
-  role      String   @default("employee")
-  token     String   @unique
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  id           String   @id
+  name         String   @default("")
+  phone        String   @unique
+  role         String   @default("pending")
+  passwordHash String   @default("") @map("password_hash")
+  token        String   @unique
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
 
   @@map("mobile_users")
 }

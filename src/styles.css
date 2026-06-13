@@ -434,6 +434,96 @@ h4 {
   line-height: 1.2;
 }
 
+.customer-statistics-panel {
+  margin-top: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 12px;
+  background: var(--panel);
+}
+
+.statistics-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 10px;
+}
+
+.statistics-head h3 {
+  margin: 2px 0 0;
+  font-size: 16px;
+}
+
+.statistics-head span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.statistics-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+
+.statistics-table {
+  width: 100%;
+  min-width: 920px;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.statistics-table th,
+.statistics-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.statistics-table th:first-child,
+.statistics-table td:first-child {
+  text-align: left;
+}
+
+.statistics-table th {
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.statistics-table tbody tr {
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.statistics-table tbody tr:hover,
+.statistics-table tbody tr:focus-visible {
+  outline: none;
+  background: var(--accent-subdued);
+}
+
+.statistics-table tfoot td {
+  border-bottom: 0;
+  color: var(--text);
+  background: rgba(66, 232, 255, 0.07);
+  font-weight: 900;
+}
+
+.statistics-customer {
+  color: var(--text);
+  font-weight: 800;
+}
+
+.statistics-unpaid {
+  color: var(--amber);
+  font-weight: 900;
+}
+
 .customer-panel {
   margin-top: 8px;
   border-radius: var(--radius);

@@ -1,4 +1,4 @@
-import { Boxes, ClipboardList, KanbanSquare, Truck } from "lucide-react";
+import { Boxes, ClipboardList, KanbanSquare, ReceiptText, Truck } from "lucide-react";
 import { materialOptions, unitOptions } from "../lib/statusWorkflow.js";
 import {
   orderDefaultColumns,
@@ -116,6 +116,54 @@ const tableConfigs = {
     emptyRow: {},
     sourceTableKey: "deliveries",
     disableRowCreate: true,
+  },
+  materialCosts: {
+    label: "物料档案",
+    icon: ReceiptText,
+    rowLabel: "物料",
+    defaultColumns: [
+      { field: "materialName", headerName: "物料名称", width: 150, required: true },
+      { field: "unit", headerName: "单位", width: 90, type: "select", options: unitOptions },
+      { field: "unitCost", headerName: "成本单价", width: 120, type: "number" },
+      { field: "supplier", headerName: "供应商", width: 150 },
+      { field: "remark", headerName: "备注", flex: 1, minWidth: 160 },
+    ],
+    emptyRow: {
+      materialName: "新物料",
+      unit: "件",
+      unitCost: 0,
+      supplier: "",
+      remark: "",
+    },
+  },
+  costEntries: {
+    label: "成本录入",
+    icon: ReceiptText,
+    rowLabel: "成本记录",
+    defaultColumns: [
+      { field: "date", headerName: "录入日期", width: 130, type: "date" },
+      { field: "materialName", headerName: "物料名称", width: 150 },
+      { field: "quantity", headerName: "数量", width: 100, type: "number" },
+      { field: "unit", headerName: "单位", width: 90 },
+      { field: "unitCost", headerName: "成本单价", width: 120, type: "number" },
+      { field: "amount", headerName: "成本金额", width: 120, type: "number" },
+      { field: "photo", headerName: "照片证明", width: 130, type: "image", editable: false },
+      { field: "enteredBy", headerName: "录入人", width: 120, editable: false },
+      { field: "enteredAt", headerName: "录入时间", width: 170, type: "datetime", editable: false },
+      { field: "note", headerName: "备注", flex: 1, minWidth: 160 },
+    ],
+    emptyRow: {
+      date: "",
+      materialName: "",
+      quantity: 0,
+      unit: "",
+      unitCost: 0,
+      amount: 0,
+      photo: "",
+      enteredBy: "",
+      enteredAt: "",
+      note: "",
+    },
   },
 };
 

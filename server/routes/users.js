@@ -1,13 +1,13 @@
 import { Router } from 'express';
-import { randomUUID } from 'crypto';
+import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'crypto';
 import { prisma } from '../db.js';
 import { authMiddleware } from '../auth.js';
 
 const router = Router();
-const VALID_ROLES = new Set(['admin', 'employee']);
+const VALID_ROLES = new Set(['pending', 'admin', 'employee']);
 
 function normalizeRole(role) {
-  return VALID_ROLES.has(role) ? role : 'employee';
+  return VALID_ROLES.has(role) ? role : 'pending';
 }
 
 function publicUser(user, { includeToken = true } = {}) {
@@ -23,6 +23,20 @@ function publicUser(user, { includeToken = true } = {}) {
   };
 }
 
+function hashPassword(password) {
+  const salt = randomBytes(16).toString('hex');
+  const hash = scryptSync(password, salt, 64).toString('hex');
+  return `${salt}:${hash}`;
+}
+
+function verifyPassword(password, storedHash = '') {
+  const [salt, hash] = String(storedHash || '').split(':');
+  if (!salt || !hash) return false;
+  const expected = Buffer.from(hash, 'hex');
+  const actual = scryptSync(password, salt, expected.length);
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
+}
+
 function readMobileToken(req) {
   return String(req.headers['x-mobile-user-token'] || req.query.mobileToken || '').trim();
 }
@@ -36,16 +50,24 @@ async function findUserByMobileToken(req) {
 router.post('/register', async (req, res) => {
   const name = String(req.body?.name || '').trim();
   const phone = String(req.body?.phone || '').trim();
+  const password = String(req.body?.password || '');
 
   if (!name) return res.status(400).json({ error: '请填写姓名' });
   if (!phone) return res.status(400).json({ error: '请填写手机号' });
+  if (password.length < 6) return res.status(400).json({ error: '密码至少需要 6 位' });
 
   try {
     const existing = await prisma.mobileUser.findUnique({ where: { phone } });
     if (existing) {
+      if (existing.passwordHash && !verifyPassword(password, existing.passwordHash)) {
+        return res.status(401).json({ error: '手机号已注册，密码不正确' });
+      }
       const updated = await prisma.mobileUser.update({
         where: { phone },
-        data: { name },
+        data: {
+          name,
+          ...(existing.passwordHash ? {} : { passwordHash: hashPassword(password) }),
+        },
       });
       return res.json({ ok: true, user: publicUser(updated) });
     }
@@ -55,7 +77,8 @@ router.post('/register', async (req, res) => {
         id: `user-${randomUUID()}`,
         name,
         phone,
-        role: 'employee',
+        role: 'pending',
+        passwordHash: hashPassword(password),
         token: randomUUID(),
       },
     });

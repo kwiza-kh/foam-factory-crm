@@ -20,6 +20,8 @@
  * @property {Record<string,any>[]} products
  * @property {Record<string,any>[]} orders
  * @property {Record<string,any>[]} deliveries
+ * @property {Record<string,any>[]} materialCosts
+ * @property {Record<string,any>[]} costEntries
  */
 
 /**
@@ -40,6 +42,8 @@
  * @property {ColumnDef[]} products
  * @property {ColumnDef[]} orders
  * @property {ColumnDef[]} deliveries
+ * @property {ColumnDef[]} materialCosts
+ * @property {ColumnDef[]} costEntries
  */
 
 /**

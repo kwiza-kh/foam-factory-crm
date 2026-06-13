@@ -4,15 +4,25 @@ import { prisma } from '../db.js';
 import { findUserByMobileToken, normalizeRole } from './users.js';
 
 const router = Router();
-const VALID_TABLES = new Set(['products', 'orders', 'deliveries']);
+const VALID_TABLES = new Set(['products', 'orders', 'deliveries', 'materialCosts', 'costEntries']);
 const TABLE_DELEGATES = {
   products: 'product',
   orders: 'order',
   deliveries: 'delivery',
+  materialCosts: 'materialCost',
+  costEntries: 'costEntry',
 };
 
 function defaultCustomColumns() {
-  return { products: [], orders: [], deliveries: [] };
+  return { products: [], orders: [], deliveries: [], materialCosts: [], costEntries: [] };
+}
+
+function normalizeCustomColumns(customColumns = {}) {
+  return {
+    ...defaultCustomColumns(),
+    ...(customColumns || {}),
+    columnOrder: customColumns?.columnOrder || {},
+  };
 }
 
 function makeRowId(tableKey) {
@@ -55,10 +65,12 @@ function normalize(row) {
     paymentTerm: row.paymentTerm || '',
     taxNo: row.taxNo || '',
     note: row.note || '',
-    customColumns: row.customColumns || defaultCustomColumns(),
+    customColumns: normalizeCustomColumns(row.customColumns),
     products: row.products?.map(item => item.data) || [],
     orders: row.orders?.map(item => item.data) || [],
     deliveries: row.deliveries?.map(item => item.data) || [],
+    materialCosts: row.materialCosts?.map(item => item.data) || [],
+    costEntries: row.costEntries?.map(item => item.data) || [],
   };
 }
 
@@ -69,11 +81,17 @@ function normalizeOrderStatus(status = '') {
 }
 
 function filterCustomerForMobileUser(customer, user) {
-  if (!user || normalizeRole(user.role) === 'admin') return customer;
+  const role = normalizeRole(user?.role);
+  if (!user || role === 'admin') return customer;
+  if (role === 'pending') {
+    return { ...customer, products: [], deliveries: [], orders: [], materialCosts: [], costEntries: [] };
+  }
   return {
     ...customer,
     products: [],
     deliveries: [],
+    materialCosts: customer.materialCosts || [],
+    costEntries: customer.costEntries || [],
     orders: (customer.orders || []).filter(order => normalizeOrderStatus(order.status) === '已排产'),
   };
 }
@@ -89,6 +107,7 @@ router.get('/', async (req, res) => {
     if (hasMobileUserToken(req) && !mobileUser) {
       return res.status(401).json({ error: '手机账号不存在或已失效' });
     }
+    const mobileRole = normalizeRole(mobileUser?.role);
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = Math.min(200, Math.max(1, parseInt(req.query.limit) || 50));
     const skip = (page - 1) * limit;
@@ -108,6 +127,8 @@ router.get('/', async (req, res) => {
           products: { orderBy: { sortOrder: 'asc' } },
           orders: { orderBy: { sortOrder: 'asc' } },
           deliveries: { orderBy: { sortOrder: 'asc' } },
+          materialCosts: { orderBy: { sortOrder: 'asc' } },
+          costEntries: { orderBy: { sortOrder: 'asc' } },
         },
       }),
       prisma.customer.count({ where }),
@@ -115,8 +136,14 @@ router.get('/', async (req, res) => {
 
     const data = customers
       .map(normalize)
-      .map(customer => filterCustomerForMobileUser(customer, mobileUser))
-      .filter(customer => !mobileUser || normalizeRole(mobileUser.role) === 'admin' || customer.orders.length > 0);
+      .map(customer => (mobileUser ? filterCustomerForMobileUser(customer, mobileUser) : customer))
+      .filter(customer => (
+        !mobileUser
+        || mobileRole === 'admin'
+        || customer.orders.length > 0
+        || customer.materialCosts.length > 0
+        || customer.costEntries.length > 0
+      ));
 
     res.json({
       data,
@@ -141,10 +168,20 @@ router.post('/replace-all', async (req, res) => {
       await tx.delivery.deleteMany();
       await tx.order.deleteMany();
       await tx.product.deleteMany();
+      await tx.costEntry.deleteMany();
+      await tx.materialCost.deleteMany();
       await tx.customer.deleteMany();
 
       for (const c of customers) {
-        const { products = [], orders = [], deliveries = [], customColumns, ...info } = c;
+        const {
+          products = [],
+          orders = [],
+          deliveries = [],
+          materialCosts = [],
+          costEntries = [],
+          customColumns,
+          ...info
+        } = c;
         await tx.customer.create({
           data: {
             id: info.id,
@@ -156,11 +193,17 @@ router.post('/replace-all', async (req, res) => {
             paymentTerm: info.paymentTerm || '',
             taxNo: info.taxNo || '',
             note: info.note || '',
-            customColumns: customColumns || defaultCustomColumns(),
+            customColumns: normalizeCustomColumns(customColumns),
           },
         });
 
-        for (const [table, tableRows] of [['products', products], ['orders', orders], ['deliveries', deliveries]]) {
+        for (const [table, tableRows] of [
+          ['products', products],
+          ['orders', orders],
+          ['deliveries', deliveries],
+          ['materialCosts', materialCosts],
+          ['costEntries', costEntries],
+        ]) {
           const delegate = TABLE_DELEGATES[table];
           for (let i = 0; i < tableRows.length; i++) {
             await tx[delegate].create({
@@ -197,12 +240,12 @@ router.post('/', async (req, res) => {
         paymentTerm,
         taxNo,
         note,
-        customColumns: customColumns || defaultCustomColumns(),
+        customColumns: normalizeCustomColumns(customColumns),
       },
     });
     res.json({ id, name, contact, phone, address, level, paymentTerm, taxNo, note,
-               customColumns: customColumns || defaultCustomColumns(),
-               products: [], orders: [], deliveries: [] });
+               customColumns: normalizeCustomColumns(customColumns),
+               products: [], orders: [], deliveries: [], materialCosts: [], costEntries: [] });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -224,7 +267,7 @@ router.put('/:id', async (req, res) => {
         paymentTerm,
         taxNo,
         note,
-        customColumns: customColumns || defaultCustomColumns(),
+        customColumns: normalizeCustomColumns(customColumns),
       },
     });
     res.json(normalize(customer));
@@ -272,6 +315,10 @@ router.patch('/:id/orders/:orderId/status', async (req, res) => {
     if (hasMobileUserToken(req) && !mobileUser) {
       return res.status(401).json({ error: '手机账号不存在或已失效' });
     }
+    const mobileRole = normalizeRole(mobileUser?.role);
+    if (mobileUser && mobileRole === 'pending') {
+      return res.status(403).json({ error: '账号尚未分配角色，请联系管理员' });
+    }
     const order = await prisma.order.findFirst({
       where: {
         id: orderId,
@@ -279,7 +326,7 @@ router.patch('/:id/orders/:orderId/status', async (req, res) => {
       },
     });
     if (!order) return res.status(404).json({ error: 'Order not found' });
-    if (mobileUser && normalizeRole(mobileUser.role) === 'employee') {
+    if (mobileUser && mobileRole === 'employee') {
       if (nextStatus !== '已完成') return res.status(403).json({ error: '员工只能完成已排产订单' });
       if (normalizeOrderStatus(order.data?.status) !== '已排产') {
         return res.status(403).json({ error: '员工只能完成已排产订单' });
@@ -304,6 +351,65 @@ router.patch('/:id/orders/:orderId/status', async (req, res) => {
       data: { data },
     });
     res.json({ ok: true, row: updated.data });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/customers/:id/cost-entries - mobile cost entry with photo proof
+router.post('/:id/cost-entries', async (req, res) => {
+  const { id } = req.params;
+  const body = req.body || {};
+  const materialName = String(body.materialName || '').trim();
+  const photo = body.photo;
+
+  if (!materialName) return res.status(400).json({ error: '请填写物料名称' });
+  if (!photo?.dataUrl) return res.status(400).json({ error: '成本录入必须上传照片' });
+
+  try {
+    const mobileUser = await findUserByMobileToken(req);
+    if (!mobileUser) {
+      return res.status(401).json({ error: '手机账号不存在或已失效' });
+    }
+    const mobileRole = normalizeRole(mobileUser?.role);
+    if (mobileRole === 'pending') {
+      return res.status(403).json({ error: '账号尚未分配角色，请联系管理员' });
+    }
+
+    const customer = await prisma.customer.findUnique({
+      where: { id },
+      select: { id: true },
+    });
+    if (!customer) return res.status(404).json({ error: 'Customer not found' });
+
+    const row = {
+      id: makeRowId('costEntries'),
+      date: String(body.date || '').trim() || new Date().toISOString().slice(0, 10),
+      materialName,
+      quantity: Number(body.quantity || 0),
+      unit: String(body.unit || '').trim(),
+      unitCost: Number(body.unitCost || 0),
+      amount: Number(body.amount || 0),
+      note: String(body.note || '').trim(),
+      photo,
+      enteredAt: new Date().toISOString(),
+      enteredBy: mobileUser.name || '手机端',
+      enteredUserId: mobileUser.id || '',
+    };
+
+    const maxSort = await prisma.costEntry.aggregate({
+      where: { customerId: id },
+      _max: { sortOrder: true },
+    });
+    const created = await prisma.costEntry.create({
+      data: {
+        id: row.id,
+        customerId: id,
+        sortOrder: (maxSort._max.sortOrder ?? -1) + 1,
+        data: row,
+      },
+    });
+    res.json({ ok: true, row: created.data });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
