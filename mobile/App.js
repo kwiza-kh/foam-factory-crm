@@ -459,6 +459,15 @@ export default function App() {
       .filter(delivery => !isDeliverySigned(delivery))
       .sort((a, b) => parseDateValue(a.date) - parseDateValue(b.date) || a._deliveryIndex - b._deliveryIndex)
   ), [allDeliveries]);
+  const scheduledOrdersForWorkbench = useMemo(() => (
+    allOrders
+      .filter(isScheduledProductionOrder)
+      .sort((a, b) => (
+        parseDateValue(a.productionDate || a.dueDate) - parseDateValue(b.productionDate || b.dueDate)
+        || parseDateValue(a.date) - parseDateValue(b.date)
+        || a._orderIndex - b._orderIndex
+      ))
+  ), [allOrders]);
   const reminders = useMemo(() => {
     const todayTs = new Date().setHours(0, 0, 0, 0);
     const threeDaysTs = todayTs + 3 * 86400000;
@@ -1118,6 +1127,13 @@ export default function App() {
     setSelectedOrder(order);
   }, []);
 
+  const openWorkbenchTask = useCallback((order) => {
+    if (!order) return;
+    if (order._customerId) setSelectedCustomerId(order._customerId);
+    setActiveView('schedule');
+    setSelectedOrder(order);
+  }, []);
+
   if (authLoading) {
     return (
       <SafeAreaView style={styles.safeArea}>
@@ -1340,16 +1356,8 @@ export default function App() {
         >
           {listHeader}
           <WorkbenchPanel
-            summary={dashboardSummary}
-            reminders={reminders}
-            scheduledOrders={visibleOrders}
-            pendingDeliveries={pendingDeliveries}
-            offlineQueue={offlineQueue}
-            syncing={syncingQueue}
-            onViewSchedule={() => setActiveView('schedule')}
-            onViewDelivery={() => setActiveView('delivery')}
-            onViewAlerts={() => setActiveView('alerts')}
-            onSync={syncOfflineQueue}
+            scheduledOrders={scheduledOrdersForWorkbench}
+            onOpenTask={openWorkbenchTask}
           />
         </ScrollView>
       </SafeAreaView>
@@ -1706,53 +1714,23 @@ function PendingRoleScreen({
   );
 }
 
-function WorkbenchPanel({
-  summary,
-  reminders,
-  scheduledOrders,
-  pendingDeliveries,
-  offlineQueue,
-  syncing,
-  onViewSchedule,
-  onViewDelivery,
-  onViewAlerts,
-  onSync,
-}) {
+function WorkbenchPanel({ scheduledOrders, onOpenTask }) {
   return (
     <View style={styles.workbenchPanel}>
-      <View style={styles.workbenchHero}>
-        <Text style={styles.eyebrow}>WORKBENCH</Text>
-        <Text style={styles.costTitle}>今日工作台</Text>
-        <Text style={styles.costHint}>集中处理排产任务、送货签收、离线同步和系统提醒。</Text>
-      </View>
-      <View style={styles.actionGrid}>
-        <Pressable style={styles.actionTile} onPress={onViewSchedule}>
-          <Text style={styles.actionTileValue}>{summary.scheduled}</Text>
-          <Text style={styles.actionTileLabel}>待完成排产</Text>
-        </Pressable>
-        <Pressable style={styles.actionTile} onPress={onViewDelivery}>
-          <Text style={styles.actionTileValue}>{summary.deliveryPending}</Text>
-          <Text style={styles.actionTileLabel}>待签收送货</Text>
-        </Pressable>
-        <Pressable style={styles.actionTile} onPress={onViewAlerts}>
-          <Text style={styles.actionTileValue}>{reminders.length}</Text>
-          <Text style={styles.actionTileLabel}>消息提醒</Text>
-        </Pressable>
-        <Pressable style={styles.actionTile} onPress={onSync} disabled={!offlineQueue.length || syncing}>
-          <Text style={styles.actionTileValue}>{offlineQueue.length}</Text>
-          <Text style={styles.actionTileLabel}>{syncing ? '同步中' : '离线暂存'}</Text>
-        </Pressable>
-      </View>
       <View style={styles.mobileSection}>
         <Text style={styles.panelLabel}>最近任务</Text>
-        {scheduledOrders.slice(0, 5).map(order => (
-          <View key={`${order._customerId}-${order.id}`} style={styles.compactRow}>
+        {scheduledOrders.slice(0, 8).map(order => (
+          <Pressable
+            key={`${order._customerId}-${order.id}`}
+            style={styles.compactRow}
+            onPress={() => onOpenTask(order)}
+          >
             <View style={styles.recentCostText}>
               <Text style={styles.recentCostName}>{order.orderNo || order.product || '未命名订单'}</Text>
               <Text style={styles.recentCostMeta}>{order._customerName} · 交期 {order.dueDate || '-'}</Text>
             </View>
             <StatusChip status={normalizeStatus(order.status)} />
-          </View>
+          </Pressable>
         ))}
         {!scheduledOrders.length ? <Text style={styles.stateText}>暂无待完成排产任务。</Text> : null}
       </View>
