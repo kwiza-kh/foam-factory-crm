@@ -1,15 +1,26 @@
 {
   "expo": {
-    "name": "泡沫工厂排产",
+    "name": "泡沫工厂 CRM",
     "slug": "foam-factory-schedule",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
+    "scheme": "foamfactorycrm",
     "userInterfaceStyle": "dark",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#07111f"
+    },
     "ios": {
+      "bundleIdentifier": "com.kwizakh.foamfactorycrm",
+      "buildNumber": "1.0.0",
       "supportsTablet": true,
       "infoPlist": {
-        "NSCameraUsageDescription": "用于拍摄订单完成现场照片。"
+        "CFBundleDisplayName": "泡沫工厂 CRM",
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSCameraUsageDescription": "用于拍摄订单完成现场照片和物料成本录入照片。",
+        "NSPhotoLibraryUsageDescription": "用于在需要时选择订单或物料相关照片。"
       }
     },
     "android": {
