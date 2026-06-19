@@ -21,7 +21,7 @@ import {
   View,
 } from 'react-native';
 
-const statusOptions = ['未完成', '已排产', '已完成', '已送货', '已开对账单', '已付款'];
+const statusOptions = ['未完成', '已排产', '已完成', '已开送货单', '部分送货', '已送货', '已开对账单', '已付款', '异常'];
 const completionTimeField = 'completionTime';
 const completionOperatorField = 'completionOperator';
 const completionNoteField = 'completionNote';
@@ -114,6 +114,7 @@ function parseMobileNumber(value) {
 }
 
 function formatMoney(value) {
+  if (value === '' || value == null || Number.isNaN(Number(value))) return '-';
   return `¥${parseMobileNumber(value).toFixed(2)}`;
 }
 
@@ -134,6 +135,14 @@ function formatDateTime(value) {
     minute: '2-digit',
     hour12: false,
   });
+}
+
+function formatElapsed(isoString) {
+  const elapsed = Date.now() - new Date(isoString).getTime();
+  if (elapsed < 60000) return '刚刚';
+  if (elapsed < 3600000) return `${Math.floor(elapsed / 60000)} 分钟前`;
+  if (elapsed < 86400000) return `${Math.floor(elapsed / 3600000)} 小时前`;
+  return `${Math.floor(elapsed / 86400000)} 天前`;
 }
 
 function formatMobileFieldValue(order, fieldConfig) {
@@ -254,9 +263,9 @@ function summarizeCustomers(customers = []) {
     pendingCostAmount: pendingCosts.reduce((sum, entry) => sum + parseMobileNumber(entry.amount), 0),
     approvedCostAmount: approvedCosts.reduce((sum, entry) => sum + parseMobileNumber(entry.amount), 0),
     orderAmount: allOrders.reduce((sum, order) => sum + parseMobileNumber(order.amount), 0),
-    paidAmount: allOrders
-      .filter(order => normalizeStatus(order.status) === '已付款')
-      .reduce((sum, order) => sum + parseMobileNumber(order.amount), 0),
+    paidAmount: customers
+      .flatMap(customer => customer.payments || [])
+      .reduce((sum, payment) => sum + parseMobileNumber(payment.amount), 0),
   };
 }
 
@@ -306,6 +315,8 @@ export default function App() {
   const [savingCost, setSavingCost] = useState(false);
   const [offlineQueue, setOfflineQueue] = useState([]);
   const [syncingQueue, setSyncingQueue] = useState(false);
+  const [syncStatus, setSyncStatus] = useState({}); // { itemId: 'pending'|'syncing'|'synced'|'failed' }
+  const [lastSyncAt, setLastSyncAt] = useState(null);
   const [deliverySign, setDeliverySign] = useState(null);
   const [deliverySigner, setDeliverySigner] = useState('');
   const [deliverySignNote, setDeliverySignNote] = useState('');
@@ -416,6 +427,8 @@ export default function App() {
     const item = {
       id: makeQueueId(action.type || 'offline'),
       createdAt: new Date().toISOString(),
+      retryCount: 0,
+      lastRetryAt: null,
       ...action,
     };
     await persistOfflineQueue([...offlineQueue, item]);
@@ -443,7 +456,8 @@ export default function App() {
     || null
   ), [costMaterialKey, costMaterialOptions]);
   const costUnitCost = parseMobileNumber(selectedCostMaterial?.unitCost);
-  const costAmount = parseMobileNumber(costQuantity) * costUnitCost;
+  const hasVisibleCostPrice = selectedCostMaterial?.unitCost !== '' && selectedCostMaterial?.unitCost != null;
+  const costAmount = hasVisibleCostPrice ? parseMobileNumber(costQuantity) * costUnitCost : null;
   const recentCostEntries = useMemo(() => (
     [...(selectedCostCustomer?.costEntries || [])]
       .sort((a, b) => parseDateValue(b.enteredAt || b.date) - parseDateValue(a.enteredAt || a.date))
@@ -729,8 +743,19 @@ export default function App() {
     if (syncingQueue || !offlineQueue.length || !currentUser?.token) return;
     setSyncingQueue(true);
     let nextQueue = [...offlineQueue];
+    const now = Date.now();
+    let hasSuccess = false;
+
     try {
-      for (const item of offlineQueue) {
+      for (const item of nextQueue) {
+        // Skip items that failed recently (exponential backoff)
+        if (item.retryCount > 0 && item.lastRetryAt) {
+          const backoffMs = Math.min(Math.pow(2, item.retryCount) * 1000, 60000);
+          const elapsed = now - new Date(item.lastRetryAt).getTime();
+          if (elapsed < backoffMs) continue;
+        }
+
+        setSyncStatus(current => ({ ...current, [item.id]: 'syncing' }));
         try {
           if (item.type === 'complete-order') {
             const result = await request(`/customers/${item.customerId}/orders/${item.orderId}/status`, {
@@ -744,9 +769,27 @@ export default function App() {
               method: 'POST',
               body: JSON.stringify(item.payload || {}),
             });
+            const syncedRow = result.row || { ...(item.payload || {}), id: item.localRowId || makeQueueId('costEntries') };
             setCustomers(current => current.map(customer => (
               customer.id === item.customerId
-                ? { ...customer, costEntries: [...(customer.costEntries || []), result.row || item.payload] }
+                ? {
+                  ...customer,
+                  costEntries: (() => {
+                    let replaced = false;
+                    const nextEntries = (customer.costEntries || []).map(entry => {
+                      if (item.localRowId && entry.id === item.localRowId) {
+                        replaced = true;
+                        return syncedRow;
+                      }
+                      if (syncedRow.id && entry.id === syncedRow.id) {
+                        replaced = true;
+                        return syncedRow;
+                      }
+                      return entry;
+                    });
+                    return replaced ? nextEntries : [...nextEntries, syncedRow];
+                  })(),
+                }
                 : customer
             )));
           }
@@ -757,14 +800,27 @@ export default function App() {
             });
             updateLocalDelivery(item.customerId, result.row || { ...(item.payload || {}), id: item.deliveryId, status: '已送' });
           }
+
+          // Success — remove from queue
           nextQueue = nextQueue.filter(queued => queued.id !== item.id);
+          setSyncStatus(current => ({ ...current, [item.id]: 'synced' }));
+          hasSuccess = true;
           await persistOfflineQueue(nextQueue);
         } catch {
-          break;
+          // Mark for retry with backoff
+          const updatedItem = { ...item, retryCount: (item.retryCount || 0) + 1, lastRetryAt: new Date().toISOString() };
+          nextQueue = nextQueue.map(queued => queued.id === item.id ? updatedItem : queued);
+          setSyncStatus(current => ({ ...current, [item.id]: 'failed' }));
+          await persistOfflineQueue(nextQueue);
+          // Continue with next item — don't break on single failure
+          continue;
         }
       }
     } finally {
       setSyncingQueue(false);
+      if (hasSuccess) {
+        setLastSyncAt(new Date().toISOString());
+      }
     }
   }, [
     currentUser?.token,
@@ -776,9 +832,18 @@ export default function App() {
     updateLocalOrder,
   ]);
 
+  // Auto-sync on token/network change + periodic retry for failed items
   useEffect(() => {
     if (!offlineQueue.length || !currentUser?.token || loading) return;
     syncOfflineQueue();
+
+    // Periodic retry for failed items (every 30 seconds)
+    const interval = setInterval(() => {
+      const hasFailedItems = offlineQueue.some(item => item.retryCount > 0);
+      if (hasFailedItems) syncOfflineQueue();
+    }, 30000);
+
+    return () => clearInterval(interval);
   }, [currentUser?.token, loading, offlineQueue.length, syncOfflineQueue]);
 
   const markCompleted = useCallback((order) => {
@@ -830,28 +895,28 @@ export default function App() {
       Alert.alert('需要完成照片', '请先拍照上传，才能确认订单已完成。');
       return;
     }
+    const patch = {
+      [completionTimeField]: new Date().toISOString(),
+      [completionOperatorField]: completionOperator.trim() || currentUser?.name || '手机端',
+      [completionNoteField]: completionNote.trim(),
+      [completionPhotoField]: {
+        dataUrl: completionPhoto.dataUrl,
+        width: completionPhoto.width,
+        height: completionPhoto.height,
+        takenAt: completionPhoto.takenAt,
+        uploadedBy: currentUser?.name || completionOperator.trim() || '手机端',
+      },
+      [completionPhotoAtField]: completionPhoto.takenAt || new Date().toISOString(),
+    };
     setSavingOrderId(completionOrder.id);
     try {
-      const patch = {
-        [completionTimeField]: new Date().toISOString(),
-        [completionOperatorField]: completionOperator.trim() || currentUser?.name || '手机端',
-        [completionNoteField]: completionNote.trim(),
-        [completionPhotoField]: {
-          dataUrl: completionPhoto.dataUrl,
-          width: completionPhoto.width,
-          height: completionPhoto.height,
-          takenAt: completionPhoto.takenAt,
-          uploadedBy: currentUser?.name || completionOperator.trim() || '手机端',
-        },
-        [completionPhotoAtField]: completionPhoto.takenAt || new Date().toISOString(),
-      };
       const row = await saveOrderStatus(completionOrder, '已完成', patch);
       updateLocalOrder(completionOrder._customerId, row);
       setCompletionOrder(null);
       setCompletionOperator('');
       setCompletionNote('');
       setCompletionPhoto(null);
-    } catch (err) {
+    } catch {
       const offlineRow = {
         ...completionOrder,
         ...patch,
@@ -1030,24 +1095,24 @@ export default function App() {
       return;
     }
 
+    const payload = {
+      date: new Date().toISOString().slice(0, 10),
+      materialName: selectedCostMaterial.materialName,
+      quantity,
+      unit: selectedCostMaterial.unit || '',
+      unitCost: hasVisibleCostPrice ? costUnitCost : undefined,
+      amount: hasVisibleCostPrice ? quantity * costUnitCost : undefined,
+      note: costNote.trim(),
+      photo: {
+        dataUrl: costPhoto.dataUrl,
+        width: costPhoto.width,
+        height: costPhoto.height,
+        takenAt: costPhoto.takenAt,
+        uploadedBy: currentUser?.name || '手机端',
+      },
+    };
     setSavingCost(true);
     try {
-      const payload = {
-        date: new Date().toISOString().slice(0, 10),
-        materialName: selectedCostMaterial.materialName,
-        quantity,
-        unit: selectedCostMaterial.unit || '',
-        unitCost: costUnitCost,
-        amount: quantity * costUnitCost,
-        note: costNote.trim(),
-        photo: {
-          dataUrl: costPhoto.dataUrl,
-          width: costPhoto.width,
-          height: costPhoto.height,
-          takenAt: costPhoto.takenAt,
-          uploadedBy: currentUser?.name || '手机端',
-        },
-      };
       const result = await request(`/customers/${selectedCostCustomer.id}/cost-entries`, {
         method: 'POST',
         body: JSON.stringify(payload),
@@ -1062,7 +1127,7 @@ export default function App() {
       setCostNote('');
       setCostPhoto(null);
       Alert.alert('录入成功', '成本记录已同步到电脑端。');
-    } catch (err) {
+    } catch {
       const offlineRow = {
         ...payload,
         id: makeQueueId('costEntries'),
@@ -1080,6 +1145,7 @@ export default function App() {
       await enqueueOfflineAction({
         type: 'cost-entry',
         customerId: selectedCostCustomer.id,
+        localRowId: offlineRow.id,
         payload,
       });
       setCostQuantity('1');
@@ -1094,6 +1160,7 @@ export default function App() {
     costPhoto,
     costQuantity,
     costUnitCost,
+    hasVisibleCostPrice,
     currentUser?.name,
     currentUser?.id,
     enqueueOfflineAction,
@@ -1373,7 +1440,7 @@ export default function App() {
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor="#42e8ff" />}
         >
           {listHeader}
-          <ReminderPanel reminders={reminders} offlineQueue={offlineQueue} syncing={syncingQueue} onSync={syncOfflineQueue} />
+          <ReminderPanel reminders={reminders} offlineQueue={offlineQueue} syncing={syncingQueue} onSync={syncOfflineQueue} syncStatus={syncStatus} lastSyncAt={lastSyncAt} />
         </ScrollView>
       </SafeAreaView>
     );
@@ -1738,15 +1805,30 @@ function WorkbenchPanel({ scheduledOrders, onOpenTask }) {
   );
 }
 
-function ReminderPanel({ reminders, offlineQueue, syncing, onSync }) {
+function ReminderPanel({ reminders, offlineQueue, syncing, onSync, syncStatus, lastSyncAt }) {
+  const failedCount = Object.values(syncStatus || {}).filter(s => s === 'failed').length;
+  const pendingCount = offlineQueue.length - failedCount;
+  const timeSinceLastSync = lastSyncAt ? formatElapsed(lastSyncAt) : null;
+
   return (
     <View style={styles.mobileSection}>
       <View style={styles.sectionHeadRow}>
         <Text style={styles.panelLabel}>消息提醒</Text>
         {offlineQueue.length ? (
-          <Pressable style={styles.secondaryAction} onPress={onSync} disabled={syncing}>
-            <Text style={styles.secondaryActionText}>{syncing ? '同步中' : '同步离线记录'}</Text>
-          </Pressable>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            {failedCount > 0 && (
+              <Text style={{ color: '#ff6b6b', fontSize: 12, fontWeight: '600' }}>
+                {failedCount} 条失败
+              </Text>
+            )}
+            <Pressable style={styles.secondaryAction} onPress={onSync} disabled={syncing}>
+              <Text style={styles.secondaryActionText}>
+                {syncing ? '同步中…' : `同步 (${pendingCount}条)`}
+              </Text>
+            </Pressable>
+          </View>
+        ) : timeSinceLastSync ? (
+          <Text style={{ color: '#82e5ff80', fontSize: 11 }}>上次同步 {timeSinceLastSync}</Text>
         ) : null}
       </View>
       {reminders.map(item => (
@@ -1888,6 +1970,7 @@ function CostEntryPanel({
 }) {
   const hasMaterials = materialOptions.length > 0;
   const photoUri = getPhotoUri(photo);
+  const hasVisiblePrice = selectedMaterial?.unitCost !== '' && selectedMaterial?.unitCost != null;
 
   return (
     <View style={styles.costPanel}>
@@ -1944,7 +2027,9 @@ function CostEntryPanel({
                           {material.materialName || '未命名物料'}
                         </Text>
                         <Text style={[styles.materialChipPrice, active && styles.materialChipPriceActive]}>
-                          {formatMoney(material.unitCost)} / {material.unit || '-'}
+                          {material.unitCost !== '' && material.unitCost != null
+                            ? `${formatMoney(material.unitCost)} / ${material.unit || '-'}`
+                            : `单位 ${material.unit || '-'}`}
                         </Text>
                       </Pressable>
                     );
@@ -1953,8 +2038,8 @@ function CostEntryPanel({
               </View>
 
               <View style={styles.costSummary}>
-                <Meta label="成本单价" value={`${formatMoney(selectedMaterial?.unitCost)} / ${selectedMaterial?.unit || '-'}`} />
-                <Meta label="成本金额" value={formatMoney(amount)} />
+                <Meta label="成本单价" value={hasVisiblePrice ? `${formatMoney(selectedMaterial?.unitCost)} / ${selectedMaterial?.unit || '-'}` : '后台按物料档案计算'} />
+                <Meta label="成本金额" value={hasVisiblePrice ? formatMoney(amount) : '提交后后台计算'} />
               </View>
 
               <View style={styles.completionField}>
@@ -2109,27 +2194,36 @@ function StatusChip({ status }) {
   const pending = status === '未完成';
   const scheduled = status === '已排产';
   const completed = status === '已完成';
+  const deliveryOpened = status === '已开送货单';
+  const partialDelivered = status === '部分送货';
   const delivered = status === '已送货';
   const reconciled = status === '已开对账单';
   const paid = status === '已付款';
+  const issue = status === '异常';
   return (
     <View style={[
       styles.statusChip,
       pending && styles.statusPending,
       scheduled && styles.statusScheduled,
       completed && styles.statusCompleted,
+      deliveryOpened && styles.statusDeliveryOpened,
+      partialDelivered && styles.statusPartialDelivered,
       delivered && styles.statusDelivered,
       reconciled && styles.statusReconciled,
       paid && styles.statusPaid,
+      issue && styles.statusIssue,
     ]}>
       <Text style={[
         styles.statusText,
         pending && styles.statusPendingText,
         scheduled && styles.statusScheduledText,
         completed && styles.statusCompletedText,
+        deliveryOpened && styles.statusDeliveryOpenedText,
+        partialDelivered && styles.statusPartialDeliveredText,
         delivered && styles.statusDeliveredText,
         reconciled && styles.statusReconciledText,
         paid && styles.statusPaidText,
+        issue && styles.statusIssueText,
       ]}>
         {status}
       </Text>
@@ -3199,6 +3293,12 @@ const styles = StyleSheet.create({
   statusCompleted: {
     backgroundColor: '#143c2c',
   },
+  statusDeliveryOpened: {
+    backgroundColor: '#0b2f42',
+  },
+  statusPartialDelivered: {
+    backgroundColor: '#2d2a10',
+  },
   statusDelivered: {
     backgroundColor: '#1a1f3d',
   },
@@ -3207,6 +3307,9 @@ const styles = StyleSheet.create({
   },
   statusPaid: {
     backgroundColor: '#0d2b28',
+  },
+  statusIssue: {
+    backgroundColor: '#3a1515',
   },
   statusText: {
     color: '#c6d2e2',
@@ -3222,6 +3325,12 @@ const styles = StyleSheet.create({
   statusCompletedText: {
     color: '#96f2c0',
   },
+  statusDeliveryOpenedText: {
+    color: '#38bdf8',
+  },
+  statusPartialDeliveredText: {
+    color: '#facc15',
+  },
   statusDeliveredText: {
     color: '#9bb8ff',
   },
@@ -3230,6 +3339,9 @@ const styles = StyleSheet.create({
   },
   statusPaidText: {
     color: '#5eeadb',
+  },
+  statusIssueText: {
+    color: '#ff8585',
   },
   stateBox: {
     minHeight: 180,

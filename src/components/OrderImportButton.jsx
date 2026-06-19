@@ -3,7 +3,7 @@ import { FileUp } from 'lucide-react';
 import { parseOrderFile } from '../lib/orderImport.js';
 import { OrderImportPreviewModal } from './OrderImportPreviewModal.jsx';
 
-export function OrderImportButton({ onImport, disabled, dialogs, t = (text) => text }) {
+export function OrderImportButton({ onImport, disabled, dialogs, existingOrders = [], t = (text) => text }) {
   const inputRef = useRef(null);
   const [parsed, setParsed] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -15,7 +15,7 @@ export function OrderImportButton({ onImport, disabled, dialogs, t = (text) => t
 
     setBusy(true);
     try {
-      const result = await parseOrderFile(file);
+      const result = await parseOrderFile(file, existingOrders);
       if (!result.rows.length) {
         await dialogs.alert(t('没有识别到可导入的订单数据。'), { title: t('导入订单') });
         return;
@@ -53,6 +53,7 @@ export function OrderImportButton({ onImport, disabled, dialogs, t = (text) => t
           columns={parsed.columns}
           rows={parsed.rows}
           headerRowNumber={parsed.headerRowNumber}
+          duplicates={parsed.duplicates || []}
           t={t}
           onClose={() => setParsed(null)}
           onConfirm={(rows, columns) => {

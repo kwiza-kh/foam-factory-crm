@@ -429,7 +429,12 @@ describe('Customers API Routes', () => {
         role: 'employee',
         token: 'token-1',
       });
-      mockPrisma.customer.findUnique.mockResolvedValue({ id: 'c1' });
+      mockPrisma.customer.findUnique.mockResolvedValue({
+        id: 'c1',
+        materialCosts: [
+          { data: { id: 'm1', materialName: 'EPS', unit: '件', unitCost: 8.5 } },
+        ],
+      });
       mockPrisma.costEntry.aggregate.mockResolvedValue({ _max: { sortOrder: 2 } });
       mockPrisma.costEntry.create.mockImplementation(async ({ data }) => ({
         ...data,
@@ -447,8 +452,8 @@ describe('Customers API Routes', () => {
           materialName: 'EPS',
           quantity: 3,
           unit: '件',
-          unitCost: 8.5,
-          amount: 25.5,
+          unitCost: 1,
+          amount: 3,
           note: '入库',
           photo: { dataUrl: 'data:image/jpeg;base64,test' },
         });
@@ -473,6 +478,30 @@ describe('Customers API Routes', () => {
           sortOrder: 3,
         }),
       });
+    });
+
+    it('should reject cost entry when material is not in customer material archive', async () => {
+      mockPrisma.mobileUser.findUnique.mockResolvedValue({
+        id: 'u1',
+        name: 'Worker',
+        role: 'employee',
+        token: 'token-1',
+      });
+      mockPrisma.customer.findUnique.mockResolvedValue({ id: 'c1', materialCosts: [] });
+
+      const res = await request(app)
+        .post('/api/customers/c1/cost-entries')
+        .set('X-Mobile-User-Token', 'token-1')
+        .send({
+          materialName: 'EPS',
+          quantity: 3,
+          unit: '件',
+          photo: { dataUrl: 'data:image/jpeg;base64,test' },
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body).toHaveProperty('error', '未找到该客户的物料档案');
+      expect(mockPrisma.costEntry.create).not.toHaveBeenCalled();
     });
   });
 
@@ -545,6 +574,58 @@ describe('Customers API Routes', () => {
         signedUserName: 'Worker',
         signedPhoto: { dataUrl: 'data:image/jpeg;base64,sign' },
       });
+    });
+
+    it('should reject signing a delivery draft', async () => {
+      mockPrisma.mobileUser.findUnique.mockResolvedValue({
+        id: 'u1',
+        name: 'Worker',
+        role: 'employee',
+        token: 'token-1',
+      });
+      mockPrisma.delivery.findFirst.mockResolvedValue({
+        id: 'd1',
+        customerId: 'c1',
+        data: { id: 'd1', deliveryNo: 'DN-001', status: '未送', _finalDelivery: false },
+      });
+
+      const res = await request(app)
+        .patch('/api/customers/c1/deliveries/d1/sign')
+        .set('X-Mobile-User-Token', 'token-1')
+        .send({
+          signer: '客户张三',
+          photo: { dataUrl: 'data:image/jpeg;base64,sign' },
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body).toHaveProperty('error', '送货单草稿不能签收，请先生成正式送货单');
+      expect(mockPrisma.delivery.update).not.toHaveBeenCalled();
+    });
+
+    it('should reject duplicate delivery signing', async () => {
+      mockPrisma.mobileUser.findUnique.mockResolvedValue({
+        id: 'u1',
+        name: 'Worker',
+        role: 'employee',
+        token: 'token-1',
+      });
+      mockPrisma.delivery.findFirst.mockResolvedValue({
+        id: 'd1',
+        customerId: 'c1',
+        data: { id: 'd1', deliveryNo: 'DN-001', status: '已送', signedAt: '2026-06-13T00:00:00.000Z' },
+      });
+
+      const res = await request(app)
+        .patch('/api/customers/c1/deliveries/d1/sign')
+        .set('X-Mobile-User-Token', 'token-1')
+        .send({
+          signer: '客户张三',
+          photo: { dataUrl: 'data:image/jpeg;base64,sign' },
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body).toHaveProperty('error', '送货单已签收，不能重复签收');
+      expect(mockPrisma.delivery.update).not.toHaveBeenCalled();
     });
   });
 });

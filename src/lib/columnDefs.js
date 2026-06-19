@@ -11,6 +11,8 @@ const orderDefaultColumns = [
   { field: "completionTime", headerName: "完成时间", width: 170, type: "datetime", editable: false },
   { field: "completionOperator", headerName: "员工姓名", width: 120, editable: false },
   { field: "completionPhoto", headerName: "照片证明", width: 130, type: "image", editable: false },
+  { field: "statusChangedAt", headerName: "进度更新时间", width: 170, type: "datetime", editable: false },
+  { field: "statusChangeLog", headerName: "进度记录", width: 220, editable: false },
 ];
 const deliveryQuantityField = "deliveryQuantity";
 const orderDeliveredQuantityField = "deliveredQuantity";

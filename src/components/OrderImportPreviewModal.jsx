@@ -8,8 +8,9 @@ import {
   TextEditorModule,
   themeQuartz,
 } from 'ag-grid-community';
-import { Check, X, Pencil } from 'lucide-react';
+import { Check, X, Pencil, AlertTriangle } from 'lucide-react';
 import { makeId, today } from '../lib/utils.js';
+import { statusOptions } from '../lib/statusWorkflow.js';
 
 ModuleRegistry.registerModules([CellStyleModule, ClientSideRowModelModule, RowSelectionModule, TextEditorModule]);
 
@@ -32,12 +33,20 @@ export function OrderImportPreviewModal({
   columns,
   rows,
   headerRowNumber,
+  duplicates = [],
   onConfirm,
   onClose,
-  t = (text, vars) => String(text ?? "").replace(/\{(\w+)\}/g, (match, key) => (
+  t = (text, vars) => String(text ?? "").replace(/\{(\\w+)\}/g, (match, key) => (
     Object.prototype.hasOwnProperty.call(vars || {}, key) ? String(vars[key]) : match
   )),
 }) {
+  const duplicateIndices = new Set(duplicates.map(d => d.index));
+  const duplicateCount = duplicates.length;
+  const existingCount = duplicates.filter(d => d.type === 'existing').length;
+  const internalCount = duplicates.filter(d => d.type === 'internal').length;
+  const fuzzyCount = duplicates.filter(d => d.type === 'fuzzy').length;
+
+  const [showDuplicates, setShowDuplicates] = useState(true);
   const [rowData, setRowData] = useState(() =>
     rows.map(row => ({ ...row, __previewId: makeId('prev') })),
   );
@@ -140,6 +149,54 @@ export function OrderImportPreviewModal({
         </div>
 
         <div className="import-header-editor">
+          {duplicateCount > 0 && (
+            <div style={{
+              background: 'rgba(255, 107, 107, 0.10)',
+              border: '1px solid rgba(255, 107, 107, 0.25)',
+              borderRadius: 8,
+              padding: '10px 14px',
+              marginBottom: 10,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 12,
+              fontSize: 13,
+            }}>
+              <span style={{ color: '#ff6b6b' }}>
+                <AlertTriangle size={14} style={{ verticalAlign: -2, marginRight: 6 }} />
+                发现 {duplicateCount} 条疑似重复订单
+                {existingCount > 0 && `（${existingCount} 条已存在）`}
+                {internalCount > 0 && `（${internalCount} 条文件内重复）`}
+                {fuzzyCount > 0 && `（${fuzzyCount} 条疑似重复）`}
+              </span>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', color: '#82e5ff', fontSize: 12 }}>
+                  <input
+                    type="checkbox"
+                    checked={showDuplicates}
+                    onChange={e => setShowDuplicates(e.target.checked)}
+                  />
+                  显示重复行
+                </label>
+                <button
+                  className="ghost-button"
+                  type="button"
+                  style={{ fontSize: 12, padding: '2px 10px', minHeight: 26 }}
+                  onClick={() => {
+                    const dupIds = new Set(
+                      duplicates.map(d => rows.findIndex(r => r === d.row))
+                    );
+                    setRowData(current => current.filter((_, i) => {
+                      const origIdx = rows.findIndex(r => r.orderNo === current[i]?.orderNo && r.product === current[i]?.product);
+                      return !duplicateIndices.has(origIdx);
+                    }));
+                  }}
+                >
+                  移除重复行
+                </button>
+              </div>
+            </div>
+          )}
           {columnData.map(column => (
             <label className={`import-header-item ${column.included ? '' : 'is-disabled'}`} key={column.__columnId}>
               <input
@@ -173,7 +230,7 @@ export function OrderImportPreviewModal({
             {batchField === "status" ? (
               <select value={batchValue} onChange={e => setBatchValue(e.target.value)}>
                 <option value="">{t("选择状态")}</option>
-                {["未完成","已排产","已完成","已送货","已开对账单","已付款"].map(s => (
+                {statusOptions.map(s => (
                   <option key={s} value={s}>{t(s)}</option>
                 ))}
               </select>

@@ -338,6 +338,35 @@ h4 {
   border-radius: 999px;
 }
 
+.group-actions-inline {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  margin-left: 6px;
+  opacity: 0.45;
+  transition: opacity 0.12s;
+}
+.customer-group-header:hover .group-actions-inline {
+  opacity: 1;
+}
+.group-action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.group-action-btn:hover {
+  background: var(--panel-elevated);
+  color: var(--accent);
+}
+
 .customer-item {
   display: flex;
   align-items: stretch;
@@ -1175,6 +1204,18 @@ h4 {
   border-color: var(--green);
   color: var(--green);
   background: var(--green-subdued);
+}
+
+.status-chip.is-delivery-opened {
+  border-color: #38bdf8;
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.12);
+}
+
+.status-chip.is-partial-delivered {
+  border-color: #facc15;
+  color: #facc15;
+  background: rgba(250, 204, 21, 0.12);
 }
 
 .status-chip.is-delivered {

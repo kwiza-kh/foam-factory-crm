@@ -16,12 +16,14 @@ model Customer {
   paymentTerm   String         @default("") @map("payment_term")
   taxNo         String         @default("") @map("tax_no")
   note          String         @default("")
-  customColumns Json           @default("{\"products\":[],\"orders\":[],\"deliveries\":[],\"materialCosts\":[],\"costEntries\":[]}") @map("custom_columns")
+  customColumns Json           @default("{\"products\":[],\"orders\":[],\"deliveries\":[],\"materialCosts\":[],\"costEntries\":[],\"statements\":[],\"payments\":[]}") @map("custom_columns")
   products      Product[]
   orders        Order[]
   deliveries    Delivery[]
   materialCosts MaterialCost[]
   costEntries   CostEntry[]
+  statements    Statement[]
+  payments      Payment[]
 
   @@map("customers")
 }
@@ -79,6 +81,28 @@ model CostEntry {
 
   @@index([customerId], map: "cost_entries_customer_idx")
   @@map("cost_entries")
+}
+
+model Statement {
+  id         String   @id
+  customerId String   @map("customer_id")
+  sortOrder  Int      @default(0) @map("sort_order")
+  data       Json     @default("{}")
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId], map: "statements_customer_idx")
+  @@map("statements")
+}
+
+model Payment {
+  id         String   @id
+  customerId String   @map("customer_id")
+  sortOrder  Int      @default(0) @map("sort_order")
+  data       Json     @default("{}")
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId], map: "payments_customer_idx")
+  @@map("payments")
 }
 
 model MobileUser {

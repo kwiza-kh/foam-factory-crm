@@ -8,6 +8,11 @@ export default [
     languageOptions: {
       ecmaVersion: 2024,
       sourceType: "module",
+      parserOptions: {
+        ecmaFeatures: {
+          jsx: true,
+        },
+      },
       globals: {
         window: "readonly",
         document: "readonly",
@@ -17,8 +22,10 @@ export default [
         setTimeout: "readonly",
         clearTimeout: "readonly",
         setInterval: "readonly",
+        clearInterval: "readonly",
         Blob: "readonly",
         URL: "readonly",
+        URLSearchParams: "readonly",
         File: "readonly",
         FormData: "readonly",
       },
@@ -35,12 +42,14 @@ export default [
         process: "readonly",
         console: "readonly",
         setTimeout: "readonly",
+        Buffer: "readonly",
       },
     },
   },
   {
     ignores: [
       "dist/",
+      "mobile/dist/",
       "node_modules/",
       "mobile/node_modules/",
       ".codegraph/",

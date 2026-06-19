@@ -21,7 +21,7 @@ const HEADER_HINTS = new RegExp(
   'i',
 );
 
-export async function parseOrderFile(file) {
+export async function parseOrderFile(file, existingOrders = []) {
   const ext = file.name.split('.').pop()?.toLowerCase();
   const rawRows = ext === 'csv'
     ? await parseCSV(file)
@@ -65,10 +65,13 @@ export async function parseOrderFile(file) {
       };
     });
 
+  const duplicates = detectDuplicates(rows, existingOrders, columns);
+
   return {
     rows,
     columns,
     headerRowNumber: headerIndex + 1,
+    duplicates,
   };
 }
 
@@ -251,4 +254,76 @@ export {
   matchField,
   detectHeader,
   buildMappings,
+  detectDuplicates,
+  filterDuplicates,
 };
+
+// ── Deduplication ──────────────────────────────────────────────────
+
+/**
+ * Detect duplicate rows — both within the imported file and against existing orders.
+ * Returns an array of duplicate row indices with reason strings.
+ */
+function detectDuplicates(rows, existingOrders = [], columns = []) {
+  const results = [];
+  const seen = new Map(); // key -> first row index
+
+  const hasField = (field) => columns.some(c => c.field === field);
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const orderNo = String(row.orderNo || '').trim();
+
+    // Check against existing orders by orderNo
+    if (orderNo && hasField('orderNo')) {
+      const existingMatch = existingOrders.find(
+        o => String(o.orderNo || '').trim().toLowerCase() === orderNo.toLowerCase()
+      );
+      if (existingMatch) {
+        results.push({ index: i, row, reason: `订单号 "${orderNo}" 已存在于当前客户中`, type: 'existing' });
+        continue;
+      }
+    }
+
+    // Check file-internal duplicates by orderNo
+    if (orderNo && hasField('orderNo')) {
+      const key = `no:${orderNo.toLowerCase()}`;
+      if (seen.has(key)) {
+        results.push({ index: i, row, reason: `订单号 "${orderNo}" 在导入文件中重复（第 ${seen.get(key) + 1} 行已存在）`, type: 'internal' });
+        continue;
+      }
+      seen.set(key, i);
+    }
+
+    // Fallback: check by product + date + quantity
+    const product = String(row.product || '').trim();
+    const date = String(row.date || '').trim();
+    const quantity = Number(row.quantity || 0);
+    if (product && date && quantity && (hasField('product') || hasField('date') || hasField('quantity'))) {
+      const fuzzyKey = `fz:${product.toLowerCase()}|${date}|${quantity}`;
+      if (seen.has(fuzzyKey)) {
+        results.push({ index: i, row, reason: `疑似重复：相同产品+"${product}"、日期 "${date}"、数量 ${quantity}（第 ${seen.get(fuzzyKey) + 1} 行已存在）`, type: 'fuzzy' });
+        continue;
+      }
+      seen.set(fuzzyKey, i);
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Remove duplicate rows from the import set.
+ * @param {Array} rows - all parsed rows
+ * @param {Array} duplicates - detectDuplicates result
+ * @param {'all'|'existing'|'internal'|'fuzzy'} [mode='all'] - which types to remove
+ * @returns {Array} deduplicated rows
+ */
+function filterDuplicates(rows, duplicates, mode = 'all') {
+  const removeIndices = new Set(
+    duplicates
+      .filter(d => mode === 'all' || d.type === mode)
+      .map(d => d.index)
+  );
+  return rows.filter((_, i) => !removeIndices.has(i));
+}

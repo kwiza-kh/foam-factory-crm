@@ -203,6 +203,8 @@ function normalizeCustomerOrderStatuses(customers) {
     deliveries: normalizeDeliveryRows(customer.deliveries || []),
     materialCosts: customer.materialCosts || [],
     costEntries: customer.costEntries || [],
+    statements: customer.statements || [],
+    payments: customer.payments || [],
   }));
 }
 
@@ -221,11 +223,13 @@ function summarizeCustomerOrders(customer = {}) {
     const status = normalizeOrderStatus(order.status);
     summary.orderAmount += amount;
     if (isOpenOrder(status)) summary.unfinishedOrders += 1;
-    if (status === "已完成") summary.completedOrders += 1;
-    if (status === "已开对账单" || status === "已付款") summary.statementAmount += amount;
-    if (status === "已付款") summary.paidAmount += amount;
+    if (["已完成", "已开送货单", "部分送货", "已送货", "已开对账单", "已付款"].includes(status)) {
+      summary.completedOrders += 1;
+    }
   }
 
+  summary.statementAmount = (customer.statements || []).reduce((sum, row) => sum + parseNumericValue(row.amount), 0);
+  summary.paidAmount = (customer.payments || []).reduce((sum, row) => sum + parseNumericValue(row.amount), 0);
   summary.unpaidAmount = Math.max(summary.statementAmount - summary.paidAmount, 0);
   return summary;
 }
@@ -601,6 +605,48 @@ function isEffectiveDelivery(delivery) {
   return isFinalDelivery(delivery) && normalizeFinalDeliveryStatus(delivery.status) === "已送";
 }
 
+function isSignedDelivery(delivery) {
+  return isFinalDelivery(delivery) && (normalizeFinalDeliveryStatus(delivery.status) === "已送" || Boolean(delivery?.signedAt));
+}
+
+function appendAuditLog(log = "", message = "") {
+  const line = `[${new Date().toLocaleString()}] ${message}`;
+  return [String(log || "").trim(), line].filter(Boolean).join("\n");
+}
+
+function protectSignedDeliveries(previousRows = [], nextRows = []) {
+  const previousById = new Map(previousRows.map(row => [row.id, row]));
+  let blocked = false;
+  const rows = nextRows.map(row => {
+    const previous = previousById.get(row.id);
+    if (!previous || !isSignedDelivery(previous)) return row;
+    const allowed = {
+      status: row.status,
+      signedNote: row.signedNote,
+      __selected: row.__selected,
+    };
+    if (JSON.stringify({ ...previous, ...allowed }) !== JSON.stringify(row)) blocked = true;
+    return { ...row, ...allowed };
+  });
+  return { rows, blocked };
+}
+
+function applyMaterialPriceHistory(previousRows = [], nextRows = []) {
+  const previousById = new Map(previousRows.map(row => [row.id, row]));
+  return nextRows.map(row => {
+    const previous = previousById.get(row.id);
+    if (!previous) return row;
+    const previousCost = parseNumericValue(previous.unitCost);
+    const nextCost = parseNumericValue(row.unitCost);
+    if (previousCost === nextCost) return row;
+    return {
+      ...row,
+      priceUpdatedAt: new Date().toISOString(),
+      priceHistory: appendAuditLog(previous.priceHistory, `成本单价：${previousCost} -> ${nextCost}`),
+    };
+  });
+}
+
 function normalizeDeliveryRows(deliveries = []) {
   return deliveries.map(delivery => {
     const hasFinalFlag = Object.prototype.hasOwnProperty.call(delivery, finalDeliveryField);
@@ -630,25 +676,41 @@ function getOrderLabel(order, fallback = "") {
   return order?.orderNo || order?.product || fallback || order?.id || "未编号订单";
 }
 
+function getDeliveryQuantitySourceField(delivery = {}) {
+  return delivery?.[linkedOrderQuantitySourceField] || "quantity";
+}
+
+function getOrderQuantityForDelivery(order, delivery = {}) {
+  if (!order) return 0;
+  return parseNumericValue(order[getDeliveryQuantitySourceField(delivery)]);
+}
+
 function findEffectiveDeliveryOverages(orders = [], deliveries = []) {
   const ordersById = new Map(orders.map(order => [order.id, order]));
-  const deliveredByOrderId = new Map();
+  const deliveryTotalsByOrderAndSource = new Map();
 
   for (const delivery of deliveries) {
     if (!isEffectiveDelivery(delivery)) continue;
     const orderId = delivery[linkedOrderIdField];
     if (!orderId) continue;
-    deliveredByOrderId.set(
-      orderId,
-      (deliveredByOrderId.get(orderId) || 0) + parseNumericValue(delivery[deliveryQuantityField]),
+    const sourceField = getDeliveryQuantitySourceField(delivery);
+    const key = `${orderId}::${sourceField}`;
+    deliveryTotalsByOrderAndSource.set(
+      key,
+      {
+        orderId,
+        sourceField,
+        deliveredQuantity: (deliveryTotalsByOrderAndSource.get(key)?.deliveredQuantity || 0)
+          + parseNumericValue(delivery[deliveryQuantityField]),
+      },
     );
   }
 
-  return Array.from(deliveredByOrderId.entries())
-    .map(([orderId, deliveredQuantity]) => {
+  return Array.from(deliveryTotalsByOrderAndSource.values())
+    .map(({ orderId, deliveredQuantity, sourceField }) => {
       const order = ordersById.get(orderId);
       if (!order) return null;
-      const orderQuantity = parseNumericValue(order.quantity);
+      const orderQuantity = parseNumericValue(order[sourceField]);
       if (deliveredQuantity <= orderQuantity + 0.0000001) return null;
       return {
         orderId,
@@ -666,32 +728,41 @@ function buildDeliveryFinalizePreview(customer, selectedDrafts, t = defaultTrans
   const deliveries = customer?.deliveries || [];
   const ordersById = new Map(orders.map(order => [order.id, order]));
   const selectedDraftIds = new Set(selectedDrafts.map(delivery => delivery.id));
-  const effectiveDeliveredByOrderId = new Map();
-  const selectedByOrderId = new Map();
+  const effectiveDeliveredByOrderAndSource = new Map();
+  const selectedByOrderAndSource = new Map();
   let unlinkedQuantity = 0;
 
   for (const delivery of deliveries) {
     if (selectedDraftIds.has(delivery.id) || !isEffectiveDelivery(delivery)) continue;
     const orderId = delivery[linkedOrderIdField];
     if (!orderId) continue;
-    effectiveDeliveredByOrderId.set(
-      orderId,
-      (effectiveDeliveredByOrderId.get(orderId) || 0) + parseNumericValue(delivery[deliveryQuantityField]),
+    const sourceField = getDeliveryQuantitySourceField(delivery);
+    const key = `${orderId}::${sourceField}`;
+    effectiveDeliveredByOrderAndSource.set(
+      key,
+      (effectiveDeliveredByOrderAndSource.get(key) || 0) + parseNumericValue(delivery[deliveryQuantityField]),
     );
   }
 
   const draftSummaries = selectedDrafts.map(delivery => {
     const orderId = delivery[linkedOrderIdField];
     const order = ordersById.get(orderId);
+    const sourceField = getDeliveryQuantitySourceField(delivery);
+    const summaryKey = `${orderId}::${sourceField}`;
     const quantity = parseNumericValue(delivery[deliveryQuantityField]);
-    const deliveredBefore = orderId ? (effectiveDeliveredByOrderId.get(orderId) || 0) : 0;
-    const orderQuantity = order ? parseNumericValue(order.quantity) : 0;
+    const deliveredBefore = orderId ? (effectiveDeliveredByOrderAndSource.get(summaryKey) || 0) : 0;
+    const orderQuantity = order ? getOrderQuantityForDelivery(order, delivery) : 0;
     const remainingBefore = order ? Math.max(orderQuantity - deliveredBefore, 0) : null;
 
     if (orderId && order) {
-      selectedByOrderId.set(
-        orderId,
-        (selectedByOrderId.get(orderId) || 0) + quantity,
+      const current = selectedByOrderAndSource.get(summaryKey);
+      selectedByOrderAndSource.set(
+        summaryKey,
+        {
+          orderId,
+          sourceField,
+          selectedQuantity: (current?.selectedQuantity || 0) + quantity,
+        },
       );
     } else {
       unlinkedQuantity += quantity;
@@ -707,13 +778,14 @@ function buildDeliveryFinalizePreview(customer, selectedDrafts, t = defaultTrans
       quantity,
       deliveredBefore,
       remainingBefore,
+      sourceField,
     };
   });
 
-  const orderSummaries = Array.from(selectedByOrderId.entries()).map(([orderId, selectedQuantity]) => {
+  const orderSummaries = Array.from(selectedByOrderAndSource.values()).map(({ orderId, selectedQuantity, sourceField }) => {
     const order = ordersById.get(orderId);
-    const deliveredBefore = effectiveDeliveredByOrderId.get(orderId) || 0;
-    const orderQuantity = parseNumericValue(order?.quantity);
+    const deliveredBefore = effectiveDeliveredByOrderAndSource.get(`${orderId}::${sourceField}`) || 0;
+    const orderQuantity = parseNumericValue(order?.[sourceField]);
     const remainingBefore = Math.max(orderQuantity - deliveredBefore, 0);
     return {
       orderId,
@@ -722,6 +794,7 @@ function buildDeliveryFinalizePreview(customer, selectedDrafts, t = defaultTrans
       deliveredBefore,
       remainingBefore,
       selectedQuantity,
+      sourceField,
     };
   });
 
@@ -988,6 +1061,82 @@ function nextDeliveryNo(deliveries = []) {
   return deliveryNo;
 }
 
+function nextStatementNo(statements = []) {
+  const dateCode = today().replace(/-/g, "");
+  const existing = new Set(statements.map(statement => statement.statementNo).filter(Boolean));
+  let counter = statements.length + 1;
+  let statementNo = "";
+
+  do {
+    statementNo = `ST-${dateCode}-${String(counter).padStart(3, "0")}`;
+    counter += 1;
+  } while (existing.has(statementNo));
+
+  return statementNo;
+}
+
+function deliveryLineAmount(delivery = {}) {
+  const quantity = parseNumericValue(delivery[deliveryQuantityField]);
+  const amount = parseNumericValue(delivery[deliveryOrderField("amount")]);
+  const orderQuantity = parseNumericValue(delivery[deliveryOrderField("quantity")]);
+  if (amount > 0 && orderQuantity > 0) return amount * (quantity / orderQuantity);
+  return amount;
+}
+
+function buildStatementFromSignedDeliveries(customer = {}) {
+  const existingDeliveryIds = new Set(
+    (customer.statements || [])
+      .flatMap(statement => statement.deliveryIds || [])
+      .filter(Boolean),
+  );
+  const deliveries = (customer.deliveries || [])
+    .filter(delivery => isSignedDelivery(delivery) && !existingDeliveryIds.has(delivery.id));
+  if (!deliveries.length) return null;
+  const amount = deliveries.reduce((sum, delivery) => sum + deliveryLineAmount(delivery), 0);
+  return {
+    id: makeId("statements"),
+    statementNo: nextStatementNo(customer.statements || []),
+    date: today(),
+    deliveryIds: deliveries.map(delivery => delivery.id),
+    deliveryNos: [...new Set(deliveries.map(delivery => delivery.deliveryNo).filter(Boolean))].join("、"),
+    lineCount: deliveries.length,
+    amount: normalizeCalculatedNumber(amount),
+    paidAmount: 0,
+    unpaidAmount: normalizeCalculatedNumber(amount),
+    status: "未收款",
+    createdAt: new Date().toISOString(),
+    note: "",
+  };
+}
+
+function applyPaymentsToStatements(statements = [], payments = []) {
+  const paidByStatementNo = new Map();
+  for (const payment of payments || []) {
+    const statementNo = String(payment.statementNo || "").trim();
+    if (!statementNo) continue;
+    paidByStatementNo.set(statementNo, (paidByStatementNo.get(statementNo) || 0) + parseNumericValue(payment.amount));
+  }
+  return (statements || []).map(statement => {
+    const paidAmount = paidByStatementNo.get(statement.statementNo) || 0;
+    const amount = parseNumericValue(statement.amount);
+    const unpaidAmount = Math.max(amount - paidAmount, 0);
+    const status = paidAmount <= 0 ? "未收款" : unpaidAmount > 0.0000001 ? "部分收款" : "已收款";
+    if (
+      parseNumericValue(statement.paidAmount) === paidAmount
+      && parseNumericValue(statement.unpaidAmount) === unpaidAmount
+      && statement.status === status
+    ) {
+      return statement;
+    }
+    return {
+      ...statement,
+      paidAmount: normalizeCalculatedNumber(paidAmount),
+      unpaidAmount: normalizeCalculatedNumber(unpaidAmount),
+      status,
+    };
+  });
+}
+
 function makeDeliveryRowsFromOrders(selectedOrders, orderColumns, quantitySourceField, deliveryNo) {
   const date = today();
 
@@ -1015,11 +1164,19 @@ function makeDeliveryRowsFromOrders(selectedOrders, orderColumns, quantitySource
 
 function applyDeliveryQuantitiesToOrders(orders = [], deliveries = []) {
   const deliveredByOrderId = new Map();
+  const sourceFieldsByOrderId = new Map();
+  const deliveryOpenedOrderIds = new Set();
 
   for (const delivery of deliveries) {
-    if (!isEffectiveDelivery(delivery)) continue;
     const orderId = delivery[linkedOrderIdField];
     if (!orderId) continue;
+    if (isFinalDelivery(delivery) && normalizeFinalDeliveryStatus(delivery.status) !== "作废") {
+      deliveryOpenedOrderIds.add(orderId);
+    }
+    const sourceField = getDeliveryQuantitySourceField(delivery);
+    if (!sourceFieldsByOrderId.has(orderId)) sourceFieldsByOrderId.set(orderId, new Set());
+    sourceFieldsByOrderId.get(orderId).add(sourceField);
+    if (!isEffectiveDelivery(delivery)) continue;
     deliveredByOrderId.set(
       orderId,
       (deliveredByOrderId.get(orderId) || 0) + parseNumericValue(delivery[deliveryQuantityField]),
@@ -1027,17 +1184,28 @@ function applyDeliveryQuantitiesToOrders(orders = [], deliveries = []) {
   }
 
   return orders.map(order => {
+    const normalizedStatus = normalizeOrderStatus(order.status);
+    if (normalizedStatus === "异常") return order;
     const shouldTrack = deliveredByOrderId.has(order.id)
+      || deliveryOpenedOrderIds.has(order.id)
       || orderDeliveredQuantityField in order
       || orderRemainingQuantityField in order;
     if (!shouldTrack) return order;
 
     const hasEffectiveDelivery = deliveredByOrderId.has(order.id);
     const deliveredQuantity = deliveredByOrderId.get(order.id) || 0;
-    const remainingQuantity = Math.max(parseNumericValue(order.quantity) - deliveredQuantity, 0);
-    const nextStatus = hasEffectiveDelivery
+    const sourceFields = sourceFieldsByOrderId.get(order.id);
+    const sourceField = sourceFields?.size === 1 ? [...sourceFields][0] : "quantity";
+    const orderQuantity = parseNumericValue(order[sourceField]);
+    const remainingQuantity = Math.max(orderQuantity - deliveredQuantity, 0);
+    const hasOpenedDelivery = deliveryOpenedOrderIds.has(order.id);
+    const nextStatus = hasEffectiveDelivery && remainingQuantity <= 0.0000001
       ? "已送货"
-      : normalizeOrderStatus(order.status) === "已送货"
+      : hasEffectiveDelivery && remainingQuantity > 0.0000001
+        ? "部分送货"
+      : hasOpenedDelivery && ["已完成", "已开送货单", "部分送货", "已送货"].includes(normalizedStatus)
+        ? "已开送货单"
+      : !hasOpenedDelivery && !hasEffectiveDelivery && ["已开送货单", "部分送货", "已送货"].includes(normalizedStatus)
         ? "已完成"
         : order.status;
     if (
@@ -1048,12 +1216,17 @@ function applyDeliveryQuantitiesToOrders(orders = [], deliveries = []) {
       return order;
     }
 
-    return {
+    const nextOrder = {
       ...order,
       status: nextStatus,
       [orderDeliveredQuantityField]: deliveredQuantity,
       [orderRemainingQuantityField]: remainingQuantity,
     };
+    if (order.status !== nextStatus) {
+      nextOrder.statusChangedAt = new Date().toISOString();
+      nextOrder.statusChangeLog = appendAuditLog(order.statusChangeLog, `进度：${order.status || "未完成"} -> ${nextStatus}`);
+    }
+    return nextOrder;
   });
 }
 
@@ -1467,12 +1640,17 @@ function App() {
     [systemSettings.customerGroups],
   );
 
+  const hiddenGroups = useMemo(
+    () => new Set(systemSettings.hiddenGroups || []),
+    [systemSettings.hiddenGroups],
+  );
+
   const customerGroups = useMemo(() => normalizeCustomerGroupList([
-    ...customerLevelOptions,
+    ...customerLevelOptions.filter(g => !hiddenGroups.has(g)),
     ...customCustomerGroups,
     ...customers.map(customerGroupLevel),
     UNGROUPED_CUSTOMER_GROUP,
-  ]), [customCustomerGroups, customers]);
+  ]), [customCustomerGroups, customers, hiddenGroups]);
 
   const groupedCustomers = useMemo(() => {
     const groups = Object.fromEntries(customerGroups.map(level => [level, []]));
@@ -1538,6 +1716,105 @@ function App() {
       return next;
     });
   }, [customCustomerGroups, customerGroups, dialogs, persistSystemSettings, systemSettings]);
+
+  const handleRenameCustomerGroup = useCallback(async (oldName) => {
+    const isBuiltin = customerLevelOptions.includes(oldName);
+    const input = await dialogs.prompt(`将 "${oldName}" 重命名为：`, {
+      title: "重命名分组",
+      placeholder: "输入新名称",
+      value: oldName,
+    });
+    const newName = String(input || "").trim();
+    if (!newName || newName === oldName) return;
+
+    if (customerGroups.includes(newName)) {
+      await dialogs.alert(`"${newName}" 已存在。`, { title: "重命名分组" });
+      return;
+    }
+
+    const affectedCustomers = customers.filter(
+      customer => customerGroupLevel(customer) === oldName
+    );
+
+    // Update settings: add new name to custom groups; for built-in, hide old name
+    const nextSettings = { ...systemSettings };
+    if (isBuiltin) {
+      nextSettings.hiddenGroups = [...(systemSettings.hiddenGroups || []), oldName];
+    }
+    nextSettings.customerGroups = normalizeCustomerGroupList([
+      ...customCustomerGroups.filter(g => g !== oldName),
+      newName,
+    ]);
+    persistSystemSettings(nextSettings);
+
+    // Update all affected customers' levels
+    if (affectedCustomers.length > 0) {
+      const previousCustomers = customersRef.current;
+      const nextCustomers = customers.map(customer =>
+        customerGroupLevel(customer) === oldName
+          ? { ...customer, level: newName }
+          : customer
+      );
+      customersRef.current = nextCustomers;
+      setCustomers(nextCustomers);
+
+      for (const customer of affectedCustomers) {
+        try {
+          await api.updateCustomer(customer.id, { ...customer, level: newName });
+        } catch {
+          customersRef.current = previousCustomers;
+          setCustomers(previousCustomers);
+          await dialogs.alert(`保存失败：重命名分组时更新客户 "${customer.name}" 出错。`, { title: "保存失败" });
+          return;
+        }
+      }
+    }
+  }, [customerLevelOptions, customCustomerGroups, customerGroups, customers, dialogs, persistSystemSettings, systemSettings]);
+
+  const handleDeleteCustomerGroup = useCallback(async (groupName) => {
+    const isBuiltin = customerLevelOptions.includes(groupName);
+    const affectedCount = customers.filter(
+      customer => customerGroupLevel(customer) === groupName
+    ).length;
+
+    const confirmMsg = affectedCount > 0
+      ? `删除分组 "${groupName}" 后，其下 ${affectedCount} 个客户将移至"未分组"。确认删除？`
+      : `确认删除分组 "${groupName}"？`;
+
+    const confirmed = await dialogs.confirm(confirmMsg, { title: "删除分组" });
+    if (!confirmed) return;
+
+    // Update settings: remove from custom groups; for built-in, hide it
+    const nextSettings = { ...systemSettings };
+    if (isBuiltin) {
+      nextSettings.hiddenGroups = [...(systemSettings.hiddenGroups || []), groupName];
+    }
+    nextSettings.customerGroups = customCustomerGroups.filter(g => g !== groupName);
+    persistSystemSettings(nextSettings);
+
+    // Move affected customers to ungrouped
+    if (affectedCount > 0) {
+      const previousCustomers = customersRef.current;
+      const nextCustomers = customers.map(customer =>
+        customerGroupLevel(customer) === groupName
+          ? { ...customer, level: "" }
+          : customer
+      );
+      customersRef.current = nextCustomers;
+      setCustomers(nextCustomers);
+
+      for (const customer of affectedCustomers.filter(c => customerGroupLevel(c) === groupName)) {
+        try {
+          await api.updateCustomer(customer.id, { ...customer, level: "" });
+        } catch {
+          customersRef.current = previousCustomers;
+          setCustomers(previousCustomers);
+          await dialogs.alert(`保存失败：删除分组时更新客户 "${customer.name}" 出错。`, { title: "保存失败" });
+          return;
+        }
+      }
+    }
+  }, [customerLevelOptions, customCustomerGroups, customers, dialogs, persistSystemSettings, systemSettings]);
 
   const alertMap = useMemo(() => {
     const map = {};
@@ -1643,6 +1920,42 @@ function App() {
     let safeRows = ensureUniqueRowIds(calculatedRows, tableKey, customersRef.current, selectedCustomerId);
     if (tableKey === "deliveries") {
       safeRows = normalizeDeliveryRows(safeRows);
+      const protectedRows = protectSignedDeliveries(currentCustomer?.deliveries || [], safeRows);
+      safeRows = protectedRows.rows;
+      if (protectedRows.blocked) {
+        await dialogs.alert("已签收的送货单已锁定。如需修改，请先作废原送货单并重新开单。", { title: "送货单已锁定" });
+      }
+    }
+    if (tableKey === "materialCosts") {
+      safeRows = applyMaterialPriceHistory(currentCustomer?.materialCosts || [], safeRows);
+    }
+    if (tableKey === "payments") {
+      const nextStatements = applyPaymentsToStatements(currentCustomer?.statements || [], safeRows);
+      const statementsChanged = nextStatements.some((row, index) => row !== (currentCustomer?.statements || [])[index]);
+      updateSelectedCustomer(c => ({
+        ...c,
+        payments: safeRows,
+        ...(statementsChanged ? { statements: nextStatements } : {}),
+      }));
+      const paymentRevision = nextRowSaveRevision(selectedCustomerId, "payments");
+      const statementRevision = statementsChanged ? nextRowSaveRevision(selectedCustomerId, "statements") : null;
+      try {
+        const [paymentResult, statementResult] = await Promise.all([
+          saveRowsQueued(selectedCustomerId, "payments", safeRows),
+          statementsChanged
+            ? saveRowsQueued(selectedCustomerId, "statements", nextStatements)
+            : Promise.resolve(null),
+        ]);
+        if (paymentResult?.rows && isLatestRowSaveRevision(selectedCustomerId, "payments", paymentRevision)) {
+          updateSelectedCustomer(c => ({ ...c, payments: paymentResult.rows }));
+        }
+        if (statementResult?.rows && isLatestRowSaveRevision(selectedCustomerId, "statements", statementRevision)) {
+          updateSelectedCustomer(c => ({ ...c, statements: statementResult.rows }));
+        }
+      } catch (err) {
+        await dialogs.alert(`保存失败：${err.message}`, { title: "保存失败" });
+      }
+      return;
     }
     if (tableKey === "deliveries") {
       const currentOrders = currentCustomer?.orders || [];
@@ -1724,6 +2037,7 @@ function App() {
       orderNo: generatedOrderNo || "",
       dueDate: defaultDueDate || "",
       status: tableKey === "orders" ? "未完成" : config.emptyRow.status || "",
+      createdAt: ["statements", "payments"].includes(tableKey) ? new Date().toISOString() : config.emptyRow.createdAt || "",
     };
     let newRows = ensureUniqueRowIds(
       applyCustomerTableFormulas(
@@ -1945,6 +2259,62 @@ function App() {
     await removeCustomColumns(tableKey, [field]);
   };
 
+  const handleCreateStatement = async () => {
+    if (!selectedCustomer) return;
+    const currentCustomer = customersRef.current.find(customer => customer.id === selectedCustomerId) || selectedCustomer;
+    const statement = buildStatementFromSignedDeliveries(currentCustomer);
+    if (!statement) {
+      await dialogs.alert("没有可生成对账单的已签收送货单，或已签收送货单已经生成过对账单。", { title: "生成对账单" });
+      return;
+    }
+    const nextStatements = [statement, ...(currentCustomer.statements || [])];
+    const deliveryIds = new Set(statement.deliveryIds || []);
+    const nextDeliveries = (currentCustomer.deliveries || []).map(delivery => (
+      deliveryIds.has(delivery.id)
+        ? { ...delivery, statementNo: statement.statementNo, reconciledAt: new Date().toISOString() }
+        : delivery
+    ));
+    const nextOrders = (currentCustomer.orders || []).map(order => {
+      const linked = nextDeliveries.some(delivery => (
+        deliveryIds.has(delivery.id) && delivery[linkedOrderIdField] === order.id
+      ));
+      return linked && normalizeOrderStatus(order.status) === "已送货"
+        ? {
+          ...order,
+          status: "已开对账单",
+          statementNo: statement.statementNo,
+          statusChangedAt: new Date().toISOString(),
+          statusChangeLog: appendAuditLog(order.statusChangeLog, `生成对账单：${statement.statementNo}`),
+        }
+        : order;
+    });
+
+    pushUndoSnapshot();
+    updateSelectedCustomer(c => ({ ...c, statements: nextStatements, deliveries: nextDeliveries, orders: nextOrders }));
+    setActiveTable("statements");
+    const statementRevision = nextRowSaveRevision(selectedCustomerId, "statements");
+    const deliveryRevision = nextRowSaveRevision(selectedCustomerId, "deliveries");
+    const orderRevision = nextRowSaveRevision(selectedCustomerId, "orders");
+    try {
+      const [statementResult, deliveryResult, orderResult] = await Promise.all([
+        saveRowsQueued(selectedCustomerId, "statements", nextStatements),
+        saveRowsQueued(selectedCustomerId, "deliveries", nextDeliveries),
+        saveRowsQueued(selectedCustomerId, "orders", nextOrders),
+      ]);
+      if (statementResult?.rows && isLatestRowSaveRevision(selectedCustomerId, "statements", statementRevision)) {
+        updateSelectedCustomer(c => ({ ...c, statements: statementResult.rows }));
+      }
+      if (deliveryResult?.rows && isLatestRowSaveRevision(selectedCustomerId, "deliveries", deliveryRevision)) {
+        updateSelectedCustomer(c => ({ ...c, deliveries: deliveryResult.rows }));
+      }
+      if (orderResult?.rows && isLatestRowSaveRevision(selectedCustomerId, "orders", orderRevision)) {
+        updateSelectedCustomer(c => ({ ...c, orders: orderResult.rows }));
+      }
+    } catch (err) {
+      await dialogs.alert(`生成失败：${err.message}`, { title: "生成对账单" });
+    }
+  };
+
   const upsertCustomer = async (customerInput) => {
     pushUndoSnapshot();
     if (customerInput.id) {
@@ -1968,12 +2338,14 @@ function App() {
       paymentTerm: customerInput.paymentTerm,
       taxNo: customerInput.taxNo,
       note: customerInput.note,
-      customColumns: { products: [], orders: [], deliveries: [], materialCosts: [], costEntries: [] },
+      customColumns: { products: [], orders: [], deliveries: [], materialCosts: [], costEntries: [], statements: [], payments: [] },
       products: [],
       orders: [],
       deliveries: [],
       materialCosts: [],
       costEntries: [],
+      statements: [],
+      payments: [],
     };
     setCustomers(current => [newCustomer, ...current]);
     setSelectedCustomerId(newCustomer.id);
@@ -2049,7 +2421,7 @@ function App() {
         .map(order => order.orderNo || order.product || order.id)
         .slice(0, 5)
         .join("、");
-      await dialogs.alert(t("已完成、已送货、已开对账单或已付款的订单不能再排产。\n请先处理：{orders}", { orders: orderNos }), { title: "排产" });
+      await dialogs.alert(t("已完成、已开送货单、部分送货、已送货、已开对账单、已付款或异常的订单不能再排产。\n请先处理：{orders}", { orders: orderNos }), { title: "排产" });
       return false;
     }
 
@@ -2240,6 +2612,7 @@ function App() {
           ...delivery,
           [finalDeliveryField]: true,
           status: "未送",
+          issuedAt: new Date().toISOString(),
         }
         : delivery
     ));
@@ -2573,6 +2946,26 @@ function App() {
                   <span className={`group-arrow ${collapsed ? "" : "is-open"}`}>▸</span>
                   <span className="group-label">{t(level)}</span>
                   <span className="group-count">{count}</span>
+                  {level !== UNGROUPED_CUSTOMER_GROUP && (
+                    <span className="group-actions-inline">
+                      <button
+                        className="group-action-btn"
+                        type="button"
+                        title="重命名分组"
+                        onClick={(e) => { e.stopPropagation(); handleRenameCustomerGroup(level); }}
+                      >
+                        <Pencil size={12} />
+                      </button>
+                      <button
+                        className="group-action-btn"
+                        type="button"
+                        title="删除分组"
+                        onClick={(e) => { e.stopPropagation(); handleDeleteCustomerGroup(level); }}
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </span>
+                  )}
                 </button>
                 {!collapsed &&
                   groupMembers.map((customer) => (
@@ -2771,6 +3164,7 @@ function App() {
                       disabled={!selectedCustomer}
                       dialogs={dialogs}
                       t={t}
+                      existingOrders={selectedCustomer?.orders || []}
                       onImport={handleOrderImport}
                     />
                   )}
@@ -2779,7 +3173,7 @@ function App() {
                       className="secondary-button"
                       type="button"
                       title={t("生成对账单")}
-                      onClick={() => generateStatement(selectedCustomer, systemSettings, t)}
+                      onClick={handleCreateStatement}
                     >
                       {t("对账单")}
                     </button>
@@ -2904,6 +3298,7 @@ function App() {
         <DeliveryPrintModal
           delivery={printDelivery}
           customer={selectedCustomer}
+          settings={systemSettings}
           t={t}
           onClose={() => setPrintDelivery(null)}
         />
@@ -3093,7 +3488,14 @@ function BusinessGrid({
     if (!getNextStatuses(normalizeOrderStatus(rowData?.status)).includes(nextStatus)) return;
     onBeforeDataChange?.();
     const updatedRows = sourceRows.map(row =>
-      row.id === rowId ? { ...row, status: nextStatus } : row
+      row.id === rowId
+        ? {
+          ...row,
+          status: nextStatus,
+          statusChangedAt: new Date().toISOString(),
+          statusChangeLog: appendAuditLog(row.statusChangeLog, `进度：${row.status || "未完成"} -> ${nextStatus}`),
+        }
+        : row
     );
     onRowsChange(tableKey, updatedRows, { formulaRowIds: [rowId] });
   }, [onBeforeDataChange, onRowsChange, sourceRows, tableKey]);
@@ -3451,13 +3853,12 @@ function BusinessGrid({
         colIds,
         skipHeader: false,
         defaultMinWidth: 90,
-        defaultMaxWidth: 360,
         columnLimits: [
           { colId: "deliveryNo", minWidth: 150, maxWidth: 220 },
           { colId: "orderNo", minWidth: 130, maxWidth: 220 },
           { colId: "status", minWidth: 110, maxWidth: 150 },
-          { colId: "followUp", minWidth: 160, maxWidth: 420 },
-          { colId: deliveryOrderField("followUp"), minWidth: 160, maxWidth: 420 },
+          { colId: "followUp", minWidth: 160 },
+          { colId: deliveryOrderField("followUp"), minWidth: 160 },
         ],
       });
     };
@@ -5420,6 +5821,8 @@ function statusClass(value = "") {
   if (value === "作废") return "is-void";
   if (value === "已付款") return "is-paid";
   if (value === "已开对账单") return "is-reconciled";
+  if (value === "已开送货单") return "is-delivery-opened";
+  if (value === "部分送货") return "is-partial-delivered";
   if (value === "已送货" || value === "已发货") return "is-delivered";
   if (value === "已完成") return "is-completed";
   if (value === "已排产") return "is-scheduled";
@@ -6054,7 +6457,9 @@ function SettingsModal({ settings, mobileUsers = [], onChangeMobileUserRole, onR
   const { t } = useI18n();
   const [form, setForm] = useState({
     companyName: settings.companyName || "",
+    companyNameEn: settings.companyNameEn || "",
     companyAddress: settings.companyAddress || "",
+    companyAddressEn: settings.companyAddressEn || "",
     companyPhone: settings.companyPhone || "",
     companyTaxNo: settings.companyTaxNo || settings.taxNo || "",
     defaultDueDays: settings.defaultDueDays || "7",
@@ -6090,7 +6495,7 @@ function SettingsModal({ settings, mobileUsers = [], onChangeMobileUserRole, onR
               <select value={form.language} onChange={e => update("language", e.target.value)}>
                 {languageOptions.map(option => (
                   <option key={option.value} value={option.value}>
-                    {option.value === "zh" ? t("中文") : t("英文")}
+                    {option.label}
                   </option>
                 ))}
               </select>
@@ -6106,12 +6511,20 @@ function SettingsModal({ settings, mobileUsers = [], onChangeMobileUserRole, onR
               <input value={form.companyName} onChange={e => update("companyName", e.target.value)} placeholder={t("例如：XX泡沫包装有限公司")} />
             </label>
             <label className="field">
+              <span>{t("公司名称")} (English)</span>
+              <input value={form.companyNameEn} onChange={e => update("companyNameEn", e.target.value)} placeholder="e.g. XX FOAM PACKAGING CO.,LTD" />
+            </label>
+            <label className="field">
               <span>{t("联系电话")}</span>
               <input value={form.companyPhone} onChange={e => update("companyPhone", e.target.value)} placeholder={t("例如：0757-8888 8888")} />
             </label>
             <label className="field" style={{ gridColumn: "1 / -1" }}>
               <span>{t("公司地址")}</span>
               <input value={form.companyAddress} onChange={e => update("companyAddress", e.target.value)} placeholder={t("例如：佛山市南海区XX工业园")} />
+            </label>
+            <label className="field" style={{ gridColumn: "1 / -1" }}>
+              <span>{t("公司地址")} (English)</span>
+              <input value={form.companyAddressEn} onChange={e => update("companyAddressEn", e.target.value)} placeholder="e.g. XX Industrial Park, Nanhai, Foshan" />
             </label>
             <label className="field">
               <span>{t("税号")}</span>

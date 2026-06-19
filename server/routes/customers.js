@@ -4,17 +4,19 @@ import { prisma } from '../db.js';
 import { findUserByMobileToken, normalizeRole } from './users.js';
 
 const router = Router();
-const VALID_TABLES = new Set(['products', 'orders', 'deliveries', 'materialCosts', 'costEntries']);
+const VALID_TABLES = new Set(['products', 'orders', 'deliveries', 'materialCosts', 'costEntries', 'statements', 'payments']);
 const TABLE_DELEGATES = {
   products: 'product',
   orders: 'order',
   deliveries: 'delivery',
   materialCosts: 'materialCost',
   costEntries: 'costEntry',
+  statements: 'statement',
+  payments: 'payment',
 };
 
 function defaultCustomColumns() {
-  return { products: [], orders: [], deliveries: [], materialCosts: [], costEntries: [] };
+  return { products: [], orders: [], deliveries: [], materialCosts: [], costEntries: [], statements: [], payments: [] };
 }
 
 function normalizeCustomColumns(customColumns = {}) {
@@ -71,6 +73,8 @@ function normalize(row) {
     deliveries: row.deliveries?.map(item => item.data) || [],
     materialCosts: row.materialCosts?.map(item => item.data) || [],
     costEntries: row.costEntries?.map(item => item.data) || [],
+    statements: row.statements?.map(item => item.data) || [],
+    payments: row.payments?.map(item => item.data) || [],
   };
 }
 
@@ -92,18 +96,71 @@ function isMobileVisibleDelivery(delivery = {}) {
   return finalDelivery && normalizeFinalDeliveryStatus(delivery.status) !== '作废';
 }
 
+function isDeliverySigned(delivery = {}) {
+  return normalizeFinalDeliveryStatus(delivery.status) === '已送' || Boolean(delivery.signedAt);
+}
+
+function parseNumericValue(value) {
+  const number = Number(String(value ?? '').replace(/,/g, '').trim());
+  return Number.isFinite(number) ? number : 0;
+}
+
+function deliveryQuantitySource(delivery = {}) {
+  return delivery._linkedOrderQuantitySourceField || 'quantity';
+}
+
+function appendAuditLog(log = '', message = '') {
+  const line = `[${new Date().toLocaleString()}] ${message}`;
+  return [String(log || '').trim(), line].filter(Boolean).join('\n');
+}
+
+function isSameMaterial(material = {}, input = {}) {
+  const materialName = String(material.materialName || '').trim();
+  const inputName = String(input.materialName || '').trim();
+  if (!materialName || materialName !== inputName) return false;
+  const materialUnit = String(material.unit || '').trim();
+  const inputUnit = String(input.unit || '').trim();
+  return !inputUnit || materialUnit === inputUnit;
+}
+
+function sanitizeMaterialCostForEmployee(material = {}) {
+  return {
+    id: material.id,
+    materialName: material.materialName || '',
+    unit: material.unit || '',
+    remark: material.remark || '',
+  };
+}
+
+function sanitizeCostEntryForEmployee(entry = {}) {
+  return {
+    id: entry.id,
+    date: entry.date || '',
+    materialName: entry.materialName || '',
+    quantity: entry.quantity || 0,
+    unit: entry.unit || '',
+    note: entry.note || '',
+    photo: entry.photo || '',
+    approvalStatus: entry.approvalStatus || '待审核',
+    enteredAt: entry.enteredAt || '',
+    enteredBy: entry.enteredBy || '',
+    enteredUserId: entry.enteredUserId || '',
+    _restricted: true,
+  };
+}
+
 function filterCustomerForMobileUser(customer, user) {
   const role = normalizeRole(user?.role);
   if (!user || role === 'admin') return customer;
   if (role === 'pending') {
-    return { ...customer, products: [], deliveries: [], orders: [], materialCosts: [], costEntries: [] };
+    return { ...customer, products: [], deliveries: [], orders: [], materialCosts: [], costEntries: [], statements: [], payments: [] };
   }
   return {
     ...customer,
     products: [],
     deliveries: (customer.deliveries || []).filter(isMobileVisibleDelivery),
-    materialCosts: customer.materialCosts || [],
-    costEntries: customer.costEntries || [],
+    materialCosts: (customer.materialCosts || []).map(sanitizeMaterialCostForEmployee),
+    costEntries: (customer.costEntries || []).map(sanitizeCostEntryForEmployee),
     orders: (customer.orders || []).filter(order => normalizeOrderStatus(order.status) === '已排产'),
   };
 }
@@ -141,6 +198,8 @@ router.get('/', async (req, res) => {
           deliveries: { orderBy: { sortOrder: 'asc' } },
           materialCosts: { orderBy: { sortOrder: 'asc' } },
           costEntries: { orderBy: { sortOrder: 'asc' } },
+          statements: { orderBy: { sortOrder: 'asc' } },
+          payments: { orderBy: { sortOrder: 'asc' } },
         },
       }),
       prisma.customer.count({ where }),
@@ -155,6 +214,8 @@ router.get('/', async (req, res) => {
         || customer.orders.length > 0
         || customer.materialCosts.length > 0
         || customer.costEntries.length > 0
+        || customer.statements.length > 0
+        || customer.payments.length > 0
       ));
 
     res.json({
@@ -177,6 +238,8 @@ router.post('/replace-all', async (req, res) => {
   const customers = normalizeIncomingCustomers(req.body.customers || []);
   try {
     await prisma.$transaction(async (tx) => {
+      await tx.payment.deleteMany();
+      await tx.statement.deleteMany();
       await tx.delivery.deleteMany();
       await tx.order.deleteMany();
       await tx.product.deleteMany();
@@ -191,6 +254,8 @@ router.post('/replace-all', async (req, res) => {
           deliveries = [],
           materialCosts = [],
           costEntries = [],
+          statements = [],
+          payments = [],
           customColumns,
           ...info
         } = c;
@@ -215,6 +280,8 @@ router.post('/replace-all', async (req, res) => {
           ['deliveries', deliveries],
           ['materialCosts', materialCosts],
           ['costEntries', costEntries],
+          ['statements', statements],
+          ['payments', payments],
         ]) {
           const delegate = TABLE_DELEGATES[table];
           for (let i = 0; i < tableRows.length; i++) {
@@ -257,7 +324,7 @@ router.post('/', async (req, res) => {
     });
     res.json({ id, name, contact, phone, address, level, paymentTerm, taxNo, note,
                customColumns: normalizeCustomColumns(customColumns),
-               products: [], orders: [], deliveries: [], materialCosts: [], costEntries: [] });
+               products: [], orders: [], deliveries: [], materialCosts: [], costEntries: [], statements: [], payments: [] });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -374,8 +441,12 @@ router.post('/:id/cost-entries', async (req, res) => {
   const body = req.body || {};
   const materialName = String(body.materialName || '').trim();
   const photo = body.photo;
+  const requestedQuantity = Number(body.quantity || 0);
 
   if (!materialName) return res.status(400).json({ error: '请填写物料名称' });
+  if (!Number.isFinite(requestedQuantity) || requestedQuantity <= 0) {
+    return res.status(400).json({ error: '请输入正确的数量' });
+  }
   if (!photo?.dataUrl) return res.status(400).json({ error: '成本录入必须上传照片' });
 
   try {
@@ -390,18 +461,24 @@ router.post('/:id/cost-entries', async (req, res) => {
 
     const customer = await prisma.customer.findUnique({
       where: { id },
-      select: { id: true },
+      include: { materialCosts: { orderBy: { sortOrder: 'asc' } } },
     });
     if (!customer) return res.status(404).json({ error: 'Customer not found' });
+    const material = (customer.materialCosts || [])
+      .map(row => row.data || {})
+      .find(row => isSameMaterial(row, body));
+    if (!material) return res.status(400).json({ error: '未找到该客户的物料档案' });
+    const quantity = requestedQuantity;
+    const unitCost = Number(material.unitCost || 0);
 
     const row = {
       id: makeRowId('costEntries'),
       date: String(body.date || '').trim() || new Date().toISOString().slice(0, 10),
-      materialName,
-      quantity: Number(body.quantity || 0),
-      unit: String(body.unit || '').trim(),
-      unitCost: Number(body.unitCost || 0),
-      amount: Number(body.amount || 0),
+      materialName: material.materialName || materialName,
+      quantity,
+      unit: String(material.unit || body.unit || '').trim(),
+      unitCost,
+      amount: quantity * unitCost,
       note: String(body.note || '').trim(),
       photo,
       approvalStatus: '待审核',
@@ -492,9 +569,19 @@ router.patch('/:id/deliveries/:deliveryId/sign', async (req, res) => {
       where: { id: deliveryId, customerId: id },
     });
     if (!delivery) return res.status(404).json({ error: 'Delivery not found' });
+    const currentData = delivery.data || {};
+    if (currentData._finalDelivery === false) {
+      return res.status(400).json({ error: '送货单草稿不能签收，请先生成正式送货单' });
+    }
+    if (normalizeFinalDeliveryStatus(currentData.status) === '作废') {
+      return res.status(400).json({ error: '作废送货单不能签收' });
+    }
+    if (isDeliverySigned(currentData)) {
+      return res.status(400).json({ error: '送货单已签收，不能重复签收' });
+    }
 
     const data = {
-      ...(delivery.data || {}),
+      ...currentData,
       status: '已送',
       signedAt: new Date().toISOString(),
       signedBy: signer,
@@ -507,6 +594,38 @@ router.patch('/:id/deliveries/:deliveryId/sign', async (req, res) => {
       where: { id: deliveryId },
       data: { data },
     });
+    const orderId = currentData._linkedOrderId;
+    if (orderId && prisma.delivery.findMany && prisma.order.findFirst && prisma.order.update) {
+      const [order, deliveries] = await Promise.all([
+        prisma.order.findFirst({ where: { id: orderId, customerId: id } }),
+        prisma.delivery.findMany({ where: { customerId: id } }),
+      ]);
+      if (order) {
+        const sourceField = deliveryQuantitySource(data);
+        const deliveredQuantity = deliveries
+          .map(row => row.id === deliveryId ? updated : row)
+          .map(row => row.data || {})
+          .filter(row => row._linkedOrderId === orderId)
+          .filter(row => row._finalDelivery !== false && normalizeFinalDeliveryStatus(row.status) === '已送')
+          .filter(row => deliveryQuantitySource(row) === sourceField)
+          .reduce((sum, row) => sum + parseNumericValue(row.deliveryQuantity), 0);
+        const orderQuantity = parseNumericValue(order.data?.[sourceField]);
+        const remainingQuantity = Math.max(orderQuantity - deliveredQuantity, 0);
+        const nextStatus = remainingQuantity <= 0.0000001 ? '已送货' : '部分送货';
+        const orderData = {
+          ...(order.data || {}),
+          status: nextStatus,
+          deliveredQuantity,
+          remainingQuantity,
+          statusChangedAt: new Date().toISOString(),
+          statusChangeLog: appendAuditLog(order.data?.statusChangeLog, `送货签收：${nextStatus}`),
+        };
+        await prisma.order.update({
+          where: { id: order.id },
+          data: { data: orderData },
+        });
+      }
+    }
     res.json({ ok: true, row: updated.data });
   } catch (err) {
     res.status(500).json({ error: err.message });

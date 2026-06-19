@@ -17,14 +17,17 @@ describe('normalizeOrderStatus', () => {
     }
   });
 
-  it('should return all 6 predefined statuses', () => {
+  it('should return all 9 predefined statuses', () => {
     expect(statusOptions).toEqual([
       '未完成',
       '已排产',
       '已完成',
+      '已开送货单',
+      '部分送货',
       '已送货',
       '已开对账单',
       '已付款',
+      '异常',
     ]);
   });
 
@@ -36,7 +39,7 @@ describe('normalizeOrderStatus', () => {
     expect(normalizeOrderStatus('')).toBe('未完成');
     expect(normalizeOrderStatus('random')).toBe('未完成');
     expect(normalizeOrderStatus('未知状态')).toBe('未完成');
-    expect(normalizeOrderStatus('异常')).toBe('未完成');
+    expect(normalizeOrderStatus('异常')).toBe('异常');
     expect(normalizeOrderStatus(null)).toBe('未完成');
     expect(normalizeOrderStatus(undefined)).toBe('未完成');
   });
@@ -48,10 +51,13 @@ describe('getNextStatuses', () => {
   it('should return correct next statuses for each state', () => {
     expect(getNextStatuses('未完成')).toEqual(['已排产', '已完成']);
     expect(getNextStatuses('已排产')).toEqual(['已完成']);
-    expect(getNextStatuses('已完成')).toEqual(['已送货', '已开对账单']);
+    expect(getNextStatuses('已完成')).toEqual(['已开送货单']);
+    expect(getNextStatuses('已开送货单')).toEqual(['部分送货', '已送货', '异常']);
+    expect(getNextStatuses('部分送货')).toEqual(['已开送货单', '已送货', '异常']);
     expect(getNextStatuses('已送货')).toEqual(['已开对账单']);
     expect(getNextStatuses('已开对账单')).toEqual(['已付款']);
     expect(getNextStatuses('已付款')).toEqual([]);
+    expect(getNextStatuses('异常')).toEqual(['未完成']);
   });
 
   it('should normalize the input before lookup (已发货 → 已送货)', () => {
@@ -72,6 +78,8 @@ describe('getNextStatuses', () => {
   it('should not allow skipping steps (已排产 cannot go directly to 已付款)', () => {
     const next = getNextStatuses('已排产');
     expect(next).not.toContain('已付款');
+    expect(next).not.toContain('已开送货单');
+    expect(next).not.toContain('部分送货');
     expect(next).not.toContain('已送货');
     expect(next).not.toContain('已开对账单');
   });
@@ -103,12 +111,15 @@ describe('isOpenOrder', () => {
     }
   });
 
-  it('should return false specifically for 已完成, 已送货, 已发货, 已开对账单, 已付款', () => {
+  it('should return false specifically for closed statuses', () => {
     expect(isOpenOrder('已完成')).toBe(false);
+    expect(isOpenOrder('已开送货单')).toBe(false);
+    expect(isOpenOrder('部分送货')).toBe(false);
     expect(isOpenOrder('已送货')).toBe(false);
     expect(isOpenOrder('已发货')).toBe(false);    // in closedOrderStatuses
     expect(isOpenOrder('已开对账单')).toBe(false);
     expect(isOpenOrder('已付款')).toBe(false);
+    expect(isOpenOrder('异常')).toBe(false);
   });
 
   it('should return false for 异常 status', () => {
@@ -131,7 +142,7 @@ describe('isOpenOrder', () => {
 
 describe('status workflow consistency', () => {
   it('every transition target should be a valid status', () => {
-    for (const [from, toList] of Object.entries(statusTransitions)) {
+    for (const toList of Object.values(statusTransitions)) {
       for (const to of toList) {
         expect(statusOptions).toContain(to);
       }

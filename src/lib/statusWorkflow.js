@@ -1,6 +1,6 @@
-const statusOptions = ["未完成", "已排产", "已完成", "已送货", "已开对账单", "已付款"];
-const closedOrderStatuses = new Set(["已完成", "已送货", "已开对账单", "已付款", "已发货"]);
-const isOpenOrder = (status = "") => !closedOrderStatuses.has(status) && status !== "异常";
+const statusOptions = ["未完成", "已排产", "已完成", "已开送货单", "部分送货", "已送货", "已开对账单", "已付款", "异常"];
+const closedOrderStatuses = new Set(["已完成", "已开送货单", "部分送货", "已送货", "已开对账单", "已付款", "已发货", "异常"]);
+const isOpenOrder = (status = "") => !closedOrderStatuses.has(status);
 const normalizeOrderStatus = (status = "") => {
   if (statusOptions.includes(status)) return status;
   if (status === "已发货") return "已送货";
@@ -9,10 +9,13 @@ const normalizeOrderStatus = (status = "") => {
 const statusTransitions = {
   "未完成": ["已排产", "已完成"],
   "已排产": ["已完成"],
-  "已完成": ["已送货", "已开对账单"],
+  "已完成": ["已开送货单"],
+  "已开送货单": ["部分送货", "已送货", "异常"],
+  "部分送货": ["已开送货单", "已送货", "异常"],
   "已送货": ["已开对账单"],
   "已开对账单": ["已付款"],
   "已付款": [],
+  "异常": ["未完成"],
 };
 const getNextStatuses = (currentStatus) => {
   const normalized = normalizeOrderStatus(currentStatus);
