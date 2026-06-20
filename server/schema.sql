@@ -65,9 +65,16 @@ CREATE TABLE IF NOT EXISTS mobile_users (
   name       TEXT NOT NULL DEFAULT '',
   phone      TEXT NOT NULL UNIQUE,
   role       TEXT NOT NULL DEFAULT 'pending',
+  avatar     TEXT NOT NULL DEFAULT '',
   password_hash TEXT NOT NULL DEFAULT '',
   token      TEXT NOT NULL UNIQUE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS app_settings (
+  key        TEXT PRIMARY KEY,
+  data       JSONB NOT NULL DEFAULT '{}',
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

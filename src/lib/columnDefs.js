@@ -8,10 +8,22 @@ const orderDefaultColumns = [
     type: "select",
     options: statusOptions,
   },
-  { field: "completionTime", headerName: "完成时间", width: 170, type: "datetime", editable: false },
+  {
+    field: "completionTime",
+    headerName: "完成时间",
+    width: 170,
+    type: "datetime",
+    editable: false,
+  },
   { field: "completionOperator", headerName: "员工姓名", width: 120, editable: false },
   { field: "completionPhoto", headerName: "照片证明", width: 130, type: "image", editable: false },
-  { field: "statusChangedAt", headerName: "进度更新时间", width: 170, type: "datetime", editable: false },
+  {
+    field: "statusChangedAt",
+    headerName: "进度更新时间",
+    width: 170,
+    type: "datetime",
+    editable: false,
+  },
   { field: "statusChangeLog", headerName: "进度记录", width: 220, editable: false },
 ];
 const deliveryQuantityField = "deliveryQuantity";
@@ -21,7 +33,7 @@ const finalDeliveryField = "_finalDelivery";
 const linkedOrderIdField = "_linkedOrderId";
 const linkedOrderQuantitySourceField = "_linkedOrderQuantitySourceField";
 const deliveryOrderFieldPrefix = "order_";
-const finalDeliveryStatusOptions = ["未送", "已送", "作废"];
+const finalDeliveryStatusOptions = ["未送", "部分签收", "已签收", "作废"];
 const productionScheduleStatusOptions = ["已排产"];
 const orderDeliveryTrackingColumns = [
   { field: orderDeliveredQuantityField, headerName: "已送数量", width: 110, type: "number" },

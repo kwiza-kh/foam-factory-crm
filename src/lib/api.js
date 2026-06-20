@@ -1,7 +1,7 @@
 // @ts-check
 
 /** @type {string} */
-const BASE = '/api';
+const BASE = "/api";
 
 /**
  * @param {string} method
@@ -12,7 +12,7 @@ const BASE = '/api';
 async function req(method, path, body) {
   const res = await fetch(`${BASE}${path}`, {
     method,
-    headers: body !== undefined ? { 'Content-Type': 'application/json' } : {},
+    headers: body !== undefined ? { "Content-Type": "application/json" } : {},
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {
@@ -29,41 +29,40 @@ export const api = {
    */
   getCustomers: (params = {}) => {
     const query = new URLSearchParams();
-    if (params.page) query.set('page', String(params.page));
-    if (params.limit) query.set('limit', String(params.limit));
-    if (params.search) query.set('search', params.search);
+    if (params.page) query.set("page", String(params.page));
+    if (params.limit) query.set("limit", String(params.limit));
+    if (params.search) query.set("search", params.search);
     const qs = query.toString();
-    return req('GET', `/customers${qs ? `?${qs}` : ''}`);
+    return req("GET", `/customers${qs ? `?${qs}` : ""}`);
   },
 
   /** @param {import('./types').CustomerInput} customer */
-  createCustomer: (customer) =>
-    req('POST', '/customers', customer),
+  createCustomer: (customer) => req("POST", "/customers", customer),
 
   /** @param {string} id @param {import('./types').CustomerInput} customer */
-  updateCustomer: (id, customer) =>
-    req('PUT', `/customers/${id}`, customer),
+  updateCustomer: (id, customer) => req("PUT", `/customers/${id}`, customer),
 
   /** @param {string} id */
-  deleteCustomer: (id) =>
-    req('DELETE', `/customers/${id}`),
+  deleteCustomer: (id) => req("DELETE", `/customers/${id}`),
 
   /** @param {string} customerId @param {string} tableKey @param {Record<string,any>[]} rows */
   setRows: (customerId, tableKey, rows) =>
-    req('PUT', `/customers/${customerId}/${tableKey}`, { rows }),
+    req("PUT", `/customers/${customerId}/${tableKey}`, { rows }),
 
   /** @param {string} customerId @param {string} tableKey @param {string[]} ids */
   deleteRows: (customerId, tableKey, ids) =>
-    req('DELETE', `/customers/${customerId}/${tableKey}/rows`, { ids }),
+    req("DELETE", `/customers/${customerId}/${tableKey}/rows`, { ids }),
 
   /** @param {import('./types').Customer[]} customers */
-  replaceAll: (customers) =>
-    req('POST', '/customers/replace-all', { customers }),
+  replaceAll: (customers) => req("POST", "/customers/replace-all", { customers }),
 
-  getMobileUsers: () =>
-    req('GET', '/users'),
+  getMobileUsers: () => req("GET", "/users"),
 
   /** @param {string} id @param {'pending' | 'admin' | 'employee'} role */
-  updateMobileUserRole: (id, role) =>
-    req('PATCH', `/users/${id}/role`, { role }),
+  updateMobileUserRole: (id, role) => req("PATCH", `/users/${id}/role`, { role }),
+
+  getMobileDisplaySettings: () => req("GET", "/users/mobile-display-settings"),
+
+  /** @param {{ cardFields: string[]; detailFields: string[] }} settings */
+  updateMobileDisplaySettings: (settings) => req("PUT", "/users/mobile-display-settings", settings),
 };

@@ -1,22 +1,38 @@
-import { Router } from 'express';
-import { randomUUID } from 'crypto';
-import { prisma } from '../db.js';
-import { findUserByMobileToken, normalizeRole } from './users.js';
+import { Router } from "express";
+import { randomUUID } from "crypto";
+import { prisma } from "../db.js";
+import { findUserByMobileToken, normalizeRole } from "./users.js";
 
 const router = Router();
-const VALID_TABLES = new Set(['products', 'orders', 'deliveries', 'materialCosts', 'costEntries', 'statements', 'payments']);
+const VALID_TABLES = new Set([
+  "products",
+  "orders",
+  "deliveries",
+  "materialCosts",
+  "costEntries",
+  "statements",
+  "payments",
+]);
 const TABLE_DELEGATES = {
-  products: 'product',
-  orders: 'order',
-  deliveries: 'delivery',
-  materialCosts: 'materialCost',
-  costEntries: 'costEntry',
-  statements: 'statement',
-  payments: 'payment',
+  products: "product",
+  orders: "order",
+  deliveries: "delivery",
+  materialCosts: "materialCost",
+  costEntries: "costEntry",
+  statements: "statement",
+  payments: "payment",
 };
 
 function defaultCustomColumns() {
-  return { products: [], orders: [], deliveries: [], materialCosts: [], costEntries: [], statements: [], payments: [] };
+  return {
+    products: [],
+    orders: [],
+    deliveries: [],
+    materialCosts: [],
+    costEntries: [],
+    statements: [],
+    payments: [],
+  };
 }
 
 function normalizeCustomColumns(customColumns = {}) {
@@ -32,7 +48,7 @@ function makeRowId(tableKey) {
 }
 
 function uniqueRows(rows = [], tableKey, usedIds = new Set()) {
-  return rows.map(row => {
+  return rows.map((row) => {
     let id = row?.id;
     while (!id || usedIds.has(id)) {
       id = makeRowId(tableKey);
@@ -44,10 +60,10 @@ function uniqueRows(rows = [], tableKey, usedIds = new Set()) {
 
 function normalizeIncomingCustomers(customers = []) {
   const usedIdsByTable = Object.fromEntries(
-    Object.keys(TABLE_DELEGATES).map(tableKey => [tableKey, new Set()]),
+    Object.keys(TABLE_DELEGATES).map((tableKey) => [tableKey, new Set()]),
   );
 
-  return customers.map(customer => {
+  return customers.map((customer) => {
     const next = { ...customer };
     for (const tableKey of Object.keys(TABLE_DELEGATES)) {
       next[tableKey] = uniqueRows(customer[tableKey] || [], tableKey, usedIdsByTable[tableKey]);
@@ -60,100 +76,258 @@ function normalize(row) {
   return {
     id: row.id,
     name: row.name,
-    contact: row.contact || '',
-    phone: row.phone || '',
-    address: row.address || '',
-    level: row.level || '',
-    paymentTerm: row.paymentTerm || '',
-    taxNo: row.taxNo || '',
-    note: row.note || '',
+    contact: row.contact || "",
+    phone: row.phone || "",
+    address: row.address || "",
+    level: row.level || "",
+    paymentTerm: row.paymentTerm || "",
+    taxNo: row.taxNo || "",
+    note: row.note || "",
     customColumns: normalizeCustomColumns(row.customColumns),
-    products: row.products?.map(item => item.data) || [],
-    orders: row.orders?.map(item => item.data) || [],
-    deliveries: row.deliveries?.map(item => item.data) || [],
-    materialCosts: row.materialCosts?.map(item => item.data) || [],
-    costEntries: row.costEntries?.map(item => item.data) || [],
-    statements: row.statements?.map(item => item.data) || [],
-    payments: row.payments?.map(item => item.data) || [],
+    products: row.products?.map((item) => item.data) || [],
+    orders: row.orders?.map((item) => item.data) || [],
+    deliveries: row.deliveries?.map((item) => item.data) || [],
+    materialCosts: row.materialCosts?.map((item) => item.data) || [],
+    costEntries: row.costEntries?.map((item) => item.data) || [],
+    statements: row.statements?.map((item) => item.data) || [],
+    payments: row.payments?.map((item) => item.data) || [],
   };
 }
 
-function normalizeOrderStatus(status = '') {
-  const value = String(status || '').trim();
-  if (value === '已发货') return '已送货';
-  return value || '未完成';
+function normalizeOrderStatus(status = "") {
+  const value = String(status || "").trim();
+  if (value === "已发货") return "已送货";
+  return value || "未完成";
 }
 
-function normalizeFinalDeliveryStatus(status = '') {
-  const value = String(status || '').trim();
-  if (value === '已送' || value === '已送货' || value === '已发货' || value.includes('签收')) return '已送';
-  if (value === '作废' || value.includes('作废') || value.includes('取消') || value.includes('无效')) return '作废';
-  return value || '未送';
+function normalizeFinalDeliveryStatus(status = "") {
+  const value = String(status || "").trim();
+  if (value === "部分签收" || value === "部分送货") return "部分签收";
+  if (value === "已送" || value === "已送货" || value === "已发货" || value.includes("签收"))
+    return "已送";
+  if (
+    value === "作废" ||
+    value.includes("作废") ||
+    value.includes("取消") ||
+    value.includes("无效")
+  )
+    return "作废";
+  return value || "未送";
 }
 
 function isMobileVisibleDelivery(delivery = {}) {
   const finalDelivery = delivery._finalDelivery !== false;
-  return finalDelivery && normalizeFinalDeliveryStatus(delivery.status) !== '作废';
+  return finalDelivery && normalizeFinalDeliveryStatus(delivery.status) !== "作废";
 }
 
 function isDeliverySigned(delivery = {}) {
-  return normalizeFinalDeliveryStatus(delivery.status) === '已送' || Boolean(delivery.signedAt);
+  return normalizeFinalDeliveryStatus(delivery.status) === "已送" || Boolean(delivery.signedAt);
+}
+
+function deliverySignItemId(delivery = {}) {
+  return String(delivery.id || delivery._linkedOrderId || delivery.deliveryNo || "").trim();
+}
+
+function deliverySignItemLabel(delivery = {}) {
+  return String(
+    delivery.orderNo ||
+      delivery.order_no ||
+      delivery.product ||
+      delivery._linkedOrderId ||
+      delivery.id ||
+      "送货明细",
+  );
+}
+
+function normalizeDeliverySignItems(delivery = {}) {
+  const existing = Array.isArray(delivery.signItems) ? delivery.signItems : [];
+  if (existing.length) {
+    return existing.map((item, index) => ({
+      id: String(item.id || item.deliveryId || `${deliverySignItemId(delivery)}-${index}`),
+      deliveryId: String(item.deliveryId || delivery.id || item.id || ""),
+      label: String(item.label || item.orderNo || item.product || deliverySignItemLabel(delivery)),
+      quantity: item.quantity ?? delivery.deliveryQuantity ?? "",
+      unit: item.unit || delivery.unit || "",
+      signed: Boolean(item.signed || item.signedAt),
+      signedAt: item.signedAt || "",
+      signedBy: item.signedBy || "",
+      note: item.note || "",
+    }));
+  }
+  return [
+    {
+      id: deliverySignItemId(delivery),
+      deliveryId: String(delivery.id || ""),
+      label: deliverySignItemLabel(delivery),
+      quantity: delivery.deliveryQuantity ?? delivery.quantity ?? "",
+      unit: delivery.unit || "",
+      signed: isDeliverySigned(delivery),
+      signedAt: delivery.signedAt || "",
+      signedBy: delivery.signedBy || "",
+      note: delivery.signedNote || "",
+    },
+  ];
+}
+
+function deliveryGroupKey(delivery = {}) {
+  const data = delivery.data && typeof delivery.data === "object" ? delivery.data : delivery;
+  return `${delivery.customerId || data.customerId || ""}:${data.deliveryNo || delivery.deliveryNo || data.id || delivery.id || ""}`;
+}
+
+function deliveryGroupSortOrder(delivery = {}) {
+  return Number.isFinite(Number(delivery.sortOrder)) ? Number(delivery.sortOrder) : 0;
+}
+
+function applyDeliverySignState(deliveries = [], selectedItemIds = [], signMeta = {}) {
+  const selected = new Set(
+    selectedItemIds.map((item) => String(item || "").trim()).filter(Boolean),
+  );
+  const signAllWhenEmpty = selected.size === 0;
+  const now = signMeta.signedAt || new Date().toISOString();
+  const historyEntry = {
+    id: `sign-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`,
+    signedAt: now,
+    signedBy: signMeta.signer,
+    note: signMeta.note || "",
+    photo: signMeta.photo || null,
+    signedUserId: signMeta.userId || "",
+    signedUserName: signMeta.userName || "",
+    itemIds: [],
+  };
+
+  const updated = deliveries.map((delivery) => {
+    const items = normalizeDeliverySignItems(delivery);
+    let changed = false;
+    const nextItems = items.map((item) => {
+      const shouldSign = !item.signed && (signAllWhenEmpty || selected.has(String(item.id)));
+      if (!shouldSign) return item;
+      changed = true;
+      historyEntry.itemIds.push(String(item.id));
+      return {
+        ...item,
+        signed: true,
+        signedAt: now,
+        signedBy: signMeta.signer,
+        note: signMeta.note || item.note || "",
+      };
+    });
+    const allSigned = nextItems.length > 0 && nextItems.every((item) => item.signed);
+    const partiallySigned = nextItems.some((item) => item.signed);
+    const signHistory = Array.isArray(delivery.signHistory) ? delivery.signHistory : [];
+    const signedPatch = changed
+      ? {
+          signedAt: now,
+          signedBy: signMeta.signer,
+          signedNote: signMeta.note || "",
+          signedPhoto: signMeta.photo || null,
+          signedUserId: signMeta.userId || "",
+          signedUserName: signMeta.userName || "",
+        }
+      : {
+          signedAt: delivery.signedAt || "",
+          signedBy: delivery.signedBy || "",
+          signedNote: delivery.signedNote || "",
+          signedPhoto: delivery.signedPhoto || null,
+          signedUserId: delivery.signedUserId || "",
+          signedUserName: delivery.signedUserName || "",
+        };
+    return {
+      ...delivery,
+      signItems: nextItems,
+      ...(changed ? { signHistory: [...signHistory, historyEntry] } : {}),
+      status: allSigned ? "已签收" : partiallySigned ? "部分签收" : "未送",
+      ...(allSigned
+        ? signedPatch
+        : {
+            signedAt: "",
+            signedBy: "",
+            signedNote: "",
+            signedPhoto: null,
+            signedUserId: "",
+            signedUserName: "",
+          }),
+    };
+  });
+
+  return {
+    deliveries: updated,
+    signedItemIds: historyEntry.itemIds,
+    allSigned: updated.every((delivery) =>
+      normalizeDeliverySignItems(delivery).every((item) => item.signed),
+    ),
+    partiallySigned: updated.some((delivery) =>
+      normalizeDeliverySignItems(delivery).some((item) => item.signed),
+    ),
+  };
 }
 
 function parseNumericValue(value) {
-  const number = Number(String(value ?? '').replace(/,/g, '').trim());
+  const number = Number(
+    String(value ?? "")
+      .replace(/,/g, "")
+      .trim(),
+  );
   return Number.isFinite(number) ? number : 0;
 }
 
 function deliveryQuantitySource(delivery = {}) {
-  return delivery._linkedOrderQuantitySourceField || 'quantity';
+  return delivery._linkedOrderQuantitySourceField || "quantity";
 }
 
-function appendAuditLog(log = '', message = '') {
+function appendAuditLog(log = "", message = "") {
   const line = `[${new Date().toLocaleString()}] ${message}`;
-  return [String(log || '').trim(), line].filter(Boolean).join('\n');
+  return [String(log || "").trim(), line].filter(Boolean).join("\n");
 }
 
 function isSameMaterial(material = {}, input = {}) {
-  const materialName = String(material.materialName || '').trim();
-  const inputName = String(input.materialName || '').trim();
+  const materialName = String(material.materialName || "").trim();
+  const inputName = String(input.materialName || "").trim();
   if (!materialName || materialName !== inputName) return false;
-  const materialUnit = String(material.unit || '').trim();
-  const inputUnit = String(input.unit || '').trim();
+  const materialUnit = String(material.unit || "").trim();
+  const inputUnit = String(input.unit || "").trim();
   return !inputUnit || materialUnit === inputUnit;
 }
 
 function sanitizeMaterialCostForEmployee(material = {}) {
   return {
     id: material.id,
-    materialName: material.materialName || '',
-    unit: material.unit || '',
-    remark: material.remark || '',
+    materialName: material.materialName || "",
+    unit: material.unit || "",
+    remark: material.remark || "",
   };
 }
 
 function sanitizeCostEntryForEmployee(entry = {}) {
   return {
     id: entry.id,
-    date: entry.date || '',
-    materialName: entry.materialName || '',
+    date: entry.date || "",
+    materialName: entry.materialName || "",
     quantity: entry.quantity || 0,
-    unit: entry.unit || '',
-    note: entry.note || '',
-    photo: entry.photo || '',
-    approvalStatus: entry.approvalStatus || '待审核',
-    enteredAt: entry.enteredAt || '',
-    enteredBy: entry.enteredBy || '',
-    enteredUserId: entry.enteredUserId || '',
+    unit: entry.unit || "",
+    note: entry.note || "",
+    photo: entry.photo || "",
+    approvalStatus: entry.approvalStatus || "待审核",
+    enteredAt: entry.enteredAt || "",
+    enteredBy: entry.enteredBy || "",
+    enteredUserId: entry.enteredUserId || "",
     _restricted: true,
   };
 }
 
 function filterCustomerForMobileUser(customer, user) {
   const role = normalizeRole(user?.role);
-  if (!user || role === 'admin') return customer;
-  if (role === 'pending') {
-    return { ...customer, products: [], deliveries: [], orders: [], materialCosts: [], costEntries: [], statements: [], payments: [] };
+  if (!user || role === "admin") return customer;
+  if (role === "pending") {
+    return {
+      ...customer,
+      products: [],
+      deliveries: [],
+      orders: [],
+      materialCosts: [],
+      costEntries: [],
+      statements: [],
+      payments: [],
+    };
   }
   return {
     ...customer,
@@ -161,45 +335,45 @@ function filterCustomerForMobileUser(customer, user) {
     deliveries: (customer.deliveries || []).filter(isMobileVisibleDelivery),
     materialCosts: (customer.materialCosts || []).map(sanitizeMaterialCostForEmployee),
     costEntries: (customer.costEntries || []).map(sanitizeCostEntryForEmployee),
-    orders: (customer.orders || []).filter(order => normalizeOrderStatus(order.status) === '已排产'),
+    orders: (customer.orders || []).filter(
+      (order) => normalizeOrderStatus(order.status) === "已排产",
+    ),
   };
 }
 
 function hasMobileUserToken(req) {
-  return Boolean(String(req.headers['x-mobile-user-token'] || req.query.mobileToken || '').trim());
+  return Boolean(String(req.headers["x-mobile-user-token"] || req.query.mobileToken || "").trim());
 }
 
 // GET /api/customers?page=1&limit=50&search=xxx
-router.get('/', async (req, res) => {
+router.get("/", async (req, res) => {
   try {
     const mobileUser = await findUserByMobileToken(req);
     if (hasMobileUserToken(req) && !mobileUser) {
-      return res.status(401).json({ error: '手机账号不存在或已失效' });
+      return res.status(401).json({ error: "手机账号不存在或已失效" });
     }
     const mobileRole = normalizeRole(mobileUser?.role);
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = Math.min(200, Math.max(1, parseInt(req.query.limit) || 50));
     const skip = (page - 1) * limit;
-    const search = (req.query.search || '').trim();
+    const search = (req.query.search || "").trim();
 
-    const where = search
-      ? { name: { contains: search, mode: 'insensitive' } }
-      : {};
+    const where = search ? { name: { contains: search, mode: "insensitive" } } : {};
 
     const [customers, total] = await Promise.all([
       prisma.customer.findMany({
         where,
-        orderBy: { name: 'asc' },
+        orderBy: { name: "asc" },
         skip,
         take: limit,
         include: {
-          products: { orderBy: { sortOrder: 'asc' } },
-          orders: { orderBy: { sortOrder: 'asc' } },
-          deliveries: { orderBy: { sortOrder: 'asc' } },
-          materialCosts: { orderBy: { sortOrder: 'asc' } },
-          costEntries: { orderBy: { sortOrder: 'asc' } },
-          statements: { orderBy: { sortOrder: 'asc' } },
-          payments: { orderBy: { sortOrder: 'asc' } },
+          products: { orderBy: { sortOrder: "asc" } },
+          orders: { orderBy: { sortOrder: "asc" } },
+          deliveries: { orderBy: { sortOrder: "asc" } },
+          materialCosts: { orderBy: { sortOrder: "asc" } },
+          costEntries: { orderBy: { sortOrder: "asc" } },
+          statements: { orderBy: { sortOrder: "asc" } },
+          payments: { orderBy: { sortOrder: "asc" } },
         },
       }),
       prisma.customer.count({ where }),
@@ -207,16 +381,19 @@ router.get('/', async (req, res) => {
 
     const data = customers
       .map(normalize)
-      .map(customer => (mobileUser ? filterCustomerForMobileUser(customer, mobileUser) : customer))
-      .filter(customer => (
-        !mobileUser
-        || mobileRole === 'admin'
-        || customer.orders.length > 0
-        || customer.materialCosts.length > 0
-        || customer.costEntries.length > 0
-        || customer.statements.length > 0
-        || customer.payments.length > 0
-      ));
+      .map((customer) =>
+        mobileUser ? filterCustomerForMobileUser(customer, mobileUser) : customer,
+      )
+      .filter(
+        (customer) =>
+          !mobileUser ||
+          mobileRole === "admin" ||
+          customer.orders.length > 0 ||
+          customer.materialCosts.length > 0 ||
+          customer.costEntries.length > 0 ||
+          customer.statements.length > 0 ||
+          customer.payments.length > 0,
+      );
 
     res.json({
       data,
@@ -234,7 +411,7 @@ router.get('/', async (req, res) => {
 });
 
 // POST /api/customers/replace-all  (must be before /:id)
-router.post('/replace-all', async (req, res) => {
+router.post("/replace-all", async (req, res) => {
   const customers = normalizeIncomingCustomers(req.body.customers || []);
   try {
     await prisma.$transaction(async (tx) => {
@@ -263,25 +440,25 @@ router.post('/replace-all', async (req, res) => {
           data: {
             id: info.id,
             name: info.name,
-            contact: info.contact || '',
-            phone: info.phone || '',
-            address: info.address || '',
-            level: info.level || '',
-            paymentTerm: info.paymentTerm || '',
-            taxNo: info.taxNo || '',
-            note: info.note || '',
+            contact: info.contact || "",
+            phone: info.phone || "",
+            address: info.address || "",
+            level: info.level || "",
+            paymentTerm: info.paymentTerm || "",
+            taxNo: info.taxNo || "",
+            note: info.note || "",
             customColumns: normalizeCustomColumns(customColumns),
           },
         });
 
         for (const [table, tableRows] of [
-          ['products', products],
-          ['orders', orders],
-          ['deliveries', deliveries],
-          ['materialCosts', materialCosts],
-          ['costEntries', costEntries],
-          ['statements', statements],
-          ['payments', payments],
+          ["products", products],
+          ["orders", orders],
+          ["deliveries", deliveries],
+          ["materialCosts", materialCosts],
+          ["costEntries", costEntries],
+          ["statements", statements],
+          ["payments", payments],
         ]) {
           const delegate = TABLE_DELEGATES[table];
           for (let i = 0; i < tableRows.length; i++) {
@@ -304,9 +481,19 @@ router.post('/replace-all', async (req, res) => {
 });
 
 // POST /api/customers
-router.post('/', async (req, res) => {
-  const { id, name, contact='', phone='', address='', level='',
-          paymentTerm='', taxNo='', note='', customColumns } = req.body;
+router.post("/", async (req, res) => {
+  const {
+    id,
+    name,
+    contact = "",
+    phone = "",
+    address = "",
+    level = "",
+    paymentTerm = "",
+    taxNo = "",
+    note = "",
+    customColumns,
+  } = req.body;
   try {
     await prisma.customer.create({
       data: {
@@ -322,18 +509,43 @@ router.post('/', async (req, res) => {
         customColumns: normalizeCustomColumns(customColumns),
       },
     });
-    res.json({ id, name, contact, phone, address, level, paymentTerm, taxNo, note,
-               customColumns: normalizeCustomColumns(customColumns),
-               products: [], orders: [], deliveries: [], materialCosts: [], costEntries: [], statements: [], payments: [] });
+    res.json({
+      id,
+      name,
+      contact,
+      phone,
+      address,
+      level,
+      paymentTerm,
+      taxNo,
+      note,
+      customColumns: normalizeCustomColumns(customColumns),
+      products: [],
+      orders: [],
+      deliveries: [],
+      materialCosts: [],
+      costEntries: [],
+      statements: [],
+      payments: [],
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
 // PUT /api/customers/:id
-router.put('/:id', async (req, res) => {
-  const { name, contact='', phone='', address='', level='',
-          paymentTerm='', taxNo='', note='', customColumns } = req.body;
+router.put("/:id", async (req, res) => {
+  const {
+    name,
+    contact = "",
+    phone = "",
+    address = "",
+    level = "",
+    paymentTerm = "",
+    taxNo = "",
+    note = "",
+    customColumns,
+  } = req.body;
   try {
     const customer = await prisma.customer.update({
       where: { id: req.params.id },
@@ -351,36 +563,36 @@ router.put('/:id', async (req, res) => {
     });
     res.json(normalize(customer));
   } catch (err) {
-    if (err.code === 'P2025') return res.status(404).json({ error: 'Not found' });
+    if (err.code === "P2025") return res.status(404).json({ error: "Not found" });
     res.status(500).json({ error: err.message });
   }
 });
 
 // DELETE /api/customers/:id
-router.delete('/:id', async (req, res) => {
+router.delete("/:id", async (req, res) => {
   try {
     await prisma.customer.delete({ where: { id: req.params.id } });
     res.json({ ok: true });
   } catch (err) {
-    if (err.code === 'P2025') return res.status(404).json({ error: 'Not found' });
+    if (err.code === "P2025") return res.status(404).json({ error: "Not found" });
     res.status(500).json({ error: err.message });
   }
 });
 
 // PATCH /api/customers/:id/orders/:orderId/status - update one order status
-router.patch('/:id/orders/:orderId/status', async (req, res) => {
+router.patch("/:id/orders/:orderId/status", async (req, res) => {
   const { id, orderId } = req.params;
   const { status } = req.body || {};
-  const nextStatus = String(status || '').trim();
-  if (!nextStatus) return res.status(400).json({ error: 'Missing status' });
+  const nextStatus = String(status || "").trim();
+  if (!nextStatus) return res.status(400).json({ error: "Missing status" });
   const allowedExtraFields = [
-    'completionTime',
-    'completionOperator',
-    'completionNote',
-    'completionPhoto',
-    'completionPhotoAt',
-    'completionUserId',
-    'completionUserName',
+    "completionTime",
+    "completionOperator",
+    "completionNote",
+    "completionPhoto",
+    "completionPhotoAt",
+    "completionUserId",
+    "completionUserName",
   ];
   const extraData = {};
   for (const field of allowedExtraFields) {
@@ -392,11 +604,11 @@ router.patch('/:id/orders/:orderId/status', async (req, res) => {
   try {
     const mobileUser = await findUserByMobileToken(req);
     if (hasMobileUserToken(req) && !mobileUser) {
-      return res.status(401).json({ error: '手机账号不存在或已失效' });
+      return res.status(401).json({ error: "手机账号不存在或已失效" });
     }
     const mobileRole = normalizeRole(mobileUser?.role);
-    if (mobileUser && mobileRole === 'pending') {
-      return res.status(403).json({ error: '账号尚未分配角色，请联系管理员' });
+    if (mobileUser && mobileRole === "pending") {
+      return res.status(403).json({ error: "账号尚未分配角色，请联系管理员" });
     }
     const order = await prisma.order.findFirst({
       where: {
@@ -404,20 +616,20 @@ router.patch('/:id/orders/:orderId/status', async (req, res) => {
         customerId: id,
       },
     });
-    if (!order) return res.status(404).json({ error: 'Order not found' });
-    if (mobileUser && mobileRole === 'employee') {
-      if (nextStatus !== '已完成') return res.status(403).json({ error: '员工只能完成已排产订单' });
-      if (normalizeOrderStatus(order.data?.status) !== '已排产') {
-        return res.status(403).json({ error: '员工只能完成已排产订单' });
+    if (!order) return res.status(404).json({ error: "Order not found" });
+    if (mobileUser && mobileRole === "employee") {
+      if (nextStatus !== "已完成") return res.status(403).json({ error: "员工只能完成已排产订单" });
+      if (normalizeOrderStatus(order.data?.status) !== "已排产") {
+        return res.status(403).json({ error: "员工只能完成已排产订单" });
       }
     }
-    if (nextStatus === '已完成' && !req.body?.completionPhoto && !order.data?.completionPhoto) {
-      return res.status(400).json({ error: '完成订单必须上传现场照片' });
+    if (nextStatus === "已完成" && !req.body?.completionPhoto && !order.data?.completionPhoto) {
+      return res.status(400).json({ error: "完成订单必须上传现场照片" });
     }
     if (mobileUser) {
       extraData.completionUserId = mobileUser.id;
-      extraData.completionUserName = mobileUser.name || '';
-      if (!extraData.completionOperator) extraData.completionOperator = mobileUser.name || '手机端';
+      extraData.completionUserName = mobileUser.name || "";
+      if (!extraData.completionOperator) extraData.completionOperator = mobileUser.name || "手机端";
     }
 
     const data = {
@@ -436,58 +648,58 @@ router.patch('/:id/orders/:orderId/status', async (req, res) => {
 });
 
 // POST /api/customers/:id/cost-entries - mobile cost entry with photo proof
-router.post('/:id/cost-entries', async (req, res) => {
+router.post("/:id/cost-entries", async (req, res) => {
   const { id } = req.params;
   const body = req.body || {};
-  const materialName = String(body.materialName || '').trim();
+  const materialName = String(body.materialName || "").trim();
   const photo = body.photo;
   const requestedQuantity = Number(body.quantity || 0);
 
-  if (!materialName) return res.status(400).json({ error: '请填写物料名称' });
+  if (!materialName) return res.status(400).json({ error: "请填写物料名称" });
   if (!Number.isFinite(requestedQuantity) || requestedQuantity <= 0) {
-    return res.status(400).json({ error: '请输入正确的数量' });
+    return res.status(400).json({ error: "请输入正确的数量" });
   }
-  if (!photo?.dataUrl) return res.status(400).json({ error: '成本录入必须上传照片' });
+  if (!photo?.dataUrl) return res.status(400).json({ error: "成本录入必须上传照片" });
 
   try {
     const mobileUser = await findUserByMobileToken(req);
     if (!mobileUser) {
-      return res.status(401).json({ error: '手机账号不存在或已失效' });
+      return res.status(401).json({ error: "手机账号不存在或已失效" });
     }
     const mobileRole = normalizeRole(mobileUser?.role);
-    if (mobileRole === 'pending') {
-      return res.status(403).json({ error: '账号尚未分配角色，请联系管理员' });
+    if (mobileRole === "pending") {
+      return res.status(403).json({ error: "账号尚未分配角色，请联系管理员" });
     }
 
     const customer = await prisma.customer.findUnique({
       where: { id },
-      include: { materialCosts: { orderBy: { sortOrder: 'asc' } } },
+      include: { materialCosts: { orderBy: { sortOrder: "asc" } } },
     });
-    if (!customer) return res.status(404).json({ error: 'Customer not found' });
+    if (!customer) return res.status(404).json({ error: "Customer not found" });
     const material = (customer.materialCosts || [])
-      .map(row => row.data || {})
-      .find(row => isSameMaterial(row, body));
-    if (!material) return res.status(400).json({ error: '未找到该客户的物料档案' });
+      .map((row) => row.data || {})
+      .find((row) => isSameMaterial(row, body));
+    if (!material) return res.status(400).json({ error: "未找到该客户的物料档案" });
     const quantity = requestedQuantity;
     const unitCost = Number(material.unitCost || 0);
 
     const row = {
-      id: makeRowId('costEntries'),
-      date: String(body.date || '').trim() || new Date().toISOString().slice(0, 10),
+      id: makeRowId("costEntries"),
+      date: String(body.date || "").trim() || new Date().toISOString().slice(0, 10),
       materialName: material.materialName || materialName,
       quantity,
-      unit: String(material.unit || body.unit || '').trim(),
+      unit: String(material.unit || body.unit || "").trim(),
       unitCost,
       amount: quantity * unitCost,
-      note: String(body.note || '').trim(),
+      note: String(body.note || "").trim(),
       photo,
-      approvalStatus: '待审核',
-      approvedAt: '',
-      approvedBy: '',
-      approvalNote: '',
+      approvalStatus: "待审核",
+      approvedAt: "",
+      approvedBy: "",
+      approvalNote: "",
       enteredAt: new Date().toISOString(),
-      enteredBy: mobileUser.name || '手机端',
-      enteredUserId: mobileUser.id || '',
+      enteredBy: mobileUser.name || "手机端",
+      enteredUserId: mobileUser.id || "",
     };
 
     const maxSort = await prisma.costEntry.aggregate({
@@ -509,32 +721,32 @@ router.post('/:id/cost-entries', async (req, res) => {
 });
 
 // PATCH /api/customers/:id/cost-entries/:entryId/approval - admin mobile cost approval
-router.patch('/:id/cost-entries/:entryId/approval', async (req, res) => {
+router.patch("/:id/cost-entries/:entryId/approval", async (req, res) => {
   const { id, entryId } = req.params;
-  const status = String(req.body?.approvalStatus || '').trim();
-  const note = String(req.body?.approvalNote || '').trim();
-  if (!['已通过', '已拒绝'].includes(status)) {
-    return res.status(400).json({ error: 'Invalid approval status' });
+  const status = String(req.body?.approvalStatus || "").trim();
+  const note = String(req.body?.approvalNote || "").trim();
+  if (!["已通过", "已拒绝"].includes(status)) {
+    return res.status(400).json({ error: "Invalid approval status" });
   }
 
   try {
     const mobileUser = await findUserByMobileToken(req);
-    if (!mobileUser) return res.status(401).json({ error: '手机账号不存在或已失效' });
-    if (normalizeRole(mobileUser.role) !== 'admin') {
-      return res.status(403).json({ error: '只有管理员可以审批成本' });
+    if (!mobileUser) return res.status(401).json({ error: "手机账号不存在或已失效" });
+    if (normalizeRole(mobileUser.role) !== "admin") {
+      return res.status(403).json({ error: "只有管理员可以审批成本" });
     }
 
     const entry = await prisma.costEntry.findFirst({
       where: { id: entryId, customerId: id },
     });
-    if (!entry) return res.status(404).json({ error: 'Cost entry not found' });
+    if (!entry) return res.status(404).json({ error: "Cost entry not found" });
 
     const data = {
       ...(entry.data || {}),
       approvalStatus: status,
       approvalNote: note,
       approvedAt: new Date().toISOString(),
-      approvedBy: mobileUser.name || '管理员',
+      approvedBy: mobileUser.name || "管理员",
       approvedUserId: mobileUser.id,
     };
     const updated = await prisma.costEntry.update({
@@ -548,94 +760,141 @@ router.patch('/:id/cost-entries/:entryId/approval', async (req, res) => {
 });
 
 // PATCH /api/customers/:id/deliveries/:deliveryId/sign - mobile delivery sign-off
-router.patch('/:id/deliveries/:deliveryId/sign', async (req, res) => {
+router.patch("/:id/deliveries/:deliveryId/sign", async (req, res) => {
   const { id, deliveryId } = req.params;
-  const signer = String(req.body?.signer || '').trim();
-  const note = String(req.body?.note || '').trim();
+  const signer = String(req.body?.signer || "").trim();
+  const note = String(req.body?.note || "").trim();
   const photo = req.body?.photo;
+  const itemIds = Array.isArray(req.body?.itemIds)
+    ? req.body.itemIds.map((item) => String(item || "").trim()).filter(Boolean)
+    : [];
 
-  if (!signer) return res.status(400).json({ error: '请填写签收人' });
-  if (!photo?.dataUrl) return res.status(400).json({ error: '送货签收必须上传照片' });
+  if (!signer) return res.status(400).json({ error: "请填写签收人" });
+  if (!photo?.dataUrl) return res.status(400).json({ error: "送货签收必须上传照片" });
 
   try {
     const mobileUser = await findUserByMobileToken(req);
-    if (!mobileUser) return res.status(401).json({ error: '手机账号不存在或已失效' });
+    if (!mobileUser) return res.status(401).json({ error: "手机账号不存在或已失效" });
     const mobileRole = normalizeRole(mobileUser.role);
-    if (mobileRole === 'pending') {
-      return res.status(403).json({ error: '账号尚未分配角色，请联系管理员' });
+    if (mobileRole === "pending") {
+      return res.status(403).json({ error: "账号尚未分配角色，请联系管理员" });
     }
 
     const delivery = await prisma.delivery.findFirst({
       where: { id: deliveryId, customerId: id },
     });
-    if (!delivery) return res.status(404).json({ error: 'Delivery not found' });
+    if (!delivery) return res.status(404).json({ error: "Delivery not found" });
     const currentData = delivery.data || {};
     if (currentData._finalDelivery === false) {
-      return res.status(400).json({ error: '送货单草稿不能签收，请先生成正式送货单' });
+      return res.status(400).json({ error: "送货单草稿不能签收，请先生成正式送货单" });
     }
-    if (normalizeFinalDeliveryStatus(currentData.status) === '作废') {
-      return res.status(400).json({ error: '作废送货单不能签收' });
+    if (normalizeFinalDeliveryStatus(currentData.status) === "作废") {
+      return res.status(400).json({ error: "作废送货单不能签收" });
     }
-    if (isDeliverySigned(currentData)) {
-      return res.status(400).json({ error: '送货单已签收，不能重复签收' });
+    const allCustomerDeliveries = await prisma.delivery.findMany({ where: { customerId: id } });
+    const groupKey = deliveryGroupKey(delivery);
+    const groupRows = allCustomerDeliveries
+      .filter((row) => deliveryGroupKey(row) === groupKey)
+      .sort((a, b) => deliveryGroupSortOrder(a) - deliveryGroupSortOrder(b));
+    const groupData = (groupRows.length ? groupRows : [delivery]).map((row) => ({
+      ...(row.data || {}),
+      id: row.id,
+    }));
+    const groupItems = groupData.flatMap((row) => normalizeDeliverySignItems(row));
+    if (groupItems.length && groupItems.every((item) => item.signed)) {
+      return res.status(400).json({ error: "送货单已签收，不能重复签收" });
+    }
+    const signResult = applyDeliverySignState(groupData, itemIds, {
+      signer,
+      note,
+      photo,
+      userId: mobileUser.id,
+      userName: mobileUser.name || "",
+    });
+    if (!signResult.signedItemIds.length) {
+      return res.status(400).json({ error: "没有可签收的未签收明细" });
     }
 
-    const data = {
-      ...currentData,
-      status: '已送',
-      signedAt: new Date().toISOString(),
-      signedBy: signer,
-      signedNote: note,
-      signedPhoto: photo,
-      signedUserId: mobileUser.id,
-      signedUserName: mobileUser.name || '',
-    };
-    const updated = await prisma.delivery.update({
-      where: { id: deliveryId },
-      data: { data },
-    });
-    const orderId = currentData._linkedOrderId;
-    if (orderId && prisma.delivery.findMany && prisma.order.findFirst && prisma.order.update) {
-      const [order, deliveries] = await Promise.all([
-        prisma.order.findFirst({ where: { id: orderId, customerId: id } }),
+    const rowsToUpdate = groupRows.length ? groupRows : [delivery];
+    const updatedRows = await Promise.all(
+      rowsToUpdate.map((row, index) =>
+        prisma.delivery.update({
+          where: { id: row.id },
+          data: { data: signResult.deliveries[index] },
+        }),
+      ),
+    );
+
+    const signedItemIdSet = new Set(signResult.signedItemIds.map((item) => String(item)));
+    const changedOrderIds = new Set(
+      signResult.deliveries
+        .filter((row) =>
+          normalizeDeliverySignItems(row).some((item) => signedItemIdSet.has(String(item.id))),
+        )
+        .map((row) => row._linkedOrderId)
+        .filter(Boolean),
+    );
+    if (changedOrderIds.size && prisma.order.findMany && prisma.order.update) {
+      const [orders, nextDeliveryRows] = await Promise.all([
+        prisma.order.findMany({ where: { customerId: id } }),
         prisma.delivery.findMany({ where: { customerId: id } }),
       ]);
-      if (order) {
-        const sourceField = deliveryQuantitySource(data);
-        const deliveredQuantity = deliveries
-          .map(row => row.id === deliveryId ? updated : row)
-          .map(row => row.data || {})
-          .filter(row => row._linkedOrderId === orderId)
-          .filter(row => row._finalDelivery !== false && normalizeFinalDeliveryStatus(row.status) === '已送')
-          .filter(row => deliveryQuantitySource(row) === sourceField)
-          .reduce((sum, row) => sum + parseNumericValue(row.deliveryQuantity), 0);
-        const orderQuantity = parseNumericValue(order.data?.[sourceField]);
-        const remainingQuantity = Math.max(orderQuantity - deliveredQuantity, 0);
-        const nextStatus = remainingQuantity <= 0.0000001 ? '已送货' : '部分送货';
-        const orderData = {
-          ...(order.data || {}),
-          status: nextStatus,
-          deliveredQuantity,
-          remainingQuantity,
-          statusChangedAt: new Date().toISOString(),
-          statusChangeLog: appendAuditLog(order.data?.statusChangeLog, `送货签收：${nextStatus}`),
-        };
-        await prisma.order.update({
-          where: { id: order.id },
-          data: { data: orderData },
-        });
-      }
+      await Promise.all(
+        orders
+          .filter((order) => changedOrderIds.has(order.id))
+          .map((order) => {
+            const sourceFields = new Set(
+              nextDeliveryRows
+                .map((row) => row.data || {})
+                .filter((row) => row._linkedOrderId === order.id)
+                .map((row) => deliveryQuantitySource(row)),
+            );
+            const sourceField = sourceFields.values().next().value || "quantity";
+            const deliveredQuantity = nextDeliveryRows
+              .map((row) => row.data || {})
+              .filter((row) => row._linkedOrderId === order.id)
+              .filter(
+                (row) =>
+                  row._finalDelivery !== false &&
+                  normalizeFinalDeliveryStatus(row.status) === "已送",
+              )
+              .filter((row) => deliveryQuantitySource(row) === sourceField)
+              .reduce((sum, row) => sum + parseNumericValue(row.deliveryQuantity), 0);
+            const orderQuantity = parseNumericValue(order.data?.[sourceField]);
+            const remainingQuantity = Math.max(orderQuantity - deliveredQuantity, 0);
+            const nextStatus = remainingQuantity <= 0.0000001 ? "已送货" : "部分送货";
+            const orderData = {
+              ...(order.data || {}),
+              status: nextStatus,
+              deliveredQuantity,
+              remainingQuantity,
+              statusChangedAt: new Date().toISOString(),
+              statusChangeLog: appendAuditLog(
+                order.data?.statusChangeLog,
+                `送货签收：${nextStatus}`,
+              ),
+            };
+            return prisma.order.update({
+              where: { id: order.id },
+              data: { data: orderData },
+            });
+          }),
+      );
     }
-    res.json({ ok: true, row: updated.data });
+    res.json({
+      ok: true,
+      row: updatedRows.find((row) => row.id === deliveryId)?.data || updatedRows[0]?.data,
+      rows: updatedRows.map((row) => row.data),
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
 // PUT /api/customers/:id/:tableKey - replace all rows
-router.put('/:id/:tableKey', async (req, res) => {
+router.put("/:id/:tableKey", async (req, res) => {
   const { id, tableKey } = req.params;
-  if (!VALID_TABLES.has(tableKey)) return res.status(400).json({ error: 'Invalid table' });
+  if (!VALID_TABLES.has(tableKey)) return res.status(400).json({ error: "Invalid table" });
   const { rows } = req.body;
   try {
     const delegate = TABLE_DELEGATES[tableKey];
@@ -645,9 +904,9 @@ router.put('/:id/:tableKey', async (req, res) => {
         where: { customerId: { not: id } },
         select: { id: true },
       });
-      const usedIds = new Set(existingRows.map(row => row.id));
+      const usedIds = new Set(existingRows.map((row) => row.id));
       savedRows = uniqueRows(rows || [], tableKey, usedIds);
-      const savedIds = savedRows.map(row => row.id);
+      const savedIds = savedRows.map((row) => row.id);
 
       if (savedIds.length) {
         await tx[delegate].deleteMany({
@@ -684,9 +943,9 @@ router.put('/:id/:tableKey', async (req, res) => {
 });
 
 // DELETE /api/customers/:id/:tableKey/rows - delete specific rows
-router.delete('/:id/:tableKey/rows', async (req, res) => {
+router.delete("/:id/:tableKey/rows", async (req, res) => {
   const { id, tableKey } = req.params;
-  if (!VALID_TABLES.has(tableKey)) return res.status(400).json({ error: 'Invalid table' });
+  if (!VALID_TABLES.has(tableKey)) return res.status(400).json({ error: "Invalid table" });
   const { ids } = req.body;
   try {
     const delegate = TABLE_DELEGATES[tableKey];

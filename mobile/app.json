@@ -6,11 +6,11 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "foamfactorycrm",
-    "userInterfaceStyle": "dark",
+    "userInterfaceStyle": "light",
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#07111f"
+      "backgroundColor": "#F5F6FA"
     },
     "ios": {
       "bundleIdentifier": "com.kwizakh.foamfactorycrm",

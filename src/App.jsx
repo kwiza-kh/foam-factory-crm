@@ -1,11 +1,26 @@
-import { createContext, useCallback, useContext, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { makeId, today } from "./lib/utils.js";
 import { api } from "./lib/api.js";
 import { OrderImportButton } from "./components/OrderImportButton.jsx";
 import { exportTableToExcel } from "./lib/exporter.js";
 import { exportBackup, importBackup } from "./lib/backup.js";
 import { DeliveryPrintModal } from "./components/DeliveryPrintModal.jsx";
-import { createTranslator, formatCurrencyForLanguage, getGridLocaleText, languageOptions, normalizeLanguage } from "./lib/i18n.js";
+import {
+  createTranslator,
+  formatCurrencyForLanguage,
+  getGridLocaleText,
+  languageOptions,
+  normalizeLanguage,
+} from "./lib/i18n.js";
 import { AgGridReact } from "ag-grid-react";
 import {
   CellStyleModule,
@@ -60,8 +75,38 @@ import {
   RotateCcw,
   Pencil,
 } from "lucide-react";
-import { statusOptions, closedOrderStatuses, isOpenOrder, normalizeOrderStatus, statusTransitions, getNextStatuses, deliveryStatusOptions, customerLevelOptions, materialOptions, unitOptions } from "./lib/statusWorkflow.js";
-import { orderDefaultColumns, orderDeliveryTrackingColumns, productionScheduleColumns, knownOrderDataColumns, deliveryQuantityField, orderDeliveredQuantityField, orderRemainingQuantityField, finalDeliveryField, linkedOrderIdField, linkedOrderQuantitySourceField, deliveryOrderFieldPrefix, finalDeliveryStatusOptions, productionScheduleStatusOptions, productionScheduleDateField, productionScheduleQuantityField, productionLineField, productionNoteField, deliveryQuantityColumn } from "./lib/columnDefs.js";
+import {
+  statusOptions,
+  closedOrderStatuses,
+  isOpenOrder,
+  normalizeOrderStatus,
+  statusTransitions,
+  getNextStatuses,
+  deliveryStatusOptions,
+  customerLevelOptions,
+  materialOptions,
+  unitOptions,
+} from "./lib/statusWorkflow.js";
+import {
+  orderDefaultColumns,
+  orderDeliveryTrackingColumns,
+  productionScheduleColumns,
+  knownOrderDataColumns,
+  deliveryQuantityField,
+  orderDeliveredQuantityField,
+  orderRemainingQuantityField,
+  finalDeliveryField,
+  linkedOrderIdField,
+  linkedOrderQuantitySourceField,
+  deliveryOrderFieldPrefix,
+  finalDeliveryStatusOptions,
+  productionScheduleStatusOptions,
+  productionScheduleDateField,
+  productionScheduleQuantityField,
+  productionLineField,
+  productionNoteField,
+  deliveryQuantityColumn,
+} from "./lib/columnDefs.js";
 import { tableConfigs } from "./config/tableConfigs.js";
 
 ModuleRegistry.registerModules([
@@ -104,11 +149,31 @@ const gridTheme = themeQuartz.withParams({
 
 const defaultTranslator = createTranslator("zh");
 const I18nContext = createContext({ language: "zh", t: defaultTranslator });
+const defaultMobileDisplaySettings = {
+  cardFields: ["_customerName", "orderNo", "status", "product", "quantity", "dueDate"],
+  detailFields: [
+    "_customerName",
+    "orderNo",
+    "status",
+    "date",
+    "product",
+    "quantity",
+    "amount",
+    "dueDate",
+    "productionDate",
+    "productionQuantity",
+    "productionLine",
+    "deliveredQuantity",
+    "remainingQuantity",
+    "completionTime",
+    "completionOperator",
+    "completionNote",
+  ],
+};
 
 function useI18n() {
   return useContext(I18nContext);
 }
-
 
 const MAX_UNDO_STEPS = 50;
 const UNGROUPED_CUSTOMER_GROUP = "未分组";
@@ -167,7 +232,9 @@ function ensureUniqueRowIds(rows, tableKey, customers, currentCustomerId) {
 }
 
 function ensureUniqueCustomerRowIds(customers) {
-  const tableKeys = Object.keys(tableConfigs).filter(tableKey => !tableConfigs[tableKey].sourceTableKey);
+  const tableKeys = Object.keys(tableConfigs).filter(
+    (tableKey) => !tableConfigs[tableKey].sourceTableKey,
+  );
   const usedIdsByTable = tableKeys.reduce((acc, tableKey) => {
     acc[tableKey] = new Set();
     return acc;
@@ -193,10 +260,10 @@ function ensureUniqueCustomerRowIds(customers) {
 }
 
 function normalizeCustomerOrderStatuses(customers) {
-  return (customers || []).map(customer => ({
+  return (customers || []).map((customer) => ({
     ...customer,
     products: customer.products || [],
-    orders: (customer.orders || []).map(order => ({
+    orders: (customer.orders || []).map((order) => ({
       ...order,
       status: normalizeOrderStatus(order.status),
     })),
@@ -228,8 +295,14 @@ function summarizeCustomerOrders(customer = {}) {
     }
   }
 
-  summary.statementAmount = (customer.statements || []).reduce((sum, row) => sum + parseNumericValue(row.amount), 0);
-  summary.paidAmount = (customer.payments || []).reduce((sum, row) => sum + parseNumericValue(row.amount), 0);
+  summary.statementAmount = (customer.statements || []).reduce(
+    (sum, row) => sum + parseNumericValue(row.amount),
+    0,
+  );
+  summary.paidAmount = (customer.payments || []).reduce(
+    (sum, row) => sum + parseNumericValue(row.amount),
+    0,
+  );
   summary.unpaidAmount = Math.max(summary.statementAmount - summary.paidAmount, 0);
   return summary;
 }
@@ -383,7 +456,10 @@ function normalizeFormulaInput(formula) {
 }
 
 function formulaKey(value) {
-  return String(value || "").trim().toLowerCase().replace(/\s+/g, "");
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "");
 }
 
 function buildFormulaReferenceMap(columns) {
@@ -412,7 +488,10 @@ function tokenizeFormula(formula) {
     }
 
     if ("+-*/()×".includes(char) || char === "x" || char === "X") {
-      tokens.push({ type: "operator", value: char === "×" || char === "x" || char === "X" ? "*" : char });
+      tokens.push({
+        type: "operator",
+        value: char === "×" || char === "x" || char === "X" ? "*" : char,
+      });
       index += 1;
       continue;
     }
@@ -437,9 +516,9 @@ function tokenizeFormula(formula) {
 
     let end = index + 1;
     while (
-      end < expression.length
-      && !/\s/.test(expression[end])
-      && !"+-*/()[]×xX".includes(expression[end])
+      end < expression.length &&
+      !/\s/.test(expression[end]) &&
+      !"+-*/()[]×xX".includes(expression[end])
     ) {
       end += 1;
     }
@@ -495,8 +574,8 @@ function evaluateFormula(formula, row, referenceMap, targetField) {
   const parseTerm = () => {
     let value = parseFactor();
     while (
-      tokens[position]?.type === "operator"
-      && (tokens[position].value === "*" || tokens[position].value === "/")
+      tokens[position]?.type === "operator" &&
+      (tokens[position].value === "*" || tokens[position].value === "/")
     ) {
       const operator = tokens[position].value;
       position += 1;
@@ -509,8 +588,8 @@ function evaluateFormula(formula, row, referenceMap, targetField) {
   const parseExpression = () => {
     let value = parseTerm();
     while (
-      tokens[position]?.type === "operator"
-      && (tokens[position].value === "+" || tokens[position].value === "-")
+      tokens[position]?.type === "operator" &&
+      (tokens[position].value === "+" || tokens[position].value === "-")
     ) {
       const operator = tokens[position].value;
       position += 1;
@@ -533,12 +612,12 @@ function normalizeRowIdSet(rowIds) {
 }
 
 function applyTableFormulas(rows, columns, rowIds = null) {
-  const formulaColumns = columns.filter(column => normalizeFormulaInput(column.formula));
+  const formulaColumns = columns.filter((column) => normalizeFormulaInput(column.formula));
   if (!formulaColumns.length) return rows;
 
   const rowIdSet = normalizeRowIdSet(rowIds);
   const referenceMap = buildFormulaReferenceMap(columns);
-  return rows.map(row => {
+  return rows.map((row) => {
     if (rowIdSet && !rowIdSet.has(row.id)) return row;
     let next = row;
 
@@ -559,21 +638,73 @@ function applyTableFormulas(rows, columns, rowIds = null) {
 }
 
 function isNumericLike(value) {
-  const text = String(value ?? "").trim().replace(/,/g, "");
+  const text = String(value ?? "")
+    .trim()
+    .replace(/,/g, "");
   return text !== "" && Number.isFinite(Number(text));
 }
 
 function getCustomerTableColumns(customer, tableKey) {
   const config = tableConfigs[tableKey];
-  const defaultFields = new Set(config.defaultColumns.map(column => column.field));
+  const defaultFields = new Set(config.defaultColumns.map((column) => column.field));
   return [
     ...config.defaultColumns,
-    ...((customer.customColumns?.[tableKey] || [])
-      .filter(column => !defaultFields.has(column.field))),
+    ...(customer.customColumns?.[tableKey] || []).filter(
+      (column) => !defaultFields.has(column.field),
+    ),
   ];
 }
 
-function applyCustomerTableFormulas(customer, tableKey, rows, customColumns = customer?.customColumns, rowIds = null) {
+function normalizeFieldList(value, fallback = []) {
+  if (!Array.isArray(value)) return fallback;
+  return Array.from(new Set(value.map((field) => String(field || "").trim()).filter(Boolean)));
+}
+
+function normalizeMobileDisplaySettings(value = {}) {
+  const data = value && typeof value === "object" ? value : {};
+  return {
+    cardFields: normalizeFieldList(data.cardFields, defaultMobileDisplaySettings.cardFields),
+    detailFields: normalizeFieldList(data.detailFields, defaultMobileDisplaySettings.detailFields),
+  };
+}
+
+function buildMobileOrderFieldOptions(customers = []) {
+  const fields = new Map([
+    ["_customerName", { field: "_customerName", label: "客户" }],
+    ["orderNo", { field: "orderNo", label: "订单号" }],
+  ]);
+  const addColumn = (column = {}) => {
+    if (!column.field || fields.has(column.field)) return;
+    fields.set(column.field, {
+      field: column.field,
+      label: column.headerName || column.field,
+      type: column.type,
+    });
+  };
+
+  tableConfigs.orders.defaultColumns.forEach(addColumn);
+  knownOrderDataColumns.forEach(addColumn);
+  productionScheduleColumns.forEach(addColumn);
+  orderDeliveryTrackingColumns.forEach(addColumn);
+  for (const customer of customers) {
+    (customer.customColumns?.orders || []).forEach(addColumn);
+    (customer.orders || []).forEach((order) => {
+      Object.keys(order || {}).forEach((field) => {
+        if (field === "id" || field.startsWith("_") || fields.has(field)) return;
+        fields.set(field, { field, label: field });
+      });
+    });
+  }
+  return Array.from(fields.values());
+}
+
+function applyCustomerTableFormulas(
+  customer,
+  tableKey,
+  rows,
+  customColumns = customer?.customColumns,
+  rowIds = null,
+) {
   return applyTableFormulas(
     rows,
     getCustomerTableColumns({ ...(customer || {}), customColumns }, tableKey),
@@ -595,18 +726,29 @@ function normalizeFinalDeliveryStatus(status = "") {
   if (text === "作废" || text.includes("作废") || text.includes("取消") || text.includes("无效")) {
     return "作废";
   }
-  if (status === "已送" || status === "已送货" || status === "已发货" || String(status).includes("签收")) {
-    return "已送";
+  if (text === "部分签收" || text === "部分送货") {
+    return "部分签收";
+  }
+  if (
+    status === "已送" ||
+    status === "已送货" ||
+    status === "已发货" ||
+    String(status).includes("签收")
+  ) {
+    return "已签收";
   }
   return "未送";
 }
 
 function isEffectiveDelivery(delivery) {
-  return isFinalDelivery(delivery) && normalizeFinalDeliveryStatus(delivery.status) === "已送";
+  return isFinalDelivery(delivery) && normalizeFinalDeliveryStatus(delivery.status) === "已签收";
 }
 
 function isSignedDelivery(delivery) {
-  return isFinalDelivery(delivery) && (normalizeFinalDeliveryStatus(delivery.status) === "已送" || Boolean(delivery?.signedAt));
+  return (
+    isFinalDelivery(delivery) &&
+    (normalizeFinalDeliveryStatus(delivery.status) === "已签收" || Boolean(delivery?.signedAt))
+  );
 }
 
 function appendAuditLog(log = "", message = "") {
@@ -615,9 +757,9 @@ function appendAuditLog(log = "", message = "") {
 }
 
 function protectSignedDeliveries(previousRows = [], nextRows = []) {
-  const previousById = new Map(previousRows.map(row => [row.id, row]));
+  const previousById = new Map(previousRows.map((row) => [row.id, row]));
   let blocked = false;
-  const rows = nextRows.map(row => {
+  const rows = nextRows.map((row) => {
     const previous = previousById.get(row.id);
     if (!previous || !isSignedDelivery(previous)) return row;
     const allowed = {
@@ -632,8 +774,8 @@ function protectSignedDeliveries(previousRows = [], nextRows = []) {
 }
 
 function applyMaterialPriceHistory(previousRows = [], nextRows = []) {
-  const previousById = new Map(previousRows.map(row => [row.id, row]));
-  return nextRows.map(row => {
+  const previousById = new Map(previousRows.map((row) => [row.id, row]));
+  return nextRows.map((row) => {
     const previous = previousById.get(row.id);
     if (!previous) return row;
     const previousCost = parseNumericValue(previous.unitCost);
@@ -642,20 +784,25 @@ function applyMaterialPriceHistory(previousRows = [], nextRows = []) {
     return {
       ...row,
       priceUpdatedAt: new Date().toISOString(),
-      priceHistory: appendAuditLog(previous.priceHistory, `成本单价：${previousCost} -> ${nextCost}`),
+      priceHistory: appendAuditLog(
+        previous.priceHistory,
+        `成本单价：${previousCost} -> ${nextCost}`,
+      ),
     };
   });
 }
 
 function normalizeDeliveryRows(deliveries = []) {
-  return deliveries.map(delivery => {
+  return deliveries.map((delivery) => {
     const hasFinalFlag = Object.prototype.hasOwnProperty.call(delivery, finalDeliveryField);
     const finalDelivery = hasFinalFlag ? Boolean(delivery[finalDeliveryField]) : true;
 
     return {
       ...delivery,
       [finalDeliveryField]: finalDelivery,
-      status: finalDelivery ? normalizeFinalDeliveryStatus(delivery.status) : (delivery.status || "未送"),
+      status: finalDelivery
+        ? normalizeFinalDeliveryStatus(delivery.status)
+        : delivery.status || "未送",
     };
   });
 }
@@ -666,9 +813,10 @@ function deliveryGroupKey(delivery) {
 
 function getDeliveryGroupStatus(deliveries = []) {
   if (!deliveries.length) return "未送";
-  const statuses = deliveries.map(delivery => normalizeFinalDeliveryStatus(delivery.status));
-  if (statuses.every(status => status === "已送")) return "已送";
-  if (statuses.every(status => status === "作废")) return "作废";
+  const statuses = deliveries.map((delivery) => normalizeFinalDeliveryStatus(delivery.status));
+  if (statuses.every((status) => status === "已签收")) return "已签收";
+  if (statuses.some((status) => status === "已签收" || status === "部分签收")) return "部分签收";
+  if (statuses.every((status) => status === "作废")) return "作废";
   return "未送";
 }
 
@@ -686,7 +834,7 @@ function getOrderQuantityForDelivery(order, delivery = {}) {
 }
 
 function findEffectiveDeliveryOverages(orders = [], deliveries = []) {
-  const ordersById = new Map(orders.map(order => [order.id, order]));
+  const ordersById = new Map(orders.map((order) => [order.id, order]));
   const deliveryTotalsByOrderAndSource = new Map();
 
   for (const delivery of deliveries) {
@@ -695,15 +843,13 @@ function findEffectiveDeliveryOverages(orders = [], deliveries = []) {
     if (!orderId) continue;
     const sourceField = getDeliveryQuantitySourceField(delivery);
     const key = `${orderId}::${sourceField}`;
-    deliveryTotalsByOrderAndSource.set(
-      key,
-      {
-        orderId,
-        sourceField,
-        deliveredQuantity: (deliveryTotalsByOrderAndSource.get(key)?.deliveredQuantity || 0)
-          + parseNumericValue(delivery[deliveryQuantityField]),
-      },
-    );
+    deliveryTotalsByOrderAndSource.set(key, {
+      orderId,
+      sourceField,
+      deliveredQuantity:
+        (deliveryTotalsByOrderAndSource.get(key)?.deliveredQuantity || 0) +
+        parseNumericValue(delivery[deliveryQuantityField]),
+    });
   }
 
   return Array.from(deliveryTotalsByOrderAndSource.values())
@@ -726,8 +872,8 @@ function findEffectiveDeliveryOverages(orders = [], deliveries = []) {
 function buildDeliveryFinalizePreview(customer, selectedDrafts, t = defaultTranslator) {
   const orders = customer?.orders || [];
   const deliveries = customer?.deliveries || [];
-  const ordersById = new Map(orders.map(order => [order.id, order]));
-  const selectedDraftIds = new Set(selectedDrafts.map(delivery => delivery.id));
+  const ordersById = new Map(orders.map((order) => [order.id, order]));
+  const selectedDraftIds = new Set(selectedDrafts.map((delivery) => delivery.id));
   const effectiveDeliveredByOrderAndSource = new Map();
   const selectedByOrderAndSource = new Map();
   let unlinkedQuantity = 0;
@@ -740,30 +886,28 @@ function buildDeliveryFinalizePreview(customer, selectedDrafts, t = defaultTrans
     const key = `${orderId}::${sourceField}`;
     effectiveDeliveredByOrderAndSource.set(
       key,
-      (effectiveDeliveredByOrderAndSource.get(key) || 0) + parseNumericValue(delivery[deliveryQuantityField]),
+      (effectiveDeliveredByOrderAndSource.get(key) || 0) +
+        parseNumericValue(delivery[deliveryQuantityField]),
     );
   }
 
-  const draftSummaries = selectedDrafts.map(delivery => {
+  const draftSummaries = selectedDrafts.map((delivery) => {
     const orderId = delivery[linkedOrderIdField];
     const order = ordersById.get(orderId);
     const sourceField = getDeliveryQuantitySourceField(delivery);
     const summaryKey = `${orderId}::${sourceField}`;
     const quantity = parseNumericValue(delivery[deliveryQuantityField]);
-    const deliveredBefore = orderId ? (effectiveDeliveredByOrderAndSource.get(summaryKey) || 0) : 0;
+    const deliveredBefore = orderId ? effectiveDeliveredByOrderAndSource.get(summaryKey) || 0 : 0;
     const orderQuantity = order ? getOrderQuantityForDelivery(order, delivery) : 0;
     const remainingBefore = order ? Math.max(orderQuantity - deliveredBefore, 0) : null;
 
     if (orderId && order) {
       const current = selectedByOrderAndSource.get(summaryKey);
-      selectedByOrderAndSource.set(
-        summaryKey,
-        {
-          orderId,
-          sourceField,
-          selectedQuantity: (current?.selectedQuantity || 0) + quantity,
-        },
-      );
+      selectedByOrderAndSource.set(summaryKey, {
+        orderId,
+        sourceField,
+        selectedQuantity: (current?.selectedQuantity || 0) + quantity,
+      });
     } else {
       unlinkedQuantity += quantity;
     }
@@ -773,7 +917,7 @@ function buildDeliveryFinalizePreview(customer, selectedDrafts, t = defaultTrans
       deliveryNo: delivery.deliveryNo || t("未填写送货单号"),
       date: delivery.date || "",
       orderId,
-      orderLabel: order ? getOrderLabel(order, orderId) : (delivery.orderNo || t("未关联订单")),
+      orderLabel: order ? getOrderLabel(order, orderId) : delivery.orderNo || t("未关联订单"),
       product: order?.product || delivery[deliveryOrderField("product")] || "",
       quantity,
       deliveredBefore,
@@ -782,49 +926,68 @@ function buildDeliveryFinalizePreview(customer, selectedDrafts, t = defaultTrans
     };
   });
 
-  const orderSummaries = Array.from(selectedByOrderAndSource.values()).map(({ orderId, selectedQuantity, sourceField }) => {
-    const order = ordersById.get(orderId);
-    const deliveredBefore = effectiveDeliveredByOrderAndSource.get(`${orderId}::${sourceField}`) || 0;
-    const orderQuantity = parseNumericValue(order?.[sourceField]);
-    const remainingBefore = Math.max(orderQuantity - deliveredBefore, 0);
-    return {
-      orderId,
-      orderLabel: getOrderLabel(order, orderId),
-      orderQuantity,
-      deliveredBefore,
-      remainingBefore,
-      selectedQuantity,
-      sourceField,
-    };
-  });
+  const orderSummaries = Array.from(selectedByOrderAndSource.values()).map(
+    ({ orderId, selectedQuantity, sourceField }) => {
+      const order = ordersById.get(orderId);
+      const deliveredBefore =
+        effectiveDeliveredByOrderAndSource.get(`${orderId}::${sourceField}`) || 0;
+      const orderQuantity = parseNumericValue(order?.[sourceField]);
+      const remainingBefore = Math.max(orderQuantity - deliveredBefore, 0);
+      return {
+        orderId,
+        orderLabel: getOrderLabel(order, orderId),
+        orderQuantity,
+        deliveredBefore,
+        remainingBefore,
+        selectedQuantity,
+        sourceField,
+      };
+    },
+  );
 
   return {
     draftSummaries,
     orderSummaries,
-    deliveryNos: [...new Set(selectedDrafts.map(delivery => delivery.deliveryNo || t("未填写送货单号")))],
-    totalQuantity: selectedDrafts.reduce((sum, delivery) => sum + parseNumericValue(delivery[deliveryQuantityField]), 0),
+    deliveryNos: [
+      ...new Set(selectedDrafts.map((delivery) => delivery.deliveryNo || t("未填写送货单号"))),
+    ],
+    totalQuantity: selectedDrafts.reduce(
+      (sum, delivery) => sum + parseNumericValue(delivery[deliveryQuantityField]),
+      0,
+    ),
     unlinkedQuantity,
-    overDelivered: orderSummaries.filter(item => item.selectedQuantity > item.remainingBefore + 0.0000001),
+    overDelivered: orderSummaries.filter(
+      (item) => item.selectedQuantity > item.remainingBefore + 0.0000001,
+    ),
   };
 }
 
 function formatDeliveryFinalizeMessage(preview, t = defaultTranslator) {
-  const orderLines = preview.orderSummaries.slice(0, 8).map(item => (
+  const orderLines = preview.orderSummaries.slice(0, 8).map((item) =>
     t("{orderLabel}：本次 {selectedQuantity} / 剩余 {remainingQuantity}", {
       orderLabel: item.orderLabel,
       selectedQuantity: normalizeCalculatedNumber(item.selectedQuantity),
       remainingQuantity: normalizeCalculatedNumber(item.remainingBefore),
-    })
-  ));
-  const draftLines = preview.draftSummaries.slice(0, 8).map(item => (
-    `${item.deliveryNo} · ${item.orderLabel} · ${normalizeCalculatedNumber(item.quantity)}`
-  ));
-  const moreDrafts = preview.draftSummaries.length > draftLines.length
-    ? t("\n另有 {count} 条明细未展示", { count: preview.draftSummaries.length - draftLines.length })
-    : "";
-  const unlinkedLine = preview.unlinkedQuantity > 0
-    ? t("\n未关联订单数量：{quantity}", { quantity: normalizeCalculatedNumber(preview.unlinkedQuantity) })
-    : "";
+    }),
+  );
+  const draftLines = preview.draftSummaries
+    .slice(0, 8)
+    .map(
+      (item) =>
+        `${item.deliveryNo} · ${item.orderLabel} · ${normalizeCalculatedNumber(item.quantity)}`,
+    );
+  const moreDrafts =
+    preview.draftSummaries.length > draftLines.length
+      ? t("\n另有 {count} 条明细未展示", {
+          count: preview.draftSummaries.length - draftLines.length,
+        })
+      : "";
+  const unlinkedLine =
+    preview.unlinkedQuantity > 0
+      ? t("\n未关联订单数量：{quantity}", {
+          quantity: normalizeCalculatedNumber(preview.unlinkedQuantity),
+        })
+      : "";
 
   return [
     t("将生成 {deliveryCount} 张送货单，共 {lineCount} 条明细。", {
@@ -836,21 +999,28 @@ function formatDeliveryFinalizeMessage(preview, t = defaultTranslator) {
       unlinkedLine,
     }),
     orderLines.length ? t("\n关联订单预览：\n{lines}", { lines: orderLines.join("\n") }) : "",
-    draftLines.length ? t("\n草稿明细：\n{lines}{moreDrafts}", { lines: draftLines.join("\n"), moreDrafts }) : "",
+    draftLines.length
+      ? t("\n草稿明细：\n{lines}{moreDrafts}", { lines: draftLines.join("\n"), moreDrafts })
+      : "",
     t("\n确认无误后，送货单会进入“送货单”页面，默认状态为“未送”。"),
-  ].filter(Boolean).join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function formatOverDeliveryMessage(issues, t = defaultTranslator) {
-  const lines = issues.slice(0, 8).map(issue => (
+  const lines = issues.slice(0, 8).map((issue) =>
     t("{orderLabel}：已送 {deliveredQuantity} / 订单 {orderQuantity}，超出 {overQuantity}", {
       orderLabel: issue.orderLabel,
       deliveredQuantity: normalizeCalculatedNumber(issue.deliveredQuantity),
       orderQuantity: normalizeCalculatedNumber(issue.orderQuantity),
       overQuantity: normalizeCalculatedNumber(issue.overQuantity),
-    })
-  ));
-  const more = issues.length > lines.length ? t("\n另有 {count} 条订单超量。", { count: issues.length - lines.length }) : "";
+    }),
+  );
+  const more =
+    issues.length > lines.length
+      ? t("\n另有 {count} 条订单超量。", { count: issues.length - lines.length })
+      : "";
   return t("以下订单送货数量超过订单数量，不能生效：\n{lines}{more}", {
     lines: lines.join("\n"),
     more,
@@ -863,30 +1033,30 @@ function deliveryOrderField(field) {
 
 function getOrderColumnsForDelivery(customer, selectedOrders) {
   const columns = getCustomerTableColumns(customer, "orders");
-  const fields = new Set(columns.map(column => column.field));
+  const fields = new Set(columns.map((column) => column.field));
   const withKnownData = [...columns];
 
   for (const column of knownOrderDataColumns) {
     if (fields.has(column.field)) continue;
-    if (!selectedOrders.some(order => hasFilledValue(order, column.field))) continue;
+    if (!selectedOrders.some((order) => hasFilledValue(order, column.field))) continue;
     fields.add(column.field);
     withKnownData.push(column);
   }
 
-  return withKnownData.filter(column => (
-    column.field !== "status"
-    && column.field !== orderDeliveredQuantityField
-  ));
+  return withKnownData.filter(
+    (column) => column.field !== "status" && column.field !== orderDeliveredQuantityField,
+  );
 }
 
 function getDeliveryQuantityOptions(orderColumns, selectedOrders) {
   return orderColumns
-    .filter(column => (
-      column.type === "number"
-      || column.headerName?.includes("数量")
-      || selectedOrders.some(order => isNumericLike(order[column.field]))
-    ))
-    .map(column => ({
+    .filter(
+      (column) =>
+        column.type === "number" ||
+        column.headerName?.includes("数量") ||
+        selectedOrders.some((order) => isNumericLike(order[column.field])),
+    )
+    .map((column) => ({
       value: column.field,
       label: column.headerName || column.field,
     }));
@@ -894,29 +1064,29 @@ function getDeliveryQuantityOptions(orderColumns, selectedOrders) {
 
 function preferredQuantityField(options) {
   return (
-    options.find(option => option.value === orderRemainingQuantityField)?.value
-    || options.find(option => option.value === "quantity")?.value
-    || options.find(option => option.label.includes("数量"))?.value
-    || options[0]?.value
-    || ""
+    options.find((option) => option.value === orderRemainingQuantityField)?.value ||
+    options.find((option) => option.value === "quantity")?.value ||
+    options.find((option) => option.label.includes("数量"))?.value ||
+    options[0]?.value ||
+    ""
   );
 }
 
 function insertColumnsAfterField(columns, additions, afterField) {
-  const existingFields = new Set(columns.map(column => column.field));
-  const columnsToAdd = additions.filter(column => !existingFields.has(column.field));
+  const existingFields = new Set(columns.map((column) => column.field));
+  const columnsToAdd = additions.filter((column) => !existingFields.has(column.field));
   if (!columnsToAdd.length) return columns;
 
   const next = [...columns];
-  const afterIndex = next.findIndex(column => column.field === afterField);
+  const afterIndex = next.findIndex((column) => column.field === afterField);
   const insertIndex = afterIndex === -1 ? next.length : afterIndex + 1;
   next.splice(insertIndex, 0, ...columnsToAdd);
   return next;
 }
 
 function completeColumnOrder(savedOrder, columns) {
-  const validFields = new Set(columns.map(column => column.field));
-  const next = (savedOrder || []).filter(field => validFields.has(field));
+  const validFields = new Set(columns.map((column) => column.field));
+  const next = (savedOrder || []).filter((field) => validFields.has(field));
 
   for (const column of columns) {
     if (!next.includes(column.field)) next.push(column.field);
@@ -930,7 +1100,7 @@ function insertFieldsAfter(order, fields, afterField) {
   if (!fieldsToInsert.length) return order;
 
   const fieldSet = new Set(fieldsToInsert);
-  const next = order.filter(field => !fieldSet.has(field));
+  const next = order.filter((field) => !fieldSet.has(field));
   const afterIndex = next.indexOf(afterField);
   const insertIndex = afterIndex === -1 ? next.length : afterIndex + 1;
   next.splice(insertIndex, 0, ...fieldsToInsert);
@@ -938,18 +1108,15 @@ function insertFieldsAfter(order, fields, afterField) {
 }
 
 function ensureOrderDeliveryTrackingColumns(customColumns = {}, selectedOrders = []) {
-  const defaultFields = new Set(tableConfigs.orders.defaultColumns.map(column => column.field));
+  const defaultFields = new Set(tableConfigs.orders.defaultColumns.map((column) => column.field));
   const orderColumns = customColumns.orders || [];
-  const existingFields = new Set([
-    ...defaultFields,
-    ...orderColumns.map(column => column.field),
-  ]);
-  const quantityColumn = knownOrderDataColumns.find(column => column.field === "quantity");
+  const existingFields = new Set([...defaultFields, ...orderColumns.map((column) => column.field)]);
+  const quantityColumn = knownOrderDataColumns.find((column) => column.field === "quantity");
   const nextOrderColumns = insertColumnsAfterField(
     orderColumns,
-    !existingFields.has("quantity")
-      && quantityColumn
-      && selectedOrders.some(order => hasFilledValue(order, "quantity"))
+    !existingFields.has("quantity") &&
+      quantityColumn &&
+      selectedOrders.some((order) => hasFilledValue(order, "quantity"))
       ? [quantityColumn]
       : [],
     null,
@@ -961,11 +1128,11 @@ function ensureOrderDeliveryTrackingColumns(customColumns = {}, selectedOrders =
   );
   const visibleOrderColumns = [
     ...tableConfigs.orders.defaultColumns,
-    ...withTrackingColumns.filter(column => !defaultFields.has(column.field)),
+    ...withTrackingColumns.filter((column) => !defaultFields.has(column.field)),
   ];
   const order = insertFieldsAfter(
     completeColumnOrder(customColumns.columnOrder?.orders, visibleOrderColumns),
-    orderDeliveryTrackingColumns.map(column => column.field),
+    orderDeliveryTrackingColumns.map((column) => column.field),
     "quantity",
   );
 
@@ -980,27 +1147,22 @@ function ensureOrderDeliveryTrackingColumns(customColumns = {}, selectedOrders =
 }
 
 function ensureProductionScheduleColumns(customColumns = {}) {
-  const defaultFields = new Set(tableConfigs.orders.defaultColumns.map(column => column.field));
+  const defaultFields = new Set(tableConfigs.orders.defaultColumns.map((column) => column.field));
   const orderColumns = customColumns.orders || [];
-  const existingFields = new Set([
-    ...defaultFields,
-    ...orderColumns.map(column => column.field),
-  ]);
-  const columnsToAdd = productionScheduleColumns.filter(column => !existingFields.has(column.field));
+  const existingFields = new Set([...defaultFields, ...orderColumns.map((column) => column.field)]);
+  const columnsToAdd = productionScheduleColumns.filter(
+    (column) => !existingFields.has(column.field),
+  );
   if (!columnsToAdd.length) return customColumns;
 
-  const withScheduleColumns = insertColumnsAfterField(
-    orderColumns,
-    columnsToAdd,
-    "dueDate",
-  );
+  const withScheduleColumns = insertColumnsAfterField(orderColumns, columnsToAdd, "dueDate");
   const visibleOrderColumns = [
     ...tableConfigs.orders.defaultColumns,
-    ...withScheduleColumns.filter(column => !defaultFields.has(column.field)),
+    ...withScheduleColumns.filter((column) => !defaultFields.has(column.field)),
   ];
   const order = insertFieldsAfter(
     completeColumnOrder(customColumns.columnOrder?.orders, visibleOrderColumns),
-    productionScheduleColumns.map(column => column.field),
+    productionScheduleColumns.map((column) => column.field),
     "dueDate",
   );
 
@@ -1015,8 +1177,10 @@ function ensureProductionScheduleColumns(customColumns = {}) {
 }
 
 function ensureDeliveryColumns(customColumns = {}, orderColumns = []) {
-  const defaultFields = new Set(tableConfigs.deliveries.defaultColumns.map(column => column.field));
-  const deliveryColumnsFromOrders = orderColumns.map(column => ({
+  const defaultFields = new Set(
+    tableConfigs.deliveries.defaultColumns.map((column) => column.field),
+  );
+  const deliveryColumnsFromOrders = orderColumns.map((column) => ({
     field: deliveryOrderField(column.field),
     headerName: column.headerName,
     width: column.width || 140,
@@ -1027,14 +1191,15 @@ function ensureDeliveryColumns(customColumns = {}, orderColumns = []) {
   }));
   const nextDeliveryColumns = [
     ...(customColumns.deliveries || []),
-    ...[...deliveryColumnsFromOrders, deliveryQuantityColumn].filter(column => (
-      !defaultFields.has(column.field)
-      && !(customColumns.deliveries || []).some(existing => existing.field === column.field)
-    )),
+    ...[...deliveryColumnsFromOrders, deliveryQuantityColumn].filter(
+      (column) =>
+        !defaultFields.has(column.field) &&
+        !(customColumns.deliveries || []).some((existing) => existing.field === column.field),
+    ),
   ];
   const visibleDeliveryColumns = [
     ...tableConfigs.deliveries.defaultColumns,
-    ...nextDeliveryColumns.filter(column => !defaultFields.has(column.field)),
+    ...nextDeliveryColumns.filter((column) => !defaultFields.has(column.field)),
   ];
 
   return {
@@ -1042,14 +1207,17 @@ function ensureDeliveryColumns(customColumns = {}, orderColumns = []) {
     deliveries: nextDeliveryColumns,
     columnOrder: {
       ...(customColumns.columnOrder || {}),
-      deliveries: completeColumnOrder(customColumns.columnOrder?.deliveries, visibleDeliveryColumns),
+      deliveries: completeColumnOrder(
+        customColumns.columnOrder?.deliveries,
+        visibleDeliveryColumns,
+      ),
     },
   };
 }
 
 function nextDeliveryNo(deliveries = []) {
   const dateCode = today().replace(/-/g, "");
-  const existing = new Set(deliveries.map(delivery => delivery.deliveryNo).filter(Boolean));
+  const existing = new Set(deliveries.map((delivery) => delivery.deliveryNo).filter(Boolean));
   let counter = deliveries.length + 1;
   let deliveryNo = "";
 
@@ -1063,7 +1231,7 @@ function nextDeliveryNo(deliveries = []) {
 
 function nextStatementNo(statements = []) {
   const dateCode = today().replace(/-/g, "");
-  const existing = new Set(statements.map(statement => statement.statementNo).filter(Boolean));
+  const existing = new Set(statements.map((statement) => statement.statementNo).filter(Boolean));
   let counter = statements.length + 1;
   let statementNo = "";
 
@@ -1085,20 +1253,21 @@ function deliveryLineAmount(delivery = {}) {
 
 function buildStatementFromSignedDeliveries(customer = {}) {
   const existingDeliveryIds = new Set(
-    (customer.statements || [])
-      .flatMap(statement => statement.deliveryIds || [])
-      .filter(Boolean),
+    (customer.statements || []).flatMap((statement) => statement.deliveryIds || []).filter(Boolean),
   );
-  const deliveries = (customer.deliveries || [])
-    .filter(delivery => isSignedDelivery(delivery) && !existingDeliveryIds.has(delivery.id));
+  const deliveries = (customer.deliveries || []).filter(
+    (delivery) => isSignedDelivery(delivery) && !existingDeliveryIds.has(delivery.id),
+  );
   if (!deliveries.length) return null;
   const amount = deliveries.reduce((sum, delivery) => sum + deliveryLineAmount(delivery), 0);
   return {
     id: makeId("statements"),
     statementNo: nextStatementNo(customer.statements || []),
     date: today(),
-    deliveryIds: deliveries.map(delivery => delivery.id),
-    deliveryNos: [...new Set(deliveries.map(delivery => delivery.deliveryNo).filter(Boolean))].join("、"),
+    deliveryIds: deliveries.map((delivery) => delivery.id),
+    deliveryNos: [
+      ...new Set(deliveries.map((delivery) => delivery.deliveryNo).filter(Boolean)),
+    ].join("、"),
     lineCount: deliveries.length,
     amount: normalizeCalculatedNumber(amount),
     paidAmount: 0,
@@ -1114,17 +1283,20 @@ function applyPaymentsToStatements(statements = [], payments = []) {
   for (const payment of payments || []) {
     const statementNo = String(payment.statementNo || "").trim();
     if (!statementNo) continue;
-    paidByStatementNo.set(statementNo, (paidByStatementNo.get(statementNo) || 0) + parseNumericValue(payment.amount));
+    paidByStatementNo.set(
+      statementNo,
+      (paidByStatementNo.get(statementNo) || 0) + parseNumericValue(payment.amount),
+    );
   }
-  return (statements || []).map(statement => {
+  return (statements || []).map((statement) => {
     const paidAmount = paidByStatementNo.get(statement.statementNo) || 0;
     const amount = parseNumericValue(statement.amount);
     const unpaidAmount = Math.max(amount - paidAmount, 0);
     const status = paidAmount <= 0 ? "未收款" : unpaidAmount > 0.0000001 ? "部分收款" : "已收款";
     if (
-      parseNumericValue(statement.paidAmount) === paidAmount
-      && parseNumericValue(statement.unpaidAmount) === unpaidAmount
-      && statement.status === status
+      parseNumericValue(statement.paidAmount) === paidAmount &&
+      parseNumericValue(statement.unpaidAmount) === unpaidAmount &&
+      statement.status === status
     ) {
       return statement;
     }
@@ -1140,7 +1312,7 @@ function applyPaymentsToStatements(statements = [], payments = []) {
 function makeDeliveryRowsFromOrders(selectedOrders, orderColumns, quantitySourceField, deliveryNo) {
   const date = today();
 
-  return selectedOrders.map(order => {
+  return selectedOrders.map((order) => {
     const deliveryRow = {
       ...tableConfigs.deliveries.emptyRow,
       id: makeId("deliveries"),
@@ -1183,13 +1355,14 @@ function applyDeliveryQuantitiesToOrders(orders = [], deliveries = []) {
     );
   }
 
-  return orders.map(order => {
+  return orders.map((order) => {
     const normalizedStatus = normalizeOrderStatus(order.status);
     if (normalizedStatus === "异常") return order;
-    const shouldTrack = deliveredByOrderId.has(order.id)
-      || deliveryOpenedOrderIds.has(order.id)
-      || orderDeliveredQuantityField in order
-      || orderRemainingQuantityField in order;
+    const shouldTrack =
+      deliveredByOrderId.has(order.id) ||
+      deliveryOpenedOrderIds.has(order.id) ||
+      orderDeliveredQuantityField in order ||
+      orderRemainingQuantityField in order;
     if (!shouldTrack) return order;
 
     const hasEffectiveDelivery = deliveredByOrderId.has(order.id);
@@ -1199,19 +1372,23 @@ function applyDeliveryQuantitiesToOrders(orders = [], deliveries = []) {
     const orderQuantity = parseNumericValue(order[sourceField]);
     const remainingQuantity = Math.max(orderQuantity - deliveredQuantity, 0);
     const hasOpenedDelivery = deliveryOpenedOrderIds.has(order.id);
-    const nextStatus = hasEffectiveDelivery && remainingQuantity <= 0.0000001
-      ? "已送货"
-      : hasEffectiveDelivery && remainingQuantity > 0.0000001
-        ? "部分送货"
-      : hasOpenedDelivery && ["已完成", "已开送货单", "部分送货", "已送货"].includes(normalizedStatus)
-        ? "已开送货单"
-      : !hasOpenedDelivery && !hasEffectiveDelivery && ["已开送货单", "部分送货", "已送货"].includes(normalizedStatus)
-        ? "已完成"
-        : order.status;
+    const nextStatus =
+      hasEffectiveDelivery && remainingQuantity <= 0.0000001
+        ? "已送货"
+        : hasEffectiveDelivery && remainingQuantity > 0.0000001
+          ? "部分送货"
+          : hasOpenedDelivery &&
+              ["已完成", "已开送货单", "部分送货", "已送货"].includes(normalizedStatus)
+            ? "已开送货单"
+            : !hasOpenedDelivery &&
+                !hasEffectiveDelivery &&
+                ["已开送货单", "部分送货", "已送货"].includes(normalizedStatus)
+              ? "已完成"
+              : order.status;
     if (
-      parseNumericValue(order[orderDeliveredQuantityField]) === deliveredQuantity
-      && parseNumericValue(order[orderRemainingQuantityField]) === remainingQuantity
-      && order.status === nextStatus
+      parseNumericValue(order[orderDeliveredQuantityField]) === deliveredQuantity &&
+      parseNumericValue(order[orderRemainingQuantityField]) === remainingQuantity &&
+      order.status === nextStatus
     ) {
       return order;
     }
@@ -1224,7 +1401,10 @@ function applyDeliveryQuantitiesToOrders(orders = [], deliveries = []) {
     };
     if (order.status !== nextStatus) {
       nextOrder.statusChangedAt = new Date().toISOString();
-      nextOrder.statusChangeLog = appendAuditLog(order.statusChangeLog, `进度：${order.status || "未完成"} -> ${nextStatus}`);
+      nextOrder.statusChangeLog = appendAuditLog(
+        order.statusChangeLog,
+        `进度：${order.status || "未完成"} -> ${nextStatus}`,
+      );
     }
     return nextOrder;
   });
@@ -1234,10 +1414,14 @@ function useDialogController(t = defaultTranslator) {
   const [dialog, setDialog] = useState(null);
   const resolverRef = useRef(null);
 
-  const openDialog = useCallback((config) => new Promise((resolve) => {
-    resolverRef.current = resolve;
-    setDialog(config);
-  }), []);
+  const openDialog = useCallback(
+    (config) =>
+      new Promise((resolve) => {
+        resolverRef.current = resolve;
+        setDialog(config);
+      }),
+    [],
+  );
 
   const resolveDialog = useCallback((value) => {
     const resolve = resolverRef.current;
@@ -1246,54 +1430,65 @@ function useDialogController(t = defaultTranslator) {
     resolve?.(value);
   }, []);
 
-  const showAlert = useCallback((message, options = {}) => (
-    openDialog({
-      type: "alert",
-      title: t(options.title || "提示"),
-      message: t(message),
-      tone: options.tone,
-    }).then(() => true)
-  ), [openDialog, t]);
+  const showAlert = useCallback(
+    (message, options = {}) =>
+      openDialog({
+        type: "alert",
+        title: t(options.title || "提示"),
+        message: t(message),
+        tone: options.tone,
+      }).then(() => true),
+    [openDialog, t],
+  );
 
-  const showConfirm = useCallback((message, options = {}) => (
-    openDialog({
-      type: "confirm",
-      title: t(options.title || "确认操作"),
-      message: t(message),
-      tone: options.tone,
-    })
-  ), [openDialog, t]);
+  const showConfirm = useCallback(
+    (message, options = {}) =>
+      openDialog({
+        type: "confirm",
+        title: t(options.title || "确认操作"),
+        message: t(message),
+        tone: options.tone,
+      }),
+    [openDialog, t],
+  );
 
-  const showPrompt = useCallback((message, options = {}) => (
-    openDialog({
-      type: "prompt",
-      title: t(options.title || "输入内容"),
-      message: t(message),
-      defaultValue: options.defaultValue || "",
-      placeholder: t(options.placeholder || ""),
-      tone: options.tone,
-    })
-  ), [openDialog, t]);
+  const showPrompt = useCallback(
+    (message, options = {}) =>
+      openDialog({
+        type: "prompt",
+        title: t(options.title || "输入内容"),
+        message: t(message),
+        defaultValue: options.defaultValue || "",
+        placeholder: t(options.placeholder || ""),
+        tone: options.tone,
+      }),
+    [openDialog, t],
+  );
 
-  const showSelect = useCallback((message, options = {}) => (
-    openDialog({
-      type: "select",
-      title: t(options.title || "选择内容"),
-      message: t(message),
-      options: (options.options || []).map(option => ({ ...option, label: t(option.label) })),
-      defaultValue: options.defaultValue || options.options?.[0]?.value || "",
-      tone: options.tone,
-    })
-  ), [openDialog, t]);
+  const showSelect = useCallback(
+    (message, options = {}) =>
+      openDialog({
+        type: "select",
+        title: t(options.title || "选择内容"),
+        message: t(message),
+        options: (options.options || []).map((option) => ({ ...option, label: t(option.label) })),
+        defaultValue: options.defaultValue || options.options?.[0]?.value || "",
+        tone: options.tone,
+      }),
+    [openDialog, t],
+  );
 
-  return useMemo(() => ({
-    dialog,
-    alert: showAlert,
-    confirm: showConfirm,
-    prompt: showPrompt,
-    select: showSelect,
-    resolve: resolveDialog,
-  }), [dialog, resolveDialog, showAlert, showConfirm, showPrompt, showSelect]);
+  return useMemo(
+    () => ({
+      dialog,
+      alert: showAlert,
+      confirm: showConfirm,
+      prompt: showPrompt,
+      select: showSelect,
+      resolve: resolveDialog,
+    }),
+    [dialog, resolveDialog, showAlert, showConfirm, showPrompt, showSelect],
+  );
 }
 
 function AppDialog({ dialog, onResolve }) {
@@ -1361,7 +1556,7 @@ function AppDialog({ dialog, onResolve }) {
             value={inputValue}
             onChange={(event) => setInputValue(event.target.value)}
           >
-            {(dialog.options || []).map(option => (
+            {(dialog.options || []).map((option) => (
               <option key={option.value} value={option.value}>
                 {option.label}
               </option>
@@ -1370,7 +1565,11 @@ function AppDialog({ dialog, onResolve }) {
         )}
         <div className="app-dialog-actions">
           {(isPrompt || isSelect || isConfirm) && (
-            <button type="button" className="secondary-button compact" onClick={() => onResolve(cancelValue)}>
+            <button
+              type="button"
+              className="secondary-button compact"
+              onClick={() => onResolve(cancelValue)}
+            >
               {t("取消")}
             </button>
           )}
@@ -1390,7 +1589,11 @@ function AppDialog({ dialog, onResolve }) {
 
 function App() {
   const [systemSettings, setSystemSettings] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("foam-crm-settings") || "{}"); } catch { return {}; }
+    try {
+      return JSON.parse(localStorage.getItem("foam-crm-settings") || "{}");
+    } catch {
+      return {};
+    }
   });
   const language = normalizeLanguage(systemSettings.language);
   const t = useMemo(() => createTranslator(language), [language]);
@@ -1406,6 +1609,7 @@ function App() {
   const [globalSearchQuery, setGlobalSearchQuery] = useState("");
   const [showGlobalSearchResults, setShowGlobalSearchResults] = useState(false);
   const [mobileUsers, setMobileUsers] = useState([]);
+  const [mobileDisplaySettings, setMobileDisplaySettings] = useState(defaultMobileDisplaySettings);
   const [showCustomerModal, setShowCustomerModal] = useState(false);
   const [showColumnModal, setShowColumnModal] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState(null);
@@ -1425,13 +1629,16 @@ function App() {
   const fullDataSyncRevisionRef = useRef(0);
   const customerDragTimerRef = useRef(null);
   const customerDragSourceRef = useRef(null);
-  const initialCustomerDrag = useMemo(() => ({
-    customerId: null,
-    active: false,
-    x: 0,
-    y: 0,
-    overLevel: "",
-  }), []);
+  const initialCustomerDrag = useMemo(
+    () => ({
+      customerId: null,
+      active: false,
+      x: 0,
+      y: 0,
+      overLevel: "",
+    }),
+    [],
+  );
   const customerDragRef = useRef(initialCustomerDrag);
   const [customerDrag, setCustomerDrag] = useState(initialCustomerDrag);
 
@@ -1440,11 +1647,14 @@ function App() {
     document.title = t("泡沫厂客户管理系统");
   }, [language, t]);
 
-  useEffect(() => () => {
-    if (customerDragTimerRef.current) {
-      window.clearTimeout(customerDragTimerRef.current);
-    }
-  }, []);
+  useEffect(
+    () => () => {
+      if (customerDragTimerRef.current) {
+        window.clearTimeout(customerDragTimerRef.current);
+      }
+    },
+    [],
+  );
 
   const updateCustomerDrag = useCallback((updater) => {
     setCustomerDrag((current) => {
@@ -1478,23 +1688,27 @@ function App() {
     activeTableRef.current = activeTable;
   }, [activeTable]);
 
-  const takeUndoSnapshot = useCallback(() => ({
-    customers: cloneData(customersRef.current),
-    selectedCustomerId: selectedCustomerIdRef.current,
-    activeTable: activeTableRef.current,
-  }), []);
+  const takeUndoSnapshot = useCallback(
+    () => ({
+      customers: cloneData(customersRef.current),
+      selectedCustomerId: selectedCustomerIdRef.current,
+      activeTable: activeTableRef.current,
+    }),
+    [],
+  );
 
-  const pushUndoSnapshot = useCallback((snapshot = takeUndoSnapshot()) => {
-    if (loading || undoingRef.current) return;
-    undoStackRef.current = [...undoStackRef.current, snapshot].slice(-MAX_UNDO_STEPS);
-  }, [loading, takeUndoSnapshot]);
+  const pushUndoSnapshot = useCallback(
+    (snapshot = takeUndoSnapshot()) => {
+      if (loading || undoingRef.current) return;
+      undoStackRef.current = [...undoStackRef.current, snapshot].slice(-MAX_UNDO_STEPS);
+    },
+    [loading, takeUndoSnapshot],
+  );
 
   const saveRowsQueued = useCallback((customerId, tableKey, rows) => {
     const key = `${customerId}:${tableKey}`;
     const previous = rowSaveQueueRef.current.get(key) || Promise.resolve();
-    const next = previous
-      .catch(() => {})
-      .then(() => api.setRows(customerId, tableKey, rows));
+    const next = previous.catch(() => {}).then(() => api.setRows(customerId, tableKey, rows));
 
     const queued = next.finally(() => {
       if (rowSaveQueueRef.current.get(key) === queued) {
@@ -1514,9 +1728,11 @@ function App() {
     return revision;
   }, []);
 
-  const isLatestRowSaveRevision = useCallback((customerId, tableKey, revision) => (
-    rowSaveRevisionRef.current.get(`${customerId}:${tableKey}`) === revision
-  ), []);
+  const isLatestRowSaveRevision = useCallback(
+    (customerId, tableKey, revision) =>
+      rowSaveRevisionRef.current.get(`${customerId}:${tableKey}`) === revision,
+    [],
+  );
 
   const invalidateRowSaveRevisions = useCallback(() => {
     rowSaveRevisionRef.current = new Map(
@@ -1524,28 +1740,34 @@ function App() {
     );
   }, []);
 
-  const syncCustomersInBackground = useCallback((customersToSync) => {
-    const revision = fullDataSyncRevisionRef.current + 1;
-    fullDataSyncRevisionRef.current = revision;
+  const syncCustomersInBackground = useCallback(
+    (customersToSync) => {
+      const revision = fullDataSyncRevisionRef.current + 1;
+      fullDataSyncRevisionRef.current = revision;
 
-    const run = async () => {
-      const pendingRowSaves = Array.from(rowSaveQueueRef.current.values());
-      if (pendingRowSaves.length) {
-        await Promise.allSettled(pendingRowSaves);
-      }
-      if (fullDataSyncRevisionRef.current !== revision) return;
-
-      try {
-        await api.replaceAll(customersToSync);
-      } catch (err) {
-        if (fullDataSyncRevisionRef.current === revision) {
-          void dialogs.alert(t("撤销已在界面完成，但同步数据库失败：{message}", { message: err.message }), { title: "同步失败" });
+      const run = async () => {
+        const pendingRowSaves = Array.from(rowSaveQueueRef.current.values());
+        if (pendingRowSaves.length) {
+          await Promise.allSettled(pendingRowSaves);
         }
-      }
-    };
+        if (fullDataSyncRevisionRef.current !== revision) return;
 
-    run();
-  }, [dialogs.alert, t]);
+        try {
+          await api.replaceAll(customersToSync);
+        } catch (err) {
+          if (fullDataSyncRevisionRef.current === revision) {
+            void dialogs.alert(
+              t("撤销已在界面完成，但同步数据库失败：{message}", { message: err.message }),
+              { title: "同步失败" },
+            );
+          }
+        }
+      };
+
+      run();
+    },
+    [dialogs.alert, t],
+  );
 
   const restoreLastUndoSnapshot = useCallback(() => {
     if (undoingRef.current || !undoStackRef.current.length) return;
@@ -1601,22 +1823,37 @@ function App() {
     }
   }, []);
 
+  const loadMobileDisplaySettings = useCallback(async () => {
+    try {
+      const res = await api.getMobileDisplaySettings();
+      setMobileDisplaySettings(normalizeMobileDisplaySettings(res.data || res || {}));
+    } catch (err) {
+      console.warn("Load mobile display settings failed:", err);
+    }
+  }, []);
+
   useEffect(() => {
-    api.getCustomers({ limit: 200 })
-      .then(res => {
+    api
+      .getCustomers({ limit: 200 })
+      .then((res) => {
         const list = res.data || res;
         const normalizedData = normalizeCustomerOrderStatuses(list);
         setCustomers(normalizedData);
         if (normalizedData.length) setSelectedCustomerId(normalizedData[0].id);
       })
-      .catch(err => dialogs.alert(`加载失败：${err.message}`, { title: "加载失败" }))
+      .catch((err) => dialogs.alert(`加载失败：${err.message}`, { title: "加载失败" }))
       .finally(() => setLoading(false));
     loadMobileUsers();
-  }, [dialogs.alert, loadMobileUsers]);
+    loadMobileDisplaySettings();
+  }, [dialogs.alert, loadMobileDisplaySettings, loadMobileUsers]);
 
   const selectedCustomer = useMemo(
     () => customers.find((customer) => customer.id === selectedCustomerId),
     [customers, selectedCustomerId],
+  );
+  const mobileOrderFieldOptions = useMemo(
+    () => buildMobileOrderFieldOptions(customers),
+    [customers],
   );
 
   useEffect(() => {
@@ -1645,15 +1882,19 @@ function App() {
     [systemSettings.hiddenGroups],
   );
 
-  const customerGroups = useMemo(() => normalizeCustomerGroupList([
-    ...customerLevelOptions.filter(g => !hiddenGroups.has(g)),
-    ...customCustomerGroups,
-    ...customers.map(customerGroupLevel),
-    UNGROUPED_CUSTOMER_GROUP,
-  ]), [customCustomerGroups, customers, hiddenGroups]);
+  const customerGroups = useMemo(
+    () =>
+      normalizeCustomerGroupList([
+        ...customerLevelOptions.filter((g) => !hiddenGroups.has(g)),
+        ...customCustomerGroups,
+        ...customers.map(customerGroupLevel),
+        UNGROUPED_CUSTOMER_GROUP,
+      ]),
+    [customCustomerGroups, customers, hiddenGroups],
+  );
 
   const groupedCustomers = useMemo(() => {
-    const groups = Object.fromEntries(customerGroups.map(level => [level, []]));
+    const groups = Object.fromEntries(customerGroups.map((level) => [level, []]));
     for (const customer of filteredCustomers) {
       const level = customerGroupLevel(customer);
       if (!groups[level]) groups[level] = [];
@@ -1681,17 +1922,38 @@ function App() {
     localStorage.setItem("foam-crm-settings", JSON.stringify(next));
   }, []);
 
-  const updateMobileUserRole = useCallback(async (userId, role) => {
-    try {
-      const res = await api.updateMobileUserRole(userId, role);
-      const nextUser = res.user;
-      setMobileUsers(current => current.map(user => (
-        user.id === userId ? { ...user, ...nextUser } : user
-      )));
-    } catch (err) {
-      await dialogs.alert(t("保存失败：{message}", { message: err.message }), { title: "保存失败" });
-    }
-  }, [dialogs, t]);
+  const updateMobileUserRole = useCallback(
+    async (userId, role) => {
+      try {
+        const res = await api.updateMobileUserRole(userId, role);
+        const nextUser = res.user;
+        setMobileUsers((current) =>
+          current.map((user) => (user.id === userId ? { ...user, ...nextUser } : user)),
+        );
+      } catch (err) {
+        await dialogs.alert(t("保存失败：{message}", { message: err.message }), {
+          title: "保存失败",
+        });
+      }
+    },
+    [dialogs, t],
+  );
+
+  const saveMobileDisplaySettings = useCallback(
+    async (settings) => {
+      try {
+        const normalized = normalizeMobileDisplaySettings(settings);
+        const res = await api.updateMobileDisplaySettings(normalized);
+        setMobileDisplaySettings(normalizeMobileDisplaySettings(res.data || normalized));
+      } catch (err) {
+        await dialogs.alert(t("保存失败：{message}", { message: err.message }), {
+          title: "保存失败",
+        });
+        throw err;
+      }
+    },
+    [dialogs, t],
+  );
 
   const handleAddCustomerGroup = useCallback(async () => {
     const input = await dialogs.prompt("新分组名称：", {
@@ -1710,111 +1972,135 @@ function App() {
       ...systemSettings,
       customerGroups: [...customCustomerGroups, groupName],
     });
-    setCollapsedGroups(current => {
+    setCollapsedGroups((current) => {
       const next = new Set(current);
       next.delete(groupName);
       return next;
     });
   }, [customCustomerGroups, customerGroups, dialogs, persistSystemSettings, systemSettings]);
 
-  const handleRenameCustomerGroup = useCallback(async (oldName) => {
-    const isBuiltin = customerLevelOptions.includes(oldName);
-    const input = await dialogs.prompt(`将 "${oldName}" 重命名为：`, {
-      title: "重命名分组",
-      placeholder: "输入新名称",
-      value: oldName,
-    });
-    const newName = String(input || "").trim();
-    if (!newName || newName === oldName) return;
+  const handleRenameCustomerGroup = useCallback(
+    async (oldName) => {
+      const isBuiltin = customerLevelOptions.includes(oldName);
+      const input = await dialogs.prompt(`将 "${oldName}" 重命名为：`, {
+        title: "重命名分组",
+        placeholder: "输入新名称",
+        value: oldName,
+      });
+      const newName = String(input || "").trim();
+      if (!newName || newName === oldName) return;
 
-    if (customerGroups.includes(newName)) {
-      await dialogs.alert(`"${newName}" 已存在。`, { title: "重命名分组" });
-      return;
-    }
+      if (customerGroups.includes(newName)) {
+        await dialogs.alert(`"${newName}" 已存在。`, { title: "重命名分组" });
+        return;
+      }
 
-    const affectedCustomers = customers.filter(
-      customer => customerGroupLevel(customer) === oldName
-    );
-
-    // Update settings: add new name to custom groups; for built-in, hide old name
-    const nextSettings = { ...systemSettings };
-    if (isBuiltin) {
-      nextSettings.hiddenGroups = [...(systemSettings.hiddenGroups || []), oldName];
-    }
-    nextSettings.customerGroups = normalizeCustomerGroupList([
-      ...customCustomerGroups.filter(g => g !== oldName),
-      newName,
-    ]);
-    persistSystemSettings(nextSettings);
-
-    // Update all affected customers' levels
-    if (affectedCustomers.length > 0) {
-      const previousCustomers = customersRef.current;
-      const nextCustomers = customers.map(customer =>
-        customerGroupLevel(customer) === oldName
-          ? { ...customer, level: newName }
-          : customer
+      const affectedCustomers = customers.filter(
+        (customer) => customerGroupLevel(customer) === oldName,
       );
-      customersRef.current = nextCustomers;
-      setCustomers(nextCustomers);
 
-      for (const customer of affectedCustomers) {
-        try {
-          await api.updateCustomer(customer.id, { ...customer, level: newName });
-        } catch {
-          customersRef.current = previousCustomers;
-          setCustomers(previousCustomers);
-          await dialogs.alert(`保存失败：重命名分组时更新客户 "${customer.name}" 出错。`, { title: "保存失败" });
-          return;
+      // Update settings: add new name to custom groups; for built-in, hide old name
+      const nextSettings = { ...systemSettings };
+      if (isBuiltin) {
+        nextSettings.hiddenGroups = [...(systemSettings.hiddenGroups || []), oldName];
+      }
+      nextSettings.customerGroups = normalizeCustomerGroupList([
+        ...customCustomerGroups.filter((g) => g !== oldName),
+        newName,
+      ]);
+      persistSystemSettings(nextSettings);
+
+      // Update all affected customers' levels
+      if (affectedCustomers.length > 0) {
+        const previousCustomers = customersRef.current;
+        const nextCustomers = customers.map((customer) =>
+          customerGroupLevel(customer) === oldName ? { ...customer, level: newName } : customer,
+        );
+        customersRef.current = nextCustomers;
+        setCustomers(nextCustomers);
+
+        for (const customer of affectedCustomers) {
+          try {
+            await api.updateCustomer(customer.id, { ...customer, level: newName });
+          } catch {
+            customersRef.current = previousCustomers;
+            setCustomers(previousCustomers);
+            await dialogs.alert(`保存失败：重命名分组时更新客户 "${customer.name}" 出错。`, {
+              title: "保存失败",
+            });
+            return;
+          }
         }
       }
-    }
-  }, [customerLevelOptions, customCustomerGroups, customerGroups, customers, dialogs, persistSystemSettings, systemSettings]);
+    },
+    [
+      customerLevelOptions,
+      customCustomerGroups,
+      customerGroups,
+      customers,
+      dialogs,
+      persistSystemSettings,
+      systemSettings,
+    ],
+  );
 
-  const handleDeleteCustomerGroup = useCallback(async (groupName) => {
-    const isBuiltin = customerLevelOptions.includes(groupName);
-    const affectedCount = customers.filter(
-      customer => customerGroupLevel(customer) === groupName
-    ).length;
+  const handleDeleteCustomerGroup = useCallback(
+    async (groupName) => {
+      const isBuiltin = customerLevelOptions.includes(groupName);
+      const affectedCount = customers.filter(
+        (customer) => customerGroupLevel(customer) === groupName,
+      ).length;
 
-    const confirmMsg = affectedCount > 0
-      ? `删除分组 "${groupName}" 后，其下 ${affectedCount} 个客户将移至"未分组"。确认删除？`
-      : `确认删除分组 "${groupName}"？`;
+      const confirmMsg =
+        affectedCount > 0
+          ? `删除分组 "${groupName}" 后，其下 ${affectedCount} 个客户将移至"未分组"。确认删除？`
+          : `确认删除分组 "${groupName}"？`;
 
-    const confirmed = await dialogs.confirm(confirmMsg, { title: "删除分组" });
-    if (!confirmed) return;
+      const confirmed = await dialogs.confirm(confirmMsg, { title: "删除分组" });
+      if (!confirmed) return;
 
-    // Update settings: remove from custom groups; for built-in, hide it
-    const nextSettings = { ...systemSettings };
-    if (isBuiltin) {
-      nextSettings.hiddenGroups = [...(systemSettings.hiddenGroups || []), groupName];
-    }
-    nextSettings.customerGroups = customCustomerGroups.filter(g => g !== groupName);
-    persistSystemSettings(nextSettings);
+      // Update settings: remove from custom groups; for built-in, hide it
+      const nextSettings = { ...systemSettings };
+      if (isBuiltin) {
+        nextSettings.hiddenGroups = [...(systemSettings.hiddenGroups || []), groupName];
+      }
+      nextSettings.customerGroups = customCustomerGroups.filter((g) => g !== groupName);
+      persistSystemSettings(nextSettings);
 
-    // Move affected customers to ungrouped
-    if (affectedCount > 0) {
-      const previousCustomers = customersRef.current;
-      const nextCustomers = customers.map(customer =>
-        customerGroupLevel(customer) === groupName
-          ? { ...customer, level: "" }
-          : customer
-      );
-      customersRef.current = nextCustomers;
-      setCustomers(nextCustomers);
+      // Move affected customers to ungrouped
+      if (affectedCount > 0) {
+        const previousCustomers = customersRef.current;
+        const nextCustomers = customers.map((customer) =>
+          customerGroupLevel(customer) === groupName ? { ...customer, level: "" } : customer,
+        );
+        customersRef.current = nextCustomers;
+        setCustomers(nextCustomers);
 
-      for (const customer of affectedCustomers.filter(c => customerGroupLevel(c) === groupName)) {
-        try {
-          await api.updateCustomer(customer.id, { ...customer, level: "" });
-        } catch {
-          customersRef.current = previousCustomers;
-          setCustomers(previousCustomers);
-          await dialogs.alert(`保存失败：删除分组时更新客户 "${customer.name}" 出错。`, { title: "保存失败" });
-          return;
+        for (const customer of affectedCustomers.filter(
+          (c) => customerGroupLevel(c) === groupName,
+        )) {
+          try {
+            await api.updateCustomer(customer.id, { ...customer, level: "" });
+          } catch {
+            customersRef.current = previousCustomers;
+            setCustomers(previousCustomers);
+            await dialogs.alert(`保存失败：删除分组时更新客户 "${customer.name}" 出错。`, {
+              title: "保存失败",
+            });
+            return;
+          }
         }
       }
-    }
-  }, [customerLevelOptions, customCustomerGroups, customers, dialogs, persistSystemSettings, systemSettings]);
+    },
+    [
+      customerLevelOptions,
+      customCustomerGroups,
+      customers,
+      dialogs,
+      persistSystemSettings,
+      systemSettings,
+    ],
+  );
 
   const alertMap = useMemo(() => {
     const map = {};
@@ -1825,7 +2111,10 @@ function App() {
       for (const order of customer.orders || []) {
         if (!isOpenOrder(order.status) || !order.dueDate) continue;
         const dueTs = new Date(order.dueDate).setHours(0, 0, 0, 0);
-        if (dueTs < todayTs) { severity = "danger"; break; }
+        if (dueTs < todayTs) {
+          severity = "danger";
+          break;
+        }
         if (dueTs <= warnTs && severity !== "danger") severity = "warning";
       }
       if (severity) map[customer.id] = severity;
@@ -1835,7 +2124,9 @@ function App() {
 
   const metrics = useMemo(() => {
     const allOrders = customers.flatMap((customer) => customer.orders || []);
-    const allDeliveries = customers.flatMap((customer) => customer.deliveries || []).filter(isFinalDelivery);
+    const allDeliveries = customers
+      .flatMap((customer) => customer.deliveries || [])
+      .filter(isFinalDelivery);
     const activeOrders = allOrders.filter((order) => isOpenOrder(order.status));
     const amount = allOrders.reduce((sum, order) => sum + Number(order.amount || 0), 0);
     return [
@@ -1869,36 +2160,62 @@ function App() {
     const results = [];
     for (const customer of customers) {
       if (customer.name.toLowerCase().includes(q) || customer.contact?.toLowerCase().includes(q)) {
-        results.push({ type: "customer", customerId: customer.id, customerName: customer.name, label: `${t("客户")} · ${customer.name}`, detail: customer.contact || "" });
+        results.push({
+          type: "customer",
+          customerId: customer.id,
+          customerName: customer.name,
+          label: `${t("客户")} · ${customer.name}`,
+          detail: customer.contact || "",
+        });
       }
       for (const order of customer.orders || []) {
-        if ((order.orderNo || "").toLowerCase().includes(q) || (order.product || "").toLowerCase().includes(q)) {
-          results.push({ type: "order", customerId: customer.id, customerName: customer.name, label: `${t("订单")} · ${order.orderNo || order.product}`, detail: `${order.product || ""} · ${t(normalizeOrderStatus(order.status))}`, orderId: order.id });
+        if (
+          (order.orderNo || "").toLowerCase().includes(q) ||
+          (order.product || "").toLowerCase().includes(q)
+        ) {
+          results.push({
+            type: "order",
+            customerId: customer.id,
+            customerName: customer.name,
+            label: `${t("订单")} · ${order.orderNo || order.product}`,
+            detail: `${order.product || ""} · ${t(normalizeOrderStatus(order.status))}`,
+            orderId: order.id,
+          });
         }
       }
       for (const delivery of customer.deliveries || []) {
         if ((delivery.deliveryNo || "").toLowerCase().includes(q)) {
-          results.push({ type: "delivery", customerId: customer.id, customerName: customer.name, label: `${t("送货单")} · ${delivery.deliveryNo}`, detail: t(normalizeFinalDeliveryStatus(delivery.status)), deliveryId: delivery.id });
+          results.push({
+            type: "delivery",
+            customerId: customer.id,
+            customerName: customer.name,
+            label: `${t("送货单")} · ${delivery.deliveryNo}`,
+            detail: t(normalizeFinalDeliveryStatus(delivery.status)),
+            deliveryId: delivery.id,
+          });
         }
       }
     }
     return results.slice(0, 20);
   }, [customers, globalSearchQuery, t]);
 
-  const navigateToSearchResult = useCallback((result) => {
-    // 保存当前客户的上下文
-    if (selectedCustomerId) {
-      lastTableByCustomerRef.current[selectedCustomerId] = activeTable;
-    }
-    // 恢复目标客户的上下文
-    const lastTable = lastTableByCustomerRef.current[result.customerId];
-    setSelectedCustomerId(result.customerId);
-    if (lastTable) setActiveTable(lastTable);
-    if (result.type === "delivery") setActiveTable("finalDeliveries");
-    else if (result.type === "order") setActiveTable("orders");
-    setGlobalSearchQuery("");
-    setShowGlobalSearchResults(false);
-  }, [activeTable, selectedCustomerId]);
+  const navigateToSearchResult = useCallback(
+    (result) => {
+      // 保存当前客户的上下文
+      if (selectedCustomerId) {
+        lastTableByCustomerRef.current[selectedCustomerId] = activeTable;
+      }
+      // 恢复目标客户的上下文
+      const lastTable = lastTableByCustomerRef.current[result.customerId];
+      setSelectedCustomerId(result.customerId);
+      if (lastTable) setActiveTable(lastTable);
+      if (result.type === "delivery") setActiveTable("finalDeliveries");
+      else if (result.type === "order") setActiveTable("orders");
+      setGlobalSearchQuery("");
+      setShowGlobalSearchResults(false);
+    },
+    [activeTable, selectedCustomerId],
+  );
 
   const updateSelectedCustomer = (updater) => {
     setCustomers((current) =>
@@ -1909,7 +2226,9 @@ function App() {
   };
 
   const handleRowsChange = async (tableKey, rows, options = {}) => {
-    const currentCustomer = customersRef.current.find(customer => customer.id === selectedCustomerId) || selectedCustomer;
+    const currentCustomer =
+      customersRef.current.find((customer) => customer.id === selectedCustomerId) ||
+      selectedCustomer;
     const calculatedRows = applyCustomerTableFormulas(
       currentCustomer,
       tableKey,
@@ -1917,13 +2236,20 @@ function App() {
       currentCustomer?.customColumns,
       options.formulaRowIds,
     );
-    let safeRows = ensureUniqueRowIds(calculatedRows, tableKey, customersRef.current, selectedCustomerId);
+    let safeRows = ensureUniqueRowIds(
+      calculatedRows,
+      tableKey,
+      customersRef.current,
+      selectedCustomerId,
+    );
     if (tableKey === "deliveries") {
       safeRows = normalizeDeliveryRows(safeRows);
       const protectedRows = protectSignedDeliveries(currentCustomer?.deliveries || [], safeRows);
       safeRows = protectedRows.rows;
       if (protectedRows.blocked) {
-        await dialogs.alert("已签收的送货单已锁定。如需修改，请先作废原送货单并重新开单。", { title: "送货单已锁定" });
+        await dialogs.alert("已签收的送货单已锁定。如需修改，请先作废原送货单并重新开单。", {
+          title: "送货单已锁定",
+        });
       }
     }
     if (tableKey === "materialCosts") {
@@ -1931,14 +2257,18 @@ function App() {
     }
     if (tableKey === "payments") {
       const nextStatements = applyPaymentsToStatements(currentCustomer?.statements || [], safeRows);
-      const statementsChanged = nextStatements.some((row, index) => row !== (currentCustomer?.statements || [])[index]);
-      updateSelectedCustomer(c => ({
+      const statementsChanged = nextStatements.some(
+        (row, index) => row !== (currentCustomer?.statements || [])[index],
+      );
+      updateSelectedCustomer((c) => ({
         ...c,
         payments: safeRows,
         ...(statementsChanged ? { statements: nextStatements } : {}),
       }));
       const paymentRevision = nextRowSaveRevision(selectedCustomerId, "payments");
-      const statementRevision = statementsChanged ? nextRowSaveRevision(selectedCustomerId, "statements") : null;
+      const statementRevision = statementsChanged
+        ? nextRowSaveRevision(selectedCustomerId, "statements")
+        : null;
       try {
         const [paymentResult, statementResult] = await Promise.all([
           saveRowsQueued(selectedCustomerId, "payments", safeRows),
@@ -1946,11 +2276,17 @@ function App() {
             ? saveRowsQueued(selectedCustomerId, "statements", nextStatements)
             : Promise.resolve(null),
         ]);
-        if (paymentResult?.rows && isLatestRowSaveRevision(selectedCustomerId, "payments", paymentRevision)) {
-          updateSelectedCustomer(c => ({ ...c, payments: paymentResult.rows }));
+        if (
+          paymentResult?.rows &&
+          isLatestRowSaveRevision(selectedCustomerId, "payments", paymentRevision)
+        ) {
+          updateSelectedCustomer((c) => ({ ...c, payments: paymentResult.rows }));
         }
-        if (statementResult?.rows && isLatestRowSaveRevision(selectedCustomerId, "statements", statementRevision)) {
-          updateSelectedCustomer(c => ({ ...c, statements: statementResult.rows }));
+        if (
+          statementResult?.rows &&
+          isLatestRowSaveRevision(selectedCustomerId, "statements", statementRevision)
+        ) {
+          updateSelectedCustomer((c) => ({ ...c, statements: statementResult.rows }));
         }
       } catch (err) {
         await dialogs.alert(`保存失败：${err.message}`, { title: "保存失败" });
@@ -1961,11 +2297,14 @@ function App() {
       const currentOrders = currentCustomer?.orders || [];
       const overDeliveryIssues = findEffectiveDeliveryOverages(currentOrders, safeRows);
       if (overDeliveryIssues.length) {
-        updateSelectedCustomer(c => ({
+        updateSelectedCustomer((c) => ({
           ...c,
           deliveries: normalizeDeliveryRows(currentCustomer?.deliveries || []),
         }));
-        await dialogs.alert(formatOverDeliveryMessage(overDeliveryIssues, t), { title: "送货数量超出订单数量", tone: "danger" });
+        await dialogs.alert(formatOverDeliveryMessage(overDeliveryIssues, t), {
+          title: "送货数量超出订单数量",
+          tone: "danger",
+        });
         return;
       }
 
@@ -1976,14 +2315,16 @@ function App() {
       );
       const ordersChanged = nextOrders.some((row, index) => row !== currentOrders[index]);
 
-      updateSelectedCustomer(c => ({
+      updateSelectedCustomer((c) => ({
         ...c,
         deliveries: safeRows,
         ...(ordersChanged ? { orders: nextOrders } : {}),
       }));
 
       const deliveryRevision = nextRowSaveRevision(selectedCustomerId, "deliveries");
-      const orderRevision = ordersChanged ? nextRowSaveRevision(selectedCustomerId, "orders") : null;
+      const orderRevision = ordersChanged
+        ? nextRowSaveRevision(selectedCustomerId, "orders")
+        : null;
       try {
         const [deliveryResult, orderResult] = await Promise.all([
           saveRowsQueued(selectedCustomerId, "deliveries", safeRows),
@@ -1991,11 +2332,17 @@ function App() {
             ? saveRowsQueued(selectedCustomerId, "orders", nextOrders)
             : Promise.resolve(null),
         ]);
-        if (deliveryResult?.rows && isLatestRowSaveRevision(selectedCustomerId, "deliveries", deliveryRevision)) {
-          updateSelectedCustomer(c => ({ ...c, deliveries: deliveryResult.rows }));
+        if (
+          deliveryResult?.rows &&
+          isLatestRowSaveRevision(selectedCustomerId, "deliveries", deliveryRevision)
+        ) {
+          updateSelectedCustomer((c) => ({ ...c, deliveries: deliveryResult.rows }));
         }
-        if (orderResult?.rows && isLatestRowSaveRevision(selectedCustomerId, "orders", orderRevision)) {
-          updateSelectedCustomer(c => ({ ...c, orders: orderResult.rows }));
+        if (
+          orderResult?.rows &&
+          isLatestRowSaveRevision(selectedCustomerId, "orders", orderRevision)
+        ) {
+          updateSelectedCustomer((c) => ({ ...c, orders: orderResult.rows }));
         }
       } catch (err) {
         await dialogs.alert(`保存失败：${err.message}`, { title: "保存失败" });
@@ -2003,12 +2350,12 @@ function App() {
       return;
     }
 
-    updateSelectedCustomer(c => ({ ...c, [tableKey]: safeRows }));
+    updateSelectedCustomer((c) => ({ ...c, [tableKey]: safeRows }));
     const revision = nextRowSaveRevision(selectedCustomerId, tableKey);
     try {
       const result = await saveRowsQueued(selectedCustomerId, tableKey, safeRows);
       if (result?.rows && isLatestRowSaveRevision(selectedCustomerId, tableKey, revision)) {
-        updateSelectedCustomer(c => ({ ...c, [tableKey]: result.rows }));
+        updateSelectedCustomer((c) => ({ ...c, [tableKey]: result.rows }));
       }
     } catch (err) {
       await dialogs.alert(`保存失败：${err.message}`, { title: "保存失败" });
@@ -2018,17 +2365,23 @@ function App() {
   const addRow = async (tableKey) => {
     pushUndoSnapshot();
     const config = tableConfigs[tableKey];
-    const currentCustomer = customersRef.current.find(customer => customer.id === selectedCustomerId) || selectedCustomer;
+    const currentCustomer =
+      customersRef.current.find((customer) => customer.id === selectedCustomerId) ||
+      selectedCustomer;
 
     // 订单号自动生成
-    const generatedOrderNo = tableKey === "orders" && systemSettings.orderNoPrefix
-      ? `${systemSettings.orderNoPrefix}${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${String((currentCustomer?.orders?.length || 0) + 1).padStart(3, "0")}`
-      : "";
+    const generatedOrderNo =
+      tableKey === "orders" && systemSettings.orderNoPrefix
+        ? `${systemSettings.orderNoPrefix}${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${String((currentCustomer?.orders?.length || 0) + 1).padStart(3, "0")}`
+        : "";
 
     // 默认交期 = 今天 + 默认天数
-    const defaultDueDate = tableKey === "orders" && systemSettings.defaultDueDays
-      ? new Date(Date.now() + Number(systemSettings.defaultDueDays) * 86400000).toISOString().slice(0, 10)
-      : "";
+    const defaultDueDate =
+      tableKey === "orders" && systemSettings.defaultDueDays
+        ? new Date(Date.now() + Number(systemSettings.defaultDueDays) * 86400000)
+            .toISOString()
+            .slice(0, 10)
+        : "";
 
     const newRow = {
       id: makeId(tableKey),
@@ -2037,7 +2390,9 @@ function App() {
       orderNo: generatedOrderNo || "",
       dueDate: defaultDueDate || "",
       status: tableKey === "orders" ? "未完成" : config.emptyRow.status || "",
-      createdAt: ["statements", "payments"].includes(tableKey) ? new Date().toISOString() : config.emptyRow.createdAt || "",
+      createdAt: ["statements", "payments"].includes(tableKey)
+        ? new Date().toISOString()
+        : config.emptyRow.createdAt || "",
     };
     let newRows = ensureUniqueRowIds(
       applyCustomerTableFormulas(
@@ -2054,12 +2409,12 @@ function App() {
     if (tableKey === "deliveries") {
       newRows = normalizeDeliveryRows(newRows);
     }
-    updateSelectedCustomer(c => ({ ...c, [tableKey]: newRows }));
+    updateSelectedCustomer((c) => ({ ...c, [tableKey]: newRows }));
     const revision = nextRowSaveRevision(selectedCustomerId, tableKey);
     try {
       const result = await saveRowsQueued(selectedCustomerId, tableKey, newRows);
       if (result?.rows && isLatestRowSaveRevision(selectedCustomerId, tableKey, revision)) {
-        updateSelectedCustomer(c => ({ ...c, [tableKey]: result.rows }));
+        updateSelectedCustomer((c) => ({ ...c, [tableKey]: result.rows }));
       }
     } catch (err) {
       await dialogs.alert(`保存失败：${err.message}`, { title: "保存失败" });
@@ -2068,9 +2423,11 @@ function App() {
 
   const deleteRows = async (tableKey, ids) => {
     pushUndoSnapshot();
-    const currentCustomer = customersRef.current.find(customer => customer.id === selectedCustomerId) || selectedCustomer;
+    const currentCustomer =
+      customersRef.current.find((customer) => customer.id === selectedCustomerId) ||
+      selectedCustomer;
     let nextRows = ensureUniqueRowIds(
-      (currentCustomer?.[tableKey] || []).filter(r => !ids.includes(r.id)),
+      (currentCustomer?.[tableKey] || []).filter((r) => !ids.includes(r.id)),
       tableKey,
       customersRef.current,
       selectedCustomerId,
@@ -2087,14 +2444,16 @@ function App() {
       );
       const ordersChanged = nextOrders.some((row, index) => row !== currentOrders[index]);
 
-      updateSelectedCustomer(c => ({
+      updateSelectedCustomer((c) => ({
         ...c,
         deliveries: nextRows,
         ...(ordersChanged ? { orders: nextOrders } : {}),
       }));
 
       const deliveryRevision = nextRowSaveRevision(selectedCustomerId, "deliveries");
-      const orderRevision = ordersChanged ? nextRowSaveRevision(selectedCustomerId, "orders") : null;
+      const orderRevision = ordersChanged
+        ? nextRowSaveRevision(selectedCustomerId, "orders")
+        : null;
       try {
         const [deliveryResult, orderResult] = await Promise.all([
           saveRowsQueued(selectedCustomerId, "deliveries", nextRows),
@@ -2102,11 +2461,17 @@ function App() {
             ? saveRowsQueued(selectedCustomerId, "orders", nextOrders)
             : Promise.resolve(null),
         ]);
-        if (deliveryResult?.rows && isLatestRowSaveRevision(selectedCustomerId, "deliveries", deliveryRevision)) {
-          updateSelectedCustomer(c => ({ ...c, deliveries: deliveryResult.rows }));
+        if (
+          deliveryResult?.rows &&
+          isLatestRowSaveRevision(selectedCustomerId, "deliveries", deliveryRevision)
+        ) {
+          updateSelectedCustomer((c) => ({ ...c, deliveries: deliveryResult.rows }));
         }
-        if (orderResult?.rows && isLatestRowSaveRevision(selectedCustomerId, "orders", orderRevision)) {
-          updateSelectedCustomer(c => ({ ...c, orders: orderResult.rows }));
+        if (
+          orderResult?.rows &&
+          isLatestRowSaveRevision(selectedCustomerId, "orders", orderRevision)
+        ) {
+          updateSelectedCustomer((c) => ({ ...c, orders: orderResult.rows }));
         }
       } catch (err) {
         await dialogs.alert(`删除失败：${err.message}`, { title: "删除失败" });
@@ -2114,7 +2479,7 @@ function App() {
       return;
     }
 
-    updateSelectedCustomer(c => ({
+    updateSelectedCustomer((c) => ({
       ...c,
       [tableKey]: nextRows,
     }));
@@ -2122,7 +2487,7 @@ function App() {
     try {
       const result = await saveRowsQueued(selectedCustomerId, tableKey, nextRows);
       if (result?.rows && isLatestRowSaveRevision(selectedCustomerId, tableKey, revision)) {
-        updateSelectedCustomer(c => ({ ...c, [tableKey]: result.rows }));
+        updateSelectedCustomer((c) => ({ ...c, [tableKey]: result.rows }));
       }
     } catch (err) {
       await dialogs.alert(`删除失败：${err.message}`, { title: "删除失败" });
@@ -2131,7 +2496,9 @@ function App() {
 
   const addCustomColumn = async (tableKey, column) => {
     pushUndoSnapshot();
-    const currentCustomer = customersRef.current.find(customer => customer.id === selectedCustomerId) || selectedCustomer;
+    const currentCustomer =
+      customersRef.current.find((customer) => customer.id === selectedCustomerId) ||
+      selectedCustomer;
     const normalizedColumn = {
       ...column,
       type: normalizeFormulaInput(column.formula) ? "number" : column.type,
@@ -2147,19 +2514,25 @@ function App() {
       currentCustomer[tableKey] || [],
       newCustomColumns,
     );
-    updateSelectedCustomer(c => ({ ...c, [tableKey]: nextRows, customColumns: newCustomColumns }));
-    const revision = nextRows !== (currentCustomer[tableKey] || [])
-      ? nextRowSaveRevision(selectedCustomerId, tableKey)
-      : null;
+    updateSelectedCustomer((c) => ({
+      ...c,
+      [tableKey]: nextRows,
+      customColumns: newCustomColumns,
+    }));
+    const revision =
+      nextRows !== (currentCustomer[tableKey] || [])
+        ? nextRowSaveRevision(selectedCustomerId, tableKey)
+        : null;
     try {
       const [, rowsResult] = await Promise.all([
-        api.updateCustomer(selectedCustomerId, { ...currentCustomer, customColumns: newCustomColumns }),
-        revision
-          ? saveRowsQueued(selectedCustomerId, tableKey, nextRows)
-          : Promise.resolve(null),
+        api.updateCustomer(selectedCustomerId, {
+          ...currentCustomer,
+          customColumns: newCustomColumns,
+        }),
+        revision ? saveRowsQueued(selectedCustomerId, tableKey, nextRows) : Promise.resolve(null),
       ]);
       if (rowsResult?.rows && isLatestRowSaveRevision(selectedCustomerId, tableKey, revision)) {
-        updateSelectedCustomer(c => ({ ...c, [tableKey]: rowsResult.rows }));
+        updateSelectedCustomer((c) => ({ ...c, [tableKey]: rowsResult.rows }));
       }
     } catch (err) {
       await dialogs.alert(`保存失败：${err.message}`, { title: "保存失败" });
@@ -2167,14 +2540,16 @@ function App() {
   };
 
   const updateCustomColumn = async (tableKey, field, patch) => {
-    const currentCustomer = customersRef.current.find(customer => customer.id === selectedCustomerId) || selectedCustomer;
+    const currentCustomer =
+      customersRef.current.find((customer) => customer.id === selectedCustomerId) ||
+      selectedCustomer;
     const existingColumns = currentCustomer.customColumns?.[tableKey] || [];
-    if (!existingColumns.some(column => column.field === field)) return;
+    if (!existingColumns.some((column) => column.field === field)) return;
 
     pushUndoSnapshot();
     const newCustomColumns = {
       ...currentCustomer.customColumns,
-      [tableKey]: existingColumns.map(column => {
+      [tableKey]: existingColumns.map((column) => {
         if (column.field !== field) return column;
         const next = { ...column, ...patch };
         const formula = normalizeFormulaInput(next.formula);
@@ -2192,15 +2567,22 @@ function App() {
       newCustomColumns,
     );
 
-    updateSelectedCustomer(c => ({ ...c, [tableKey]: nextRows, customColumns: newCustomColumns }));
+    updateSelectedCustomer((c) => ({
+      ...c,
+      [tableKey]: nextRows,
+      customColumns: newCustomColumns,
+    }));
     const revision = nextRowSaveRevision(selectedCustomerId, tableKey);
     try {
       const [, rowsResult] = await Promise.all([
-        api.updateCustomer(selectedCustomerId, { ...currentCustomer, customColumns: newCustomColumns }),
+        api.updateCustomer(selectedCustomerId, {
+          ...currentCustomer,
+          customColumns: newCustomColumns,
+        }),
         saveRowsQueued(selectedCustomerId, tableKey, nextRows),
       ]);
       if (rowsResult?.rows && isLatestRowSaveRevision(selectedCustomerId, tableKey, revision)) {
-        updateSelectedCustomer(c => ({ ...c, [tableKey]: rowsResult.rows }));
+        updateSelectedCustomer((c) => ({ ...c, [tableKey]: rowsResult.rows }));
       }
     } catch (err) {
       await dialogs.alert(`保存失败：${err.message}`, { title: "保存失败" });
@@ -2212,8 +2594,10 @@ function App() {
     if (!fieldsToRemove.size) return;
 
     pushUndoSnapshot();
-    const currentCustomer = customersRef.current.find(customer => customer.id === selectedCustomerId) || selectedCustomer;
-    const cleanedRows = (currentCustomer[tableKey] || []).map(row => {
+    const currentCustomer =
+      customersRef.current.find((customer) => customer.id === selectedCustomerId) ||
+      selectedCustomer;
+    const cleanedRows = (currentCustomer[tableKey] || []).map((row) => {
       let next = row;
       for (const field of fieldsToRemove) {
         if (!(field in next)) continue;
@@ -2224,15 +2608,23 @@ function App() {
     });
     const newCustomColumns = {
       ...currentCustomer.customColumns,
-      [tableKey]: (currentCustomer.customColumns?.[tableKey] || []).filter(c => !fieldsToRemove.has(c.field)),
+      [tableKey]: (currentCustomer.customColumns?.[tableKey] || []).filter(
+        (c) => !fieldsToRemove.has(c.field),
+      ),
       columnOrder: {
         ...(currentCustomer.customColumns?.columnOrder || {}),
-        [tableKey]: (currentCustomer.customColumns?.columnOrder?.[tableKey] || [])
-          .filter(field => !fieldsToRemove.has(field)),
+        [tableKey]: (currentCustomer.customColumns?.columnOrder?.[tableKey] || []).filter(
+          (field) => !fieldsToRemove.has(field),
+        ),
       },
     };
     let safeRows = ensureUniqueRowIds(
-      applyCustomerTableFormulas({ ...currentCustomer, customColumns: newCustomColumns }, tableKey, cleanedRows, newCustomColumns),
+      applyCustomerTableFormulas(
+        { ...currentCustomer, customColumns: newCustomColumns },
+        tableKey,
+        cleanedRows,
+        newCustomColumns,
+      ),
       tableKey,
       customersRef.current,
       selectedCustomerId,
@@ -2240,15 +2632,22 @@ function App() {
     if (tableKey === "deliveries") {
       safeRows = normalizeDeliveryRows(safeRows);
     }
-    updateSelectedCustomer(c => ({ ...c, [tableKey]: safeRows, customColumns: newCustomColumns }));
+    updateSelectedCustomer((c) => ({
+      ...c,
+      [tableKey]: safeRows,
+      customColumns: newCustomColumns,
+    }));
     const revision = nextRowSaveRevision(selectedCustomerId, tableKey);
     try {
       const [, rowsResult] = await Promise.all([
-        api.updateCustomer(selectedCustomerId, { ...currentCustomer, customColumns: newCustomColumns }),
+        api.updateCustomer(selectedCustomerId, {
+          ...currentCustomer,
+          customColumns: newCustomColumns,
+        }),
         saveRowsQueued(selectedCustomerId, tableKey, safeRows),
       ]);
       if (rowsResult?.rows && isLatestRowSaveRevision(selectedCustomerId, tableKey, revision)) {
-        updateSelectedCustomer(c => ({ ...c, [tableKey]: rowsResult.rows }));
+        updateSelectedCustomer((c) => ({ ...c, [tableKey]: rowsResult.rows }));
       }
     } catch (err) {
       await dialogs.alert(`保存失败：${err.message}`, { title: "保存失败" });
@@ -2261,36 +2660,52 @@ function App() {
 
   const handleCreateStatement = async () => {
     if (!selectedCustomer) return;
-    const currentCustomer = customersRef.current.find(customer => customer.id === selectedCustomerId) || selectedCustomer;
+    const currentCustomer =
+      customersRef.current.find((customer) => customer.id === selectedCustomerId) ||
+      selectedCustomer;
     const statement = buildStatementFromSignedDeliveries(currentCustomer);
     if (!statement) {
-      await dialogs.alert("没有可生成对账单的已签收送货单，或已签收送货单已经生成过对账单。", { title: "生成对账单" });
+      await dialogs.alert("没有可生成对账单的已签收送货单，或已签收送货单已经生成过对账单。", {
+        title: "生成对账单",
+      });
       return;
     }
     const nextStatements = [statement, ...(currentCustomer.statements || [])];
     const deliveryIds = new Set(statement.deliveryIds || []);
-    const nextDeliveries = (currentCustomer.deliveries || []).map(delivery => (
+    const nextDeliveries = (currentCustomer.deliveries || []).map((delivery) =>
       deliveryIds.has(delivery.id)
-        ? { ...delivery, statementNo: statement.statementNo, reconciledAt: new Date().toISOString() }
-        : delivery
-    ));
-    const nextOrders = (currentCustomer.orders || []).map(order => {
-      const linked = nextDeliveries.some(delivery => (
-        deliveryIds.has(delivery.id) && delivery[linkedOrderIdField] === order.id
-      ));
+        ? {
+            ...delivery,
+            statementNo: statement.statementNo,
+            reconciledAt: new Date().toISOString(),
+          }
+        : delivery,
+    );
+    const nextOrders = (currentCustomer.orders || []).map((order) => {
+      const linked = nextDeliveries.some(
+        (delivery) => deliveryIds.has(delivery.id) && delivery[linkedOrderIdField] === order.id,
+      );
       return linked && normalizeOrderStatus(order.status) === "已送货"
         ? {
-          ...order,
-          status: "已开对账单",
-          statementNo: statement.statementNo,
-          statusChangedAt: new Date().toISOString(),
-          statusChangeLog: appendAuditLog(order.statusChangeLog, `生成对账单：${statement.statementNo}`),
-        }
+            ...order,
+            status: "已开对账单",
+            statementNo: statement.statementNo,
+            statusChangedAt: new Date().toISOString(),
+            statusChangeLog: appendAuditLog(
+              order.statusChangeLog,
+              `生成对账单：${statement.statementNo}`,
+            ),
+          }
         : order;
     });
 
     pushUndoSnapshot();
-    updateSelectedCustomer(c => ({ ...c, statements: nextStatements, deliveries: nextDeliveries, orders: nextOrders }));
+    updateSelectedCustomer((c) => ({
+      ...c,
+      statements: nextStatements,
+      deliveries: nextDeliveries,
+      orders: nextOrders,
+    }));
     setActiveTable("statements");
     const statementRevision = nextRowSaveRevision(selectedCustomerId, "statements");
     const deliveryRevision = nextRowSaveRevision(selectedCustomerId, "deliveries");
@@ -2301,14 +2716,23 @@ function App() {
         saveRowsQueued(selectedCustomerId, "deliveries", nextDeliveries),
         saveRowsQueued(selectedCustomerId, "orders", nextOrders),
       ]);
-      if (statementResult?.rows && isLatestRowSaveRevision(selectedCustomerId, "statements", statementRevision)) {
-        updateSelectedCustomer(c => ({ ...c, statements: statementResult.rows }));
+      if (
+        statementResult?.rows &&
+        isLatestRowSaveRevision(selectedCustomerId, "statements", statementRevision)
+      ) {
+        updateSelectedCustomer((c) => ({ ...c, statements: statementResult.rows }));
       }
-      if (deliveryResult?.rows && isLatestRowSaveRevision(selectedCustomerId, "deliveries", deliveryRevision)) {
-        updateSelectedCustomer(c => ({ ...c, deliveries: deliveryResult.rows }));
+      if (
+        deliveryResult?.rows &&
+        isLatestRowSaveRevision(selectedCustomerId, "deliveries", deliveryRevision)
+      ) {
+        updateSelectedCustomer((c) => ({ ...c, deliveries: deliveryResult.rows }));
       }
-      if (orderResult?.rows && isLatestRowSaveRevision(selectedCustomerId, "orders", orderRevision)) {
-        updateSelectedCustomer(c => ({ ...c, orders: orderResult.rows }));
+      if (
+        orderResult?.rows &&
+        isLatestRowSaveRevision(selectedCustomerId, "orders", orderRevision)
+      ) {
+        updateSelectedCustomer((c) => ({ ...c, orders: orderResult.rows }));
       }
     } catch (err) {
       await dialogs.alert(`生成失败：${err.message}`, { title: "生成对账单" });
@@ -2318,8 +2742,8 @@ function App() {
   const upsertCustomer = async (customerInput) => {
     pushUndoSnapshot();
     if (customerInput.id) {
-      setCustomers(current =>
-        current.map(c => c.id === customerInput.id ? { ...c, ...customerInput } : c),
+      setCustomers((current) =>
+        current.map((c) => (c.id === customerInput.id ? { ...c, ...customerInput } : c)),
       );
       try {
         await api.updateCustomer(customerInput.id, customerInput);
@@ -2338,7 +2762,15 @@ function App() {
       paymentTerm: customerInput.paymentTerm,
       taxNo: customerInput.taxNo,
       note: customerInput.note,
-      customColumns: { products: [], orders: [], deliveries: [], materialCosts: [], costEntries: [], statements: [], payments: [] },
+      customColumns: {
+        products: [],
+        orders: [],
+        deliveries: [],
+        materialCosts: [],
+        costEntries: [],
+        statements: [],
+        payments: [],
+      },
       products: [],
       orders: [],
       deliveries: [],
@@ -2347,7 +2779,7 @@ function App() {
       statements: [],
       payments: [],
     };
-    setCustomers(current => [newCustomer, ...current]);
+    setCustomers((current) => [newCustomer, ...current]);
     setSelectedCustomerId(newCustomer.id);
     try {
       await api.createCustomer(newCustomer);
@@ -2358,35 +2790,43 @@ function App() {
 
   const handleOrderImport = async (rows, extraColumns = []) => {
     pushUndoSnapshot();
-    const currentCustomer = customersRef.current.find(customer => customer.id === selectedCustomerId) || selectedCustomer;
+    const currentCustomer =
+      customersRef.current.find((customer) => customer.id === selectedCustomerId) ||
+      selectedCustomer;
     const existingColumns = currentCustomer.customColumns?.orders || [];
     const existingFields = new Set([
-      ...tableConfigs.orders.defaultColumns.map(column => column.field),
-      ...existingColumns.map(column => column.field),
+      ...tableConfigs.orders.defaultColumns.map((column) => column.field),
+      ...existingColumns.map((column) => column.field),
     ]);
-    const newExtraColumns = extraColumns.filter(column => !existingFields.has(column.field));
+    const newExtraColumns = extraColumns.filter((column) => !existingFields.has(column.field));
     const customColumns = {
       ...currentCustomer.customColumns,
       orders: [...existingColumns, ...newExtraColumns],
     };
     const rawRows = [
       ...(currentCustomer.orders || []),
-      ...rows.map(row => ({
+      ...rows.map((row) => ({
         ...tableConfigs.orders.emptyRow,
         id: makeId("orders"),
         ...row,
         status: normalizeOrderStatus(row.status || tableConfigs.orders.emptyRow.status),
       })),
     ];
-    const importedRowIds = rawRows.slice(currentCustomer.orders?.length || 0).map(row => row.id);
+    const importedRowIds = rawRows.slice(currentCustomer.orders?.length || 0).map((row) => row.id);
     const newRows = ensureUniqueRowIds(
-      applyCustomerTableFormulas({ ...currentCustomer, customColumns }, "orders", rawRows, customColumns, importedRowIds),
+      applyCustomerTableFormulas(
+        { ...currentCustomer, customColumns },
+        "orders",
+        rawRows,
+        customColumns,
+        importedRowIds,
+      ),
       "orders",
       customersRef.current,
       selectedCustomerId,
     );
 
-    updateSelectedCustomer(c => ({ ...c, orders: newRows, customColumns }));
+    updateSelectedCustomer((c) => ({ ...c, orders: newRows, customColumns }));
     const revision = nextRowSaveRevision(selectedCustomerId, "orders");
     try {
       const [, rowsResult] = await Promise.all([
@@ -2396,7 +2836,7 @@ function App() {
         saveRowsQueued(selectedCustomerId, "orders", newRows),
       ]);
       if (rowsResult?.rows && isLatestRowSaveRevision(selectedCustomerId, "orders", revision)) {
-        updateSelectedCustomer(c => ({ ...c, orders: rowsResult.rows }));
+        updateSelectedCustomer((c) => ({ ...c, orders: rowsResult.rows }));
       }
     } catch (err) {
       await dialogs.alert(`保存失败：${err.message}`, { title: "保存失败" });
@@ -2406,22 +2846,30 @@ function App() {
   const handleScheduleOrders = async (orderIds) => {
     if (!selectedCustomer || !orderIds?.length) return false;
 
-    const currentCustomer = customersRef.current.find(customer => customer.id === selectedCustomerId) || selectedCustomer;
-    const orderById = new Map((currentCustomer.orders || []).map(order => [order.id, order]));
-    const selectedOrders = orderIds.map(id => orderById.get(id)).filter(Boolean);
+    const currentCustomer =
+      customersRef.current.find((customer) => customer.id === selectedCustomerId) ||
+      selectedCustomer;
+    const orderById = new Map((currentCustomer.orders || []).map((order) => [order.id, order]));
+    const selectedOrders = orderIds.map((id) => orderById.get(id)).filter(Boolean);
 
     if (!selectedOrders.length) {
       await dialogs.alert("没有找到可排产的订单行。", { title: "排产" });
       return false;
     }
 
-    const closedOrders = selectedOrders.filter(order => !isOpenOrder(order.status));
+    const closedOrders = selectedOrders.filter((order) => !isOpenOrder(order.status));
     if (closedOrders.length) {
       const orderNos = closedOrders
-        .map(order => order.orderNo || order.product || order.id)
+        .map((order) => order.orderNo || order.product || order.id)
         .slice(0, 5)
         .join("、");
-      await dialogs.alert(t("已完成、已开送货单、部分送货、已送货、已开对账单、已付款或异常的订单不能再排产。\n请先处理：{orders}", { orders: orderNos }), { title: "排产" });
+      await dialogs.alert(
+        t(
+          "已完成、已开送货单、部分送货、已送货、已开对账单、已付款或异常的订单不能再排产。\n请先处理：{orders}",
+          { orders: orderNos },
+        ),
+        { title: "排产" },
+      );
       return false;
     }
 
@@ -2432,14 +2880,18 @@ function App() {
   const saveProductionSchedule = async (schedule) => {
     if (!selectedCustomer || !productionScheduleOrders.length) return;
 
-    const currentCustomer = customersRef.current.find(customer => customer.id === selectedCustomerId) || selectedCustomer;
-    const orderIds = new Set(productionScheduleOrders.map(order => order.id));
+    const currentCustomer =
+      customersRef.current.find((customer) => customer.id === selectedCustomerId) ||
+      selectedCustomer;
+    const orderIds = new Set(productionScheduleOrders.map((order) => order.id));
     const customColumns = ensureProductionScheduleColumns(currentCustomer.customColumns || {});
     const hasSharedQuantity = String(schedule.quantity || "").trim() !== "";
     const sharedQuantity = parseNumericValue(schedule.quantity);
-    const nextStatus = productionScheduleStatusOptions.includes(schedule.status) ? schedule.status : "已排产";
+    const nextStatus = productionScheduleStatusOptions.includes(schedule.status)
+      ? schedule.status
+      : "已排产";
 
-    const rawRows = (currentCustomer.orders || []).map(order => {
+    const rawRows = (currentCustomer.orders || []).map((order) => {
       if (!orderIds.has(order.id)) return order;
       const quantity = hasSharedQuantity
         ? sharedQuantity
@@ -2467,13 +2919,15 @@ function App() {
     );
 
     pushUndoSnapshot();
-    updateSelectedCustomer(c => ({
+    updateSelectedCustomer((c) => ({
       ...c,
       orders: nextRows,
       customColumns,
     }));
     setProductionScheduleOrders([]);
-    setActiveTable(activeTableRef.current === "productionSchedule" ? "productionSchedule" : "orders");
+    setActiveTable(
+      activeTableRef.current === "productionSchedule" ? "productionSchedule" : "orders",
+    );
 
     const revision = nextRowSaveRevision(selectedCustomerId, "orders");
     try {
@@ -2482,7 +2936,7 @@ function App() {
         saveRowsQueued(selectedCustomerId, "orders", nextRows),
       ]);
       if (rowsResult?.rows && isLatestRowSaveRevision(selectedCustomerId, "orders", revision)) {
-        updateSelectedCustomer(c => ({ ...c, orders: rowsResult.rows }));
+        updateSelectedCustomer((c) => ({ ...c, orders: rowsResult.rows }));
       }
     } catch (err) {
       await dialogs.alert(`排产保存失败：${err.message}`, { title: "排产" });
@@ -2492,36 +2946,48 @@ function App() {
   const handleCreateDeliveryFromOrders = async (orderIds) => {
     if (!selectedCustomer || !orderIds?.length) return false;
 
-    const currentCustomer = customersRef.current.find(customer => customer.id === selectedCustomerId) || selectedCustomer;
-    const orderById = new Map((currentCustomer.orders || []).map(order => [order.id, order]));
-    const selectedOrders = orderIds.map(id => orderById.get(id)).filter(Boolean);
+    const currentCustomer =
+      customersRef.current.find((customer) => customer.id === selectedCustomerId) ||
+      selectedCustomer;
+    const orderById = new Map((currentCustomer.orders || []).map((order) => [order.id, order]));
+    const selectedOrders = orderIds.map((id) => orderById.get(id)).filter(Boolean);
 
     if (!selectedOrders.length) {
       await dialogs.alert("没有找到可生成送货单的订单行。", { title: "生成送货单" });
       return false;
     }
-    const notCompletedOrders = selectedOrders.filter(order => normalizeOrderStatus(order.status) !== "已完成");
+    const notCompletedOrders = selectedOrders.filter(
+      (order) => normalizeOrderStatus(order.status) !== "已完成",
+    );
     if (notCompletedOrders.length) {
       const orderNos = notCompletedOrders
-        .map(order => order.orderNo || order.product || order.id)
+        .map((order) => order.orderNo || order.product || order.id)
         .slice(0, 5)
         .join("、");
-      await dialogs.alert(t("只有进度为“已完成”的订单才能生成送货单。\n请先处理：{orders}", { orders: orderNos }), { title: "生成送货单" });
+      await dialogs.alert(
+        t("只有进度为“已完成”的订单才能生成送货单。\n请先处理：{orders}", { orders: orderNos }),
+        { title: "生成送货单" },
+      );
       return false;
     }
 
     const orderColumns = getOrderColumnsForDelivery(currentCustomer, selectedOrders);
     const quantityOptions = getDeliveryQuantityOptions(orderColumns, selectedOrders);
     if (!quantityOptions.length) {
-      await dialogs.alert("未找到可作为送货数量的订单表头，请先在订单里补充数量列。", { title: "生成送货单" });
+      await dialogs.alert("未找到可作为送货数量的订单表头，请先在订单里补充数量列。", {
+        title: "生成送货单",
+      });
       return false;
     }
 
-    const quantitySourceField = await dialogs.select("选择订单表头作为本次送货数量。生成后可以在送货单草稿中继续修改送货数量。", {
-      title: "生成送货单",
-      options: quantityOptions,
-      defaultValue: preferredQuantityField(quantityOptions),
-    });
+    const quantitySourceField = await dialogs.select(
+      "选择订单表头作为本次送货数量。生成后可以在送货单草稿中继续修改送货数量。",
+      {
+        title: "生成送货单",
+        options: quantityOptions,
+        defaultValue: preferredQuantityField(quantityOptions),
+      },
+    );
     if (!quantitySourceField) return false;
 
     const deliveryNo = nextDeliveryNo(currentCustomer.deliveries || []);
@@ -2535,18 +3001,20 @@ function App() {
       ensureOrderDeliveryTrackingColumns(currentCustomer.customColumns || {}, selectedOrders),
       orderColumns,
     );
-    const nextDeliveries = normalizeDeliveryRows(ensureUniqueRowIds(
-      applyCustomerTableFormulas(
-        { ...currentCustomer, customColumns },
+    const nextDeliveries = normalizeDeliveryRows(
+      ensureUniqueRowIds(
+        applyCustomerTableFormulas(
+          { ...currentCustomer, customColumns },
+          "deliveries",
+          [...newDeliveryRows, ...(currentCustomer.deliveries || [])],
+          customColumns,
+          newDeliveryRows.map((row) => row.id),
+        ),
         "deliveries",
-        [...newDeliveryRows, ...(currentCustomer.deliveries || [])],
-        customColumns,
-        newDeliveryRows.map(row => row.id),
+        customersRef.current,
+        selectedCustomerId,
       ),
-      "deliveries",
-      customersRef.current,
-      selectedCustomerId,
-    ));
+    );
     const nextOrders = applyCustomerTableFormulas(
       { ...currentCustomer, customColumns },
       "orders",
@@ -2555,7 +3023,7 @@ function App() {
     );
 
     pushUndoSnapshot();
-    updateSelectedCustomer(c => ({
+    updateSelectedCustomer((c) => ({
       ...c,
       deliveries: nextDeliveries,
       orders: nextOrders,
@@ -2571,11 +3039,17 @@ function App() {
         saveRowsQueued(selectedCustomerId, "deliveries", nextDeliveries),
         saveRowsQueued(selectedCustomerId, "orders", nextOrders),
       ]);
-      if (deliveryResult?.rows && isLatestRowSaveRevision(selectedCustomerId, "deliveries", deliveryRevision)) {
-        updateSelectedCustomer(c => ({ ...c, deliveries: deliveryResult.rows }));
+      if (
+        deliveryResult?.rows &&
+        isLatestRowSaveRevision(selectedCustomerId, "deliveries", deliveryRevision)
+      ) {
+        updateSelectedCustomer((c) => ({ ...c, deliveries: deliveryResult.rows }));
       }
-      if (orderResult?.rows && isLatestRowSaveRevision(selectedCustomerId, "orders", orderRevision)) {
-        updateSelectedCustomer(c => ({ ...c, orders: orderResult.rows }));
+      if (
+        orderResult?.rows &&
+        isLatestRowSaveRevision(selectedCustomerId, "orders", orderRevision)
+      ) {
+        updateSelectedCustomer((c) => ({ ...c, orders: orderResult.rows }));
       }
       return true;
     } catch (err) {
@@ -2587,10 +3061,13 @@ function App() {
   const handleFinalizeDeliveryDrafts = async (deliveryIds) => {
     if (!selectedCustomer || !deliveryIds?.length) return false;
 
-    const currentCustomer = customersRef.current.find(customer => customer.id === selectedCustomerId) || selectedCustomer;
+    const currentCustomer =
+      customersRef.current.find((customer) => customer.id === selectedCustomerId) ||
+      selectedCustomer;
     const ids = new Set(deliveryIds);
-    const selectedDrafts = (currentCustomer.deliveries || [])
-      .filter(delivery => ids.has(delivery.id) && !isFinalDelivery(delivery));
+    const selectedDrafts = (currentCustomer.deliveries || []).filter(
+      (delivery) => ids.has(delivery.id) && !isFinalDelivery(delivery),
+    );
 
     if (!selectedDrafts.length) {
       await dialogs.alert("没有找到可生成的送货单草稿。", { title: "生成送货单" });
@@ -2599,35 +3076,48 @@ function App() {
 
     const preview = buildDeliveryFinalizePreview(currentCustomer, selectedDrafts, t);
     if (preview.overDelivered.length) {
-      await dialogs.alert(formatOverDeliveryMessage(preview.overDelivered, t), { title: "送货数量超出订单数量", tone: "danger" });
+      await dialogs.alert(formatOverDeliveryMessage(preview.overDelivered, t), {
+        title: "送货数量超出订单数量",
+        tone: "danger",
+      });
       return false;
     }
 
-    const confirmed = await dialogs.confirm(formatDeliveryFinalizeMessage(preview, t), { title: "确认生成送货单" });
+    const confirmed = await dialogs.confirm(formatDeliveryFinalizeMessage(preview, t), {
+      title: "确认生成送货单",
+    });
     if (!confirmed) return false;
 
-    const rawDeliveries = (currentCustomer.deliveries || []).map(delivery => (
+    const rawDeliveries = (currentCustomer.deliveries || []).map((delivery) =>
       ids.has(delivery.id) && !isFinalDelivery(delivery)
         ? {
-          ...delivery,
-          [finalDeliveryField]: true,
-          status: "未送",
-          issuedAt: new Date().toISOString(),
-        }
-        : delivery
-    ));
+            ...delivery,
+            [finalDeliveryField]: true,
+            status: "未送",
+            issuedAt: new Date().toISOString(),
+          }
+        : delivery,
+    );
     const nextDeliveries = normalizeDeliveryRows(
-      applyCustomerTableFormulas(currentCustomer, "deliveries", rawDeliveries, currentCustomer.customColumns, ids),
+      applyCustomerTableFormulas(
+        currentCustomer,
+        "deliveries",
+        rawDeliveries,
+        currentCustomer.customColumns,
+        ids,
+      ),
     );
     const nextOrders = applyCustomerTableFormulas(
       currentCustomer,
       "orders",
       applyDeliveryQuantitiesToOrders(currentCustomer.orders || [], nextDeliveries),
     );
-    const ordersChanged = nextOrders.some((row, index) => row !== (currentCustomer.orders || [])[index]);
+    const ordersChanged = nextOrders.some(
+      (row, index) => row !== (currentCustomer.orders || [])[index],
+    );
 
     pushUndoSnapshot();
-    updateSelectedCustomer(c => ({
+    updateSelectedCustomer((c) => ({
       ...c,
       deliveries: nextDeliveries,
       ...(ordersChanged ? { orders: nextOrders } : {}),
@@ -2643,11 +3133,17 @@ function App() {
           ? saveRowsQueued(selectedCustomerId, "orders", nextOrders)
           : Promise.resolve(null),
       ]);
-      if (deliveryResult?.rows && isLatestRowSaveRevision(selectedCustomerId, "deliveries", deliveryRevision)) {
-        updateSelectedCustomer(c => ({ ...c, deliveries: deliveryResult.rows }));
+      if (
+        deliveryResult?.rows &&
+        isLatestRowSaveRevision(selectedCustomerId, "deliveries", deliveryRevision)
+      ) {
+        updateSelectedCustomer((c) => ({ ...c, deliveries: deliveryResult.rows }));
       }
-      if (orderResult?.rows && isLatestRowSaveRevision(selectedCustomerId, "orders", orderRevision)) {
-        updateSelectedCustomer(c => ({ ...c, orders: orderResult.rows }));
+      if (
+        orderResult?.rows &&
+        isLatestRowSaveRevision(selectedCustomerId, "orders", orderRevision)
+      ) {
+        updateSelectedCustomer((c) => ({ ...c, orders: orderResult.rows }));
       }
       return true;
     } catch (err) {
@@ -2662,10 +3158,15 @@ function App() {
     e.target.value = "";
     try {
       const data = await importBackup(file);
-      if (await dialogs.confirm(t("恢复备份将覆盖当前所有数据（共 {count} 个客户）。确认继续？", { count: data.length }), {
-        title: "恢复备份",
-        tone: "danger",
-      })) {
+      if (
+        await dialogs.confirm(
+          t("恢复备份将覆盖当前所有数据（共 {count} 个客户）。确认继续？", { count: data.length }),
+          {
+            title: "恢复备份",
+            tone: "danger",
+          },
+        )
+      ) {
         const safeData = normalizeCustomerOrderStatuses(ensureUniqueCustomerRowIds(data));
         pushUndoSnapshot();
         const result = await api.replaceAll(safeData);
@@ -2678,32 +3179,41 @@ function App() {
     }
   };
 
-  const handleColumnOrderChange = useCallback(async (tableKey, order) => {
-    pushUndoSnapshot();
-    const newCustomColumns = {
-      ...selectedCustomer.customColumns,
-      columnOrder: {
-        ...(selectedCustomer.customColumns?.columnOrder || {}),
-        [tableKey]: order,
-      },
-    };
-    updateSelectedCustomer(c => ({ ...c, customColumns: newCustomColumns }));
-    try {
-      await api.updateCustomer(selectedCustomerId, { ...selectedCustomer, customColumns: newCustomColumns });
-    } catch (err) {
-      await dialogs.alert(`保存失败：${err.message}`, { title: "保存失败" });
-    }
-  }, [dialogs.alert, pushUndoSnapshot, selectedCustomer, selectedCustomerId]);
+  const handleColumnOrderChange = useCallback(
+    async (tableKey, order) => {
+      pushUndoSnapshot();
+      const newCustomColumns = {
+        ...selectedCustomer.customColumns,
+        columnOrder: {
+          ...(selectedCustomer.customColumns?.columnOrder || {}),
+          [tableKey]: order,
+        },
+      };
+      updateSelectedCustomer((c) => ({ ...c, customColumns: newCustomColumns }));
+      try {
+        await api.updateCustomer(selectedCustomerId, {
+          ...selectedCustomer,
+          customColumns: newCustomColumns,
+        });
+      } catch (err) {
+        await dialogs.alert(`保存失败：${err.message}`, { title: "保存失败" });
+      }
+    },
+    [dialogs.alert, pushUndoSnapshot, selectedCustomer, selectedCustomerId],
+  );
 
   const deleteCustomer = async (id) => {
-    if (!(await dialogs.confirm("确认删除该客户？此操作不可恢复，包括所有订单和送货记录。", {
-      title: "删除客户",
-      tone: "danger",
-    }))) return;
+    if (
+      !(await dialogs.confirm("确认删除该客户？此操作不可恢复，包括所有订单和送货记录。", {
+        title: "删除客户",
+        tone: "danger",
+      }))
+    )
+      return;
     pushUndoSnapshot();
-    setCustomers(current => current.filter(c => c.id !== id));
+    setCustomers((current) => current.filter((c) => c.id !== id));
     if (selectedCustomerId === id) {
-      const remaining = customers.filter(c => c.id !== id);
+      const remaining = customers.filter((c) => c.id !== id);
       setSelectedCustomerId(remaining[0]?.id || null);
     }
     try {
@@ -2713,113 +3223,128 @@ function App() {
     }
   };
 
-  const moveCustomerToGroup = useCallback(async (customerId, groupLevel) => {
-    const currentCustomer = customersRef.current.find(customer => customer.id === customerId);
-    if (!currentCustomer) return;
+  const moveCustomerToGroup = useCallback(
+    async (customerId, groupLevel) => {
+      const currentCustomer = customersRef.current.find((customer) => customer.id === customerId);
+      if (!currentCustomer) return;
 
-    const nextLevel = groupLevel === UNGROUPED_CUSTOMER_GROUP ? "" : groupLevel;
-    if ((currentCustomer.level || "") === nextLevel) return;
+      const nextLevel = groupLevel === UNGROUPED_CUSTOMER_GROUP ? "" : groupLevel;
+      if ((currentCustomer.level || "") === nextLevel) return;
 
-    const previousCustomers = customersRef.current;
-    const nextCustomer = { ...currentCustomer, level: nextLevel };
-    const nextCustomers = previousCustomers.map(customer =>
-      customer.id === customerId ? nextCustomer : customer
-    );
+      const previousCustomers = customersRef.current;
+      const nextCustomer = { ...currentCustomer, level: nextLevel };
+      const nextCustomers = previousCustomers.map((customer) =>
+        customer.id === customerId ? nextCustomer : customer,
+      );
 
-    pushUndoSnapshot();
-    customersRef.current = nextCustomers;
-    setCustomers(nextCustomers);
+      pushUndoSnapshot();
+      customersRef.current = nextCustomers;
+      setCustomers(nextCustomers);
 
-    try {
-      await api.updateCustomer(customerId, nextCustomer);
-    } catch (err) {
-      customersRef.current = previousCustomers;
-      setCustomers(previousCustomers);
-      await dialogs.alert(`保存失败：${err.message}`, { title: "保存失败" });
-    }
-  }, [dialogs.alert, pushUndoSnapshot]);
+      try {
+        await api.updateCustomer(customerId, nextCustomer);
+      } catch (err) {
+        customersRef.current = previousCustomers;
+        setCustomers(previousCustomers);
+        await dialogs.alert(`保存失败：${err.message}`, { title: "保存失败" });
+      }
+    },
+    [dialogs.alert, pushUndoSnapshot],
+  );
 
-  const startCustomerLongPress = useCallback((event, customer) => {
-    if (event.button != null && event.button !== 0) return;
-    if (event.target?.closest?.(".customer-delete")) return;
+  const startCustomerLongPress = useCallback(
+    (event, customer) => {
+      if (event.button != null && event.button !== 0) return;
+      if (event.target?.closest?.(".customer-delete")) return;
 
-    clearCustomerDragTimer();
-    customerDragSourceRef.current = {
-      customer,
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-      element: event.currentTarget,
-    };
-    updateCustomerDrag({
-      customerId: customer.id,
-      active: false,
-      x: event.clientX,
-      y: event.clientY,
-      overLevel: "",
-    });
-
-    event.currentTarget.setPointerCapture?.(event.pointerId);
-    customerDragTimerRef.current = window.setTimeout(() => {
-      customerDragTimerRef.current = null;
-      const source = customerDragSourceRef.current;
-      if (!source || source.customer.id !== customer.id) return;
+      clearCustomerDragTimer();
+      customerDragSourceRef.current = {
+        customer,
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        element: event.currentTarget,
+      };
       updateCustomerDrag({
         customerId: customer.id,
-        active: true,
-        x: source.startX,
-        y: source.startY,
-        overLevel: customerGroupLevel(customer),
+        active: false,
+        x: event.clientX,
+        y: event.clientY,
+        overLevel: "",
       });
-    }, CUSTOMER_DRAG_HOLD_MS);
-  }, [clearCustomerDragTimer, updateCustomerDrag]);
 
-  const moveCustomerDragPointer = useCallback((event) => {
-    const source = customerDragSourceRef.current;
-    if (!source) return;
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+      customerDragTimerRef.current = window.setTimeout(() => {
+        customerDragTimerRef.current = null;
+        const source = customerDragSourceRef.current;
+        if (!source || source.customer.id !== customer.id) return;
+        updateCustomerDrag({
+          customerId: customer.id,
+          active: true,
+          x: source.startX,
+          y: source.startY,
+          overLevel: customerGroupLevel(customer),
+        });
+      }, CUSTOMER_DRAG_HOLD_MS);
+    },
+    [clearCustomerDragTimer, updateCustomerDrag],
+  );
 
-    const current = customerDragRef.current;
-    const movedDistance = Math.hypot(event.clientX - source.startX, event.clientY - source.startY);
-    if (!current.active) {
-      if (movedDistance > 8) {
-        clearCustomerDragTimer();
-        source.element?.releasePointerCapture?.(source.pointerId);
-        updateCustomerDrag(initialCustomerDrag);
-        customerDragSourceRef.current = null;
+  const moveCustomerDragPointer = useCallback(
+    (event) => {
+      const source = customerDragSourceRef.current;
+      if (!source) return;
+
+      const current = customerDragRef.current;
+      const movedDistance = Math.hypot(
+        event.clientX - source.startX,
+        event.clientY - source.startY,
+      );
+      if (!current.active) {
+        if (movedDistance > 8) {
+          clearCustomerDragTimer();
+          source.element?.releasePointerCapture?.(source.pointerId);
+          updateCustomerDrag(initialCustomerDrag);
+          customerDragSourceRef.current = null;
+        }
+        return;
       }
-      return;
-    }
 
-    event.preventDefault();
-    const targetGroup = document
-      .elementFromPoint(event.clientX, event.clientY)
-      ?.closest?.("[data-customer-group-level]");
-    const overLevel = targetGroup?.getAttribute("data-customer-group-level") || "";
-    updateCustomerDrag({
-      ...current,
-      x: event.clientX,
-      y: event.clientY,
-      overLevel,
-    });
-  }, [clearCustomerDragTimer, initialCustomerDrag, updateCustomerDrag]);
+      event.preventDefault();
+      const targetGroup = document
+        .elementFromPoint(event.clientX, event.clientY)
+        ?.closest?.("[data-customer-group-level]");
+      const overLevel = targetGroup?.getAttribute("data-customer-group-level") || "";
+      updateCustomerDrag({
+        ...current,
+        x: event.clientX,
+        y: event.clientY,
+        overLevel,
+      });
+    },
+    [clearCustomerDragTimer, initialCustomerDrag, updateCustomerDrag],
+  );
 
-  const endCustomerLongPress = useCallback(async (event) => {
-    const source = customerDragSourceRef.current;
-    const current = customerDragRef.current;
-    clearCustomerDragTimer();
+  const endCustomerLongPress = useCallback(
+    async (event) => {
+      const source = customerDragSourceRef.current;
+      const current = customerDragRef.current;
+      clearCustomerDragTimer();
 
-    source?.element?.releasePointerCapture?.(source.pointerId);
-    customerDragSourceRef.current = null;
-    updateCustomerDrag(initialCustomerDrag);
+      source?.element?.releasePointerCapture?.(source.pointerId);
+      customerDragSourceRef.current = null;
+      updateCustomerDrag(initialCustomerDrag);
 
-    if (!source || !current.active || !current.overLevel) return;
-    await moveCustomerToGroup(source.customer.id, current.overLevel);
-  }, [clearCustomerDragTimer, initialCustomerDrag, moveCustomerToGroup, updateCustomerDrag]);
+      if (!source || !current.active || !current.overLevel) return;
+      await moveCustomerToGroup(source.customer.id, current.overLevel);
+    },
+    [clearCustomerDragTimer, initialCustomerDrag, moveCustomerToGroup, updateCustomerDrag],
+  );
 
   if (loading) {
     return (
-      <div className="app-shell" style={{ alignItems: 'center', justifyContent: 'center' }}>
-        <p style={{ color: '#82e5ff', fontSize: '1rem' }}>{t("正在连接数据库...")}</p>
+      <div className="app-shell" style={{ alignItems: "center", justifyContent: "center" }}>
+        <p style={{ color: "#82e5ff", fontSize: "1rem" }}>{t("正在连接数据库...")}</p>
       </div>
     );
   }
@@ -2833,493 +3358,558 @@ function App() {
     if (isHistoryOrders) {
       return {
         ...selectedCustomer,
-        historyOrders: (selectedCustomer?.orders || []).filter(order => normalizeOrderStatus(order.status) === "已付款"),
+        historyOrders: (selectedCustomer?.orders || []).filter(
+          (order) => normalizeOrderStatus(order.status) === "已付款",
+        ),
       };
     }
     if (activeTable === "productionSchedule") {
       return {
         ...selectedCustomer,
-        productionSchedule: (selectedCustomer?.orders || []).filter(order => normalizeOrderStatus(order.status) === "已排产"),
+        productionSchedule: (selectedCustomer?.orders || []).filter(
+          (order) => normalizeOrderStatus(order.status) === "已排产",
+        ),
       };
     }
     if (activeTable === "deliveries") {
       return {
         ...selectedCustomer,
-        deliveries: (selectedCustomer?.deliveries || []).filter(row => !isFinalDelivery(row)),
+        deliveries: (selectedCustomer?.deliveries || []).filter((row) => !isFinalDelivery(row)),
       };
     }
     if (activeTable === "finalDeliveries") {
       return {
         ...selectedCustomer,
-        finalDeliveries: (selectedCustomer?.deliveries || []).filter(row => isFinalDelivery(row)),
+        finalDeliveries: (selectedCustomer?.deliveries || []).filter((row) => isFinalDelivery(row)),
       };
     }
     return selectedCustomer;
   })();
   return (
     <I18nContext.Provider value={i18n}>
-    <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand-block">
-          <div className="brand-mark">
-            <LayoutDashboard size={20} />
+      <div className="app-shell">
+        <aside className="sidebar">
+          <div className="brand-block">
+            <div className="brand-mark">
+              <LayoutDashboard size={20} />
+            </div>
+            <div>
+              <p className="eyebrow">FOAM OPS</p>
+              <h1>{t("泡沫厂客户管理系统")}</h1>
+            </div>
           </div>
-          <div>
-            <p className="eyebrow">FOAM OPS</p>
-            <h1>{t("泡沫厂客户管理系统")}</h1>
-          </div>
-        </div>
 
-        <div className="global-search-wrap">
-          <label className="search-box global-search">
+          <div className="global-search-wrap">
+            <label className="search-box global-search">
+              <Search size={16} />
+              <input
+                value={globalSearchQuery}
+                onChange={(e) => {
+                  setGlobalSearchQuery(e.target.value);
+                  setShowGlobalSearchResults(true);
+                }}
+                onFocus={() => setShowGlobalSearchResults(true)}
+                onBlur={() => setTimeout(() => setShowGlobalSearchResults(false), 200)}
+                placeholder={t("搜索订单号 / 产品 / 送货单…")}
+              />
+            </label>
+            {showGlobalSearchResults && globalSearchResults.length > 0 && (
+              <div className="global-search-results">
+                {globalSearchResults.map((r, i) => (
+                  <button
+                    key={i}
+                    className="search-result-item"
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => navigateToSearchResult(r)}
+                  >
+                    <span className="search-result-type">
+                      {r.type === "customer" ? "👤" : r.type === "order" ? "📋" : "🚚"}
+                    </span>
+                    <span className="search-result-label">{r.label}</span>
+                    <span className="search-result-meta">
+                      {r.customerName}
+                      {r.detail ? ` · ${r.detail}` : ""}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <button
+            className="primary-action"
+            type="button"
+            onClick={() => {
+              setEditingCustomer(null);
+              setShowCustomerModal(true);
+            }}
+          >
+            <UserRoundPlus size={18} />
+            {t("新增客户")}
+          </button>
+
+          <label className="search-box">
             <Search size={16} />
             <input
-              value={globalSearchQuery}
-              onChange={(e) => { setGlobalSearchQuery(e.target.value); setShowGlobalSearchResults(true); }}
-              onFocus={() => setShowGlobalSearchResults(true)}
-              onBlur={() => setTimeout(() => setShowGlobalSearchResults(false), 200)}
-              placeholder={t("搜索订单号 / 产品 / 送货单…")}
+              value={searchText}
+              onChange={(event) => setSearchText(event.target.value)}
+              placeholder={t("搜索客户 / 联系人")}
             />
           </label>
-          {showGlobalSearchResults && globalSearchResults.length > 0 && (
-            <div className="global-search-results">
-              {globalSearchResults.map((r, i) => (
-                <button key={i} className="search-result-item" type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => navigateToSearchResult(r)}>
-                  <span className="search-result-type">{r.type === "customer" ? "👤" : r.type === "order" ? "📋" : "🚚"}</span>
-                  <span className="search-result-label">{r.label}</span>
-                  <span className="search-result-meta">{r.customerName}{r.detail ? ` · ${r.detail}` : ""}</span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
 
-        <button
-          className="primary-action"
-          type="button"
-          onClick={() => {
-            setEditingCustomer(null);
-            setShowCustomerModal(true);
-          }}
-        >
-          <UserRoundPlus size={18} />
-          {t("新增客户")}
-        </button>
-
-        <label className="search-box">
-          <Search size={16} />
-          <input
-            value={searchText}
-            onChange={(event) => setSearchText(event.target.value)}
-            placeholder={t("搜索客户 / 联系人")}
-          />
-        </label>
-
-        <div className="customer-list-tools">
-          <button
-            className="ghost-button customer-group-add"
-            type="button"
-            title={t("新增客户分组")}
-            onClick={handleAddCustomerGroup}
-          >
-            <Plus size={14} />
-            {t("新增分组")}
-          </button>
-        </div>
-
-        <div className="customer-list" aria-label={t("客户列表")}>
-          {groupedCustomers.map(({ level, customers: groupMembers }) => {
-            const collapsed = collapsedGroups.has(level);
-            const count = groupMembers.length;
-            return (
-              <div
-                className={`customer-group ${customerDrag.active && customerDrag.overLevel === level ? "is-drop-target" : ""}`}
-                key={level}
-                data-customer-group-level={level}
-              >
-                <button
-                  className="customer-group-header"
-                  type="button"
-                  onClick={() => toggleGroup(level)}
-                  title={collapsed ? t("展开") : t("折叠")}
-                >
-                  <span className={`group-arrow ${collapsed ? "" : "is-open"}`}>▸</span>
-                  <span className="group-label">{t(level)}</span>
-                  <span className="group-count">{count}</span>
-                  {level !== UNGROUPED_CUSTOMER_GROUP && (
-                    <span className="group-actions-inline">
-                      <button
-                        className="group-action-btn"
-                        type="button"
-                        title="重命名分组"
-                        onClick={(e) => { e.stopPropagation(); handleRenameCustomerGroup(level); }}
-                      >
-                        <Pencil size={12} />
-                      </button>
-                      <button
-                        className="group-action-btn"
-                        type="button"
-                        title="删除分组"
-                        onClick={(e) => { e.stopPropagation(); handleDeleteCustomerGroup(level); }}
-                      >
-                        <Trash2 size={12} />
-                      </button>
-                    </span>
-                  )}
-                </button>
-                {!collapsed &&
-                  groupMembers.map((customer) => (
-                    <div
-                      className={`customer-item ${customer.id === selectedCustomerId ? "is-active" : ""} ${customerDrag.active && customerDrag.customerId === customer.id ? "is-dragging" : ""} ${customerDrag.customerId === customer.id && !customerDrag.active ? "is-hold-pending" : ""}`}
-                      key={customer.id}
-                      onPointerDown={(event) => startCustomerLongPress(event, customer)}
-                      onPointerMove={moveCustomerDragPointer}
-                      onPointerUp={endCustomerLongPress}
-                      onPointerCancel={endCustomerLongPress}
-                    >
-                      <button
-                        className="customer-item-body"
-                        type="button"
-                        onClick={() => {
-                          if (selectedCustomerId) lastTableByCustomerRef.current[selectedCustomerId] = activeTable;
-                          setSelectedCustomerId(customer.id);
-                          const lastTable = lastTableByCustomerRef.current[customer.id];
-                          if (lastTable) setActiveTable(lastTable);
-                        }}
-                      >
-                        <span className="customer-name">
-                          {customer.name}
-                          {alertMap[customer.id] && (
-                            <span
-                              className={`alert-dot alert-dot--${alertMap[customer.id]}`}
-                              title={alertMap[customer.id] === "danger" ? t("有订单已逾期") : t("有订单即将到期")}
-                            />
-                          )}
-                        </span>
-                        <span className="customer-meta">
-                          {customer.contact || t("未填联系人")}
-                        </span>
-                      </button>
-                      <button
-                        className="customer-delete"
-                        type="button"
-                        title={t("删除客户")}
-                        onClick={() => deleteCustomer(customer.id)}
-                      >
-                        <Trash2 size={13} />
-                      </button>
-                    </div>
-                  ))}
-              </div>
-            );
-          })}
-        </div>
-        {customerDrag.active && (
-          <div
-            className="customer-drag-ghost"
-            style={{ transform: `translate(${customerDrag.x + 12}px, ${customerDrag.y + 12}px)` }}
-          >
-            <strong>{customers.find(customer => customer.id === customerDrag.customerId)?.name || ""}</strong>
-            <small>{customerDrag.overLevel ? t("移至 {group}", { group: t(customerDrag.overLevel) }) : t("选择分组")}</small>
-          </div>
-        )}
-
-        <div className="sidebar-footer">
-          <input
-            ref={backupInputRef}
-            type="file"
-            accept=".json"
-            style={{ display: "none" }}
-            onChange={handleRestore}
-          />
-          <button
-            className="ghost-button"
-            type="button"
-            title={t("导出全部客户数据为 JSON 备份文件")}
-            onClick={() => exportBackup(customers)}
-          >
-            <Archive size={14} />
-            {t("备份数据")}
-          </button>
-          <button
-            className="ghost-button"
-            type="button"
-            title={t("从备份文件恢复数据（将覆盖当前数据）")}
-            onClick={() => backupInputRef.current.click()}
-          >
-            <Archive size={14} />
-            {t("恢复备份")}
-          </button>
-          <button
-            className="ghost-button"
-            type="button"
-            title={t("系统设置")}
-            onClick={() => setShowSettings(true)}
-          >
-            <Settings2 size={14} />
-            {t("系统设置")}
-          </button>
-        </div>
-      </aside>
-
-      <main className="workspace">
-        <header className="topbar">
-          <div>
-            <p className="eyebrow">CUSTOMER COMMAND CENTER</p>
-            <h2>{selectedCustomer?.name || t("运营仪表盘")}</h2>
-          </div>
-          <div className="topbar-actions">
+          <div className="customer-list-tools">
             <button
-              className="icon-button"
+              className="ghost-button customer-group-add"
               type="button"
-              title={t("编辑客户档案")}
-              onClick={() => {
-                setEditingCustomer(selectedCustomer);
-                setShowCustomerModal(true);
-              }}
-              disabled={!selectedCustomer}
+              title={t("新增客户分组")}
+              onClick={handleAddCustomerGroup}
             >
-              <SquarePen size={18} />
+              <Plus size={14} />
+              {t("新增分组")}
             </button>
           </div>
-        </header>
 
-        <section className="metrics-grid" aria-label={t("业务指标")}>
-          {metrics.map((metric) => (
-            <article className="metric-card" key={metric.label}>
-              <span>{metric.label}</span>
-              <strong>{metric.value}</strong>
-              <small>{metric.detail}</small>
-            </article>
-          ))}
-        </section>
-
-        <CustomerStatisticsPanel customers={customers} onSelectCustomer={setSelectedCustomerId} />
-        <>
-
-        {selectedCustomer ? (
-          <>
-            {alertMap[selectedCustomer.id] && (
-              <section className={`alert-banner alert-banner--${alertMap[selectedCustomer.id]}`}>
-                <AlertTriangle size={15} />
-                {alertMap[selectedCustomer.id] === "danger"
-                  ? t("该客户有订单已逾期，请尽快跟进。")
-                  : t("该客户有订单 3 天内到期，请注意安排。")}
-              </section>
-            )}
-
-            <section className="customer-panel">
-              <div className="profile-strip">
-                <InfoPill label={t("联系人")} value={selectedCustomer?.contact} />
-                <InfoPill label={t("电话")} value={selectedCustomer?.phone} />
-                <InfoPill label={t("账期")} value={selectedCustomer?.paymentTerm} />
-                <InfoPill label={t("地址")} value={selectedCustomer?.address} wide />
-              </div>
-            </section>
-
-            <section className="table-section">
-              <div className="table-toolbar">
-                <div className="tabs" role="tablist" aria-label={t("业务模块")}>
-                  {Object.entries(tableConfigs).map(([key, config]) => {
-                    const Icon = config.icon;
-                    return (
-                      <button
-                        key={key}
-                        className={`tab-button ${activeTable === key ? "is-active" : ""}`}
-                        type="button"
-                        onClick={() => {
-                          if (selectedCustomer) lastTableByCustomerRef.current[selectedCustomer.id] = key;
-                          setActiveTable(key);
-                          setViewMode("grid");
-                        }}
-                      >
-                        <Icon size={17} />
-                        {t(config.label)}
-                      </button>
-                    );
-                  })}
-                </div>
-                {activeTable === "orders" && selectedCustomer && (
+          <div className="customer-list" aria-label={t("客户列表")}>
+            {groupedCustomers.map(({ level, customers: groupMembers }) => {
+              const collapsed = collapsedGroups.has(level);
+              const count = groupMembers.length;
+              return (
+                <div
+                  className={`customer-group ${customerDrag.active && customerDrag.overLevel === level ? "is-drop-target" : ""}`}
+                  key={level}
+                  data-customer-group-level={level}
+                >
                   <button
-                    className={`tab-button ${viewMode === "kanban" ? "is-active" : ""}`}
+                    className="customer-group-header"
                     type="button"
-                    onClick={() => setViewMode(v => v === "kanban" ? "grid" : "kanban")}
-                    title={t("看板视图")}
+                    onClick={() => toggleGroup(level)}
+                    title={collapsed ? t("展开") : t("折叠")}
                   >
-                    <KanbanSquare size={16} />
-                    {t("看板")}
+                    <span className={`group-arrow ${collapsed ? "" : "is-open"}`}>▸</span>
+                    <span className="group-label">{t(level)}</span>
+                    <span className="group-count">{count}</span>
+                    {level !== UNGROUPED_CUSTOMER_GROUP && (
+                      <span className="group-actions-inline">
+                        <button
+                          className="group-action-btn"
+                          type="button"
+                          title="重命名分组"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleRenameCustomerGroup(level);
+                          }}
+                        >
+                          <Pencil size={12} />
+                        </button>
+                        <button
+                          className="group-action-btn"
+                          type="button"
+                          title="删除分组"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteCustomerGroup(level);
+                          }}
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </span>
+                    )}
                   </button>
-                )}
-                <div className="toolbar-actions">
-                  <label className="filter-box">
-                    <Filter size={16} />
-                    <input
-                      value={quickFilter}
-                      onChange={(event) => setQuickFilter(event.target.value)}
-                      placeholder={t("筛选当前表格")}
-                    />
-                  </label>
-                  {selectedCustomer && activeTable === "orders" && (
-                    <OrderImportButton
-                      disabled={!selectedCustomer}
-                      dialogs={dialogs}
-                      t={t}
-                      existingOrders={selectedCustomer?.orders || []}
-                      onImport={handleOrderImport}
-                    />
-                  )}
-                  {selectedCustomer && activeTable === "orders" && (
-                    <button
-                      className="secondary-button"
-                      type="button"
-                      title={t("生成对账单")}
-                      onClick={handleCreateStatement}
-                    >
-                      {t("对账单")}
-                    </button>
-                  )}
-                  {selectedCustomer && (
-                    <button
-                      className="secondary-button"
-                      type="button"
-                      title={t("导出当前表格为 Excel")}
-                      onClick={() =>
-                        exportTableToExcel(exportCustomer, activeTable, [
-                          ...activeConfig.defaultColumns.map(column => ({ ...column, headerName: t(column.headerName) })),
-                          ...activeCustomColumns.map(column => ({ ...column, headerName: t(column.headerName) })),
-                        ])
-                      }
-                    >
-                      <Download size={15} />
-                      {t("导出 Excel")}
-                    </button>
-                  )}
-                  {!isHistoryOrders && (
-                    <button
-                      className="secondary-button"
-                      type="button"
-                      onClick={() => setShowColumnModal(true)}
-                      disabled={!selectedCustomer}
-                    >
-                      <Settings2 size={17} />
-                      {t("自定义表头")}
-                    </button>
-                  )}
-                  {canCreateActiveRows && (
-                    <button
-                      className="primary-action compact"
-                      type="button"
-                      onClick={() => addRow(activeSourceTable)}
-                      disabled={!selectedCustomer}
-                    >
-                      <Plus size={17} />
-                      {t("新增{rowLabel}", { rowLabel: t(activeConfig.rowLabel) })}
-                    </button>
-                  )}
+                  {!collapsed &&
+                    groupMembers.map((customer) => (
+                      <div
+                        className={`customer-item ${customer.id === selectedCustomerId ? "is-active" : ""} ${customerDrag.active && customerDrag.customerId === customer.id ? "is-dragging" : ""} ${customerDrag.customerId === customer.id && !customerDrag.active ? "is-hold-pending" : ""}`}
+                        key={customer.id}
+                        onPointerDown={(event) => startCustomerLongPress(event, customer)}
+                        onPointerMove={moveCustomerDragPointer}
+                        onPointerUp={endCustomerLongPress}
+                        onPointerCancel={endCustomerLongPress}
+                      >
+                        <button
+                          className="customer-item-body"
+                          type="button"
+                          onClick={() => {
+                            if (selectedCustomerId)
+                              lastTableByCustomerRef.current[selectedCustomerId] = activeTable;
+                            setSelectedCustomerId(customer.id);
+                            const lastTable = lastTableByCustomerRef.current[customer.id];
+                            if (lastTable) setActiveTable(lastTable);
+                          }}
+                        >
+                          <span className="customer-name">
+                            {customer.name}
+                            {alertMap[customer.id] && (
+                              <span
+                                className={`alert-dot alert-dot--${alertMap[customer.id]}`}
+                                title={
+                                  alertMap[customer.id] === "danger"
+                                    ? t("有订单已逾期")
+                                    : t("有订单即将到期")
+                                }
+                              />
+                            )}
+                          </span>
+                          <span className="customer-meta">
+                            {customer.contact || t("未填联系人")}
+                          </span>
+                        </button>
+                        <button
+                          className="customer-delete"
+                          type="button"
+                          title={t("删除客户")}
+                          onClick={() => deleteCustomer(customer.id)}
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    ))}
                 </div>
-              </div>
+              );
+            })}
+          </div>
+          {customerDrag.active && (
+            <div
+              className="customer-drag-ghost"
+              style={{ transform: `translate(${customerDrag.x + 12}px, ${customerDrag.y + 12}px)` }}
+            >
+              <strong>
+                {customers.find((customer) => customer.id === customerDrag.customerId)?.name || ""}
+              </strong>
+              <small>
+                {customerDrag.overLevel
+                  ? t("移至 {group}", { group: t(customerDrag.overLevel) })
+                  : t("选择分组")}
+              </small>
+            </div>
+          )}
 
-              {viewMode === "kanban" && activeTable === "orders" ? (
-                <KanbanBoard
-                  customer={selectedCustomer}
-                  onStatusChange={(orderId, newStatus) => {
-                    const currentCustomer = customers.find(c => c.id === selectedCustomerId) || selectedCustomer;
-                    const updatedOrders = (currentCustomer.orders || []).map(o =>
-                      o.id === orderId ? { ...o, status: newStatus } : o
-                    );
-                    pushUndoSnapshot();
-                    updateSelectedCustomer(c => ({ ...c, orders: updatedOrders }));
-                    handleRowsChange("orders", updatedOrders);
-                  }}
-                  onSelectOrder={(orderId) => { setViewMode("grid"); }}
-                />
-              ) : (
-                <BusinessGrid
-                  key={`${selectedCustomer.id}-${activeTable}`}
-                  customer={selectedCustomer}
-                  tableKey={activeSourceTable}
-                  viewKey={activeTable}
-                  quickFilter={quickFilter}
-                  onRowsChange={handleRowsChange}
-                  onDeleteRows={deleteRows}
-                  onPrintRow={activeTable === "finalDeliveries" ? setPrintDelivery : null}
-                  onScheduleOrders={activeTable === "orders" || activeTable === "productionSchedule" ? handleScheduleOrders : null}
-                  onCreateDeliveryFromOrders={activeTable === "orders" ? handleCreateDeliveryFromOrders : null}
-                  onFinalizeDeliveryDrafts={activeTable === "deliveries" ? handleFinalizeDeliveryDrafts : null}
-                  onColumnOrderChange={handleColumnOrderChange}
-                  onRemoveColumns={removeCustomColumns}
-                  onBeforeDataChange={pushUndoSnapshot}
-                  onCreateUndoSnapshot={takeUndoSnapshot}
-                  readOnly={isHistoryOrders}
-                  dialogs={dialogs}
-                />
-              )}
-            </section>
+          <div className="sidebar-footer">
+            <input
+              ref={backupInputRef}
+              type="file"
+              accept=".json"
+              style={{ display: "none" }}
+              onChange={handleRestore}
+            />
+            <button
+              className="ghost-button"
+              type="button"
+              title={t("导出全部客户数据为 JSON 备份文件")}
+              onClick={() => exportBackup(customers)}
+            >
+              <Archive size={14} />
+              {t("备份数据")}
+            </button>
+            <button
+              className="ghost-button"
+              type="button"
+              title={t("从备份文件恢复数据（将覆盖当前数据）")}
+              onClick={() => backupInputRef.current.click()}
+            >
+              <Archive size={14} />
+              {t("恢复备份")}
+            </button>
+            <button
+              className="ghost-button"
+              type="button"
+              title={t("系统设置")}
+              onClick={() => setShowSettings(true)}
+            >
+              <Settings2 size={14} />
+              {t("系统设置")}
+            </button>
+          </div>
+        </aside>
+
+        <main className="workspace">
+          <header className="topbar">
+            <div>
+              <p className="eyebrow">CUSTOMER COMMAND CENTER</p>
+              <h2>{selectedCustomer?.name || t("运营仪表盘")}</h2>
+            </div>
+            <div className="topbar-actions">
+              <button
+                className="icon-button"
+                type="button"
+                title={t("编辑客户档案")}
+                onClick={() => {
+                  setEditingCustomer(selectedCustomer);
+                  setShowCustomerModal(true);
+                }}
+                disabled={!selectedCustomer}
+              >
+                <SquarePen size={18} />
+              </button>
+            </div>
+          </header>
+
+          <section className="metrics-grid" aria-label={t("业务指标")}>
+            {metrics.map((metric) => (
+              <article className="metric-card" key={metric.label}>
+                <span>{metric.label}</span>
+                <strong>{metric.value}</strong>
+                <small>{metric.detail}</small>
+              </article>
+            ))}
+          </section>
+
+          <CustomerStatisticsPanel customers={customers} onSelectCustomer={setSelectedCustomerId} />
+          <>
+            {selectedCustomer ? (
+              <>
+                {alertMap[selectedCustomer.id] && (
+                  <section
+                    className={`alert-banner alert-banner--${alertMap[selectedCustomer.id]}`}
+                  >
+                    <AlertTriangle size={15} />
+                    {alertMap[selectedCustomer.id] === "danger"
+                      ? t("该客户有订单已逾期，请尽快跟进。")
+                      : t("该客户有订单 3 天内到期，请注意安排。")}
+                  </section>
+                )}
+
+                <section className="customer-panel">
+                  <div className="profile-strip">
+                    <InfoPill label={t("联系人")} value={selectedCustomer?.contact} />
+                    <InfoPill label={t("电话")} value={selectedCustomer?.phone} />
+                    <InfoPill label={t("账期")} value={selectedCustomer?.paymentTerm} />
+                    <InfoPill label={t("地址")} value={selectedCustomer?.address} wide />
+                  </div>
+                </section>
+
+                <section className="table-section">
+                  <div className="table-toolbar">
+                    <div className="tabs" role="tablist" aria-label={t("业务模块")}>
+                      {Object.entries(tableConfigs).map(([key, config]) => {
+                        const Icon = config.icon;
+                        return (
+                          <button
+                            key={key}
+                            className={`tab-button ${activeTable === key ? "is-active" : ""}`}
+                            type="button"
+                            onClick={() => {
+                              if (selectedCustomer)
+                                lastTableByCustomerRef.current[selectedCustomer.id] = key;
+                              setActiveTable(key);
+                              setViewMode("grid");
+                            }}
+                          >
+                            <Icon size={17} />
+                            {t(config.label)}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {activeTable === "orders" && selectedCustomer && (
+                      <button
+                        className={`tab-button ${viewMode === "kanban" ? "is-active" : ""}`}
+                        type="button"
+                        onClick={() => setViewMode((v) => (v === "kanban" ? "grid" : "kanban"))}
+                        title={t("看板视图")}
+                      >
+                        <KanbanSquare size={16} />
+                        {t("看板")}
+                      </button>
+                    )}
+                    <div className="toolbar-actions">
+                      <label className="filter-box">
+                        <Filter size={16} />
+                        <input
+                          value={quickFilter}
+                          onChange={(event) => setQuickFilter(event.target.value)}
+                          placeholder={t("筛选当前表格")}
+                        />
+                      </label>
+                      {selectedCustomer && activeTable === "orders" && (
+                        <OrderImportButton
+                          disabled={!selectedCustomer}
+                          dialogs={dialogs}
+                          t={t}
+                          existingOrders={selectedCustomer?.orders || []}
+                          onImport={handleOrderImport}
+                        />
+                      )}
+                      {selectedCustomer && activeTable === "orders" && (
+                        <button
+                          className="secondary-button"
+                          type="button"
+                          title={t("生成对账单")}
+                          onClick={handleCreateStatement}
+                        >
+                          {t("对账单")}
+                        </button>
+                      )}
+                      {selectedCustomer && (
+                        <button
+                          className="secondary-button"
+                          type="button"
+                          title={t("导出当前表格为 Excel")}
+                          onClick={() =>
+                            exportTableToExcel(exportCustomer, activeTable, [
+                              ...activeConfig.defaultColumns.map((column) => ({
+                                ...column,
+                                headerName: t(column.headerName),
+                              })),
+                              ...activeCustomColumns.map((column) => ({
+                                ...column,
+                                headerName: t(column.headerName),
+                              })),
+                            ])
+                          }
+                        >
+                          <Download size={15} />
+                          {t("导出 Excel")}
+                        </button>
+                      )}
+                      {!isHistoryOrders && (
+                        <button
+                          className="secondary-button"
+                          type="button"
+                          onClick={() => setShowColumnModal(true)}
+                          disabled={!selectedCustomer}
+                        >
+                          <Settings2 size={17} />
+                          {t("自定义表头")}
+                        </button>
+                      )}
+                      {canCreateActiveRows && (
+                        <button
+                          className="primary-action compact"
+                          type="button"
+                          onClick={() => addRow(activeSourceTable)}
+                          disabled={!selectedCustomer}
+                        >
+                          <Plus size={17} />
+                          {t("新增{rowLabel}", { rowLabel: t(activeConfig.rowLabel) })}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {viewMode === "kanban" && activeTable === "orders" ? (
+                    <KanbanBoard
+                      customer={selectedCustomer}
+                      onStatusChange={(orderId, newStatus) => {
+                        const currentCustomer =
+                          customers.find((c) => c.id === selectedCustomerId) || selectedCustomer;
+                        const updatedOrders = (currentCustomer.orders || []).map((o) =>
+                          o.id === orderId ? { ...o, status: newStatus } : o,
+                        );
+                        pushUndoSnapshot();
+                        updateSelectedCustomer((c) => ({ ...c, orders: updatedOrders }));
+                        handleRowsChange("orders", updatedOrders);
+                      }}
+                      onSelectOrder={(orderId) => {
+                        setViewMode("grid");
+                      }}
+                    />
+                  ) : (
+                    <BusinessGrid
+                      key={`${selectedCustomer.id}-${activeTable}`}
+                      customer={selectedCustomer}
+                      tableKey={activeSourceTable}
+                      viewKey={activeTable}
+                      quickFilter={quickFilter}
+                      onRowsChange={handleRowsChange}
+                      onDeleteRows={deleteRows}
+                      onPrintRow={activeTable === "finalDeliveries" ? setPrintDelivery : null}
+                      onScheduleOrders={
+                        activeTable === "orders" || activeTable === "productionSchedule"
+                          ? handleScheduleOrders
+                          : null
+                      }
+                      onCreateDeliveryFromOrders={
+                        activeTable === "orders" ? handleCreateDeliveryFromOrders : null
+                      }
+                      onFinalizeDeliveryDrafts={
+                        activeTable === "deliveries" ? handleFinalizeDeliveryDrafts : null
+                      }
+                      onColumnOrderChange={handleColumnOrderChange}
+                      onRemoveColumns={removeCustomColumns}
+                      onBeforeDataChange={pushUndoSnapshot}
+                      onCreateUndoSnapshot={takeUndoSnapshot}
+                      readOnly={isHistoryOrders}
+                      dialogs={dialogs}
+                    />
+                  )}
+                </section>
+              </>
+            ) : (
+              <DashboardView
+                customers={customers}
+                alertMap={alertMap}
+                onCreateCustomer={() => {
+                  setEditingCustomer(null);
+                  setShowCustomerModal(true);
+                }}
+                onSelectCustomer={setSelectedCustomerId}
+              />
+            )}
           </>
-        ) : (
-          <DashboardView customers={customers} alertMap={alertMap} onCreateCustomer={() => { setEditingCustomer(null); setShowCustomerModal(true); }} onSelectCustomer={setSelectedCustomerId} />
+        </main>
+
+        {showCustomerModal && (
+          <CustomerModal
+            customer={editingCustomer}
+            customerGroups={customerGroups}
+            onClose={() => setShowCustomerModal(false)}
+            onSave={(customerInput) => {
+              upsertCustomer(customerInput);
+              setShowCustomerModal(false);
+            }}
+          />
         )}
-        </>
-      </main>
 
-      {showCustomerModal && (
-        <CustomerModal
-          customer={editingCustomer}
-          customerGroups={customerGroups}
-          onClose={() => setShowCustomerModal(false)}
-          onSave={(customerInput) => {
-            upsertCustomer(customerInput);
-            setShowCustomerModal(false);
-          }}
-        />
-      )}
+        {showColumnModal && selectedCustomer && (
+          <ColumnModal
+            tableKey={activeSourceTable}
+            customer={selectedCustomer}
+            onClose={() => setShowColumnModal(false)}
+            onAddColumn={addCustomColumn}
+            onUpdateColumn={updateCustomColumn}
+            onRemoveColumn={removeCustomColumn}
+          />
+        )}
 
-      {showColumnModal && selectedCustomer && (
-        <ColumnModal
-          tableKey={activeSourceTable}
-          customer={selectedCustomer}
-          onClose={() => setShowColumnModal(false)}
-          onAddColumn={addCustomColumn}
-          onUpdateColumn={updateCustomColumn}
-          onRemoveColumn={removeCustomColumn}
-        />
-      )}
+        {selectedCustomer && productionScheduleOrders.length > 0 && (
+          <ProductionScheduleModal
+            customer={selectedCustomer}
+            orders={productionScheduleOrders}
+            onClose={() => setProductionScheduleOrders([])}
+            onSave={saveProductionSchedule}
+          />
+        )}
 
-      {selectedCustomer && productionScheduleOrders.length > 0 && (
-        <ProductionScheduleModal
-          customer={selectedCustomer}
-          orders={productionScheduleOrders}
-          onClose={() => setProductionScheduleOrders([])}
-          onSave={saveProductionSchedule}
-        />
-      )}
+        {printDelivery && selectedCustomer && (
+          <DeliveryPrintModal
+            delivery={printDelivery}
+            customer={selectedCustomer}
+            settings={systemSettings}
+            t={t}
+            onClose={() => setPrintDelivery(null)}
+          />
+        )}
 
-      {printDelivery && selectedCustomer && (
-        <DeliveryPrintModal
-          delivery={printDelivery}
-          customer={selectedCustomer}
-          settings={systemSettings}
-          t={t}
-          onClose={() => setPrintDelivery(null)}
-        />
-      )}
+        {showSettings && (
+          <SettingsModal
+            settings={systemSettings}
+            mobileUsers={mobileUsers}
+            mobileDisplaySettings={mobileDisplaySettings}
+            mobileOrderFieldOptions={mobileOrderFieldOptions}
+            onChangeMobileUserRole={updateMobileUserRole}
+            onRefreshMobileUsers={loadMobileUsers}
+            onClose={() => setShowSettings(false)}
+            onSave={async (s, nextMobileDisplaySettings) => {
+              await saveMobileDisplaySettings(nextMobileDisplaySettings);
+              persistSystemSettings({ ...systemSettings, ...s });
+              setShowSettings(false);
+            }}
+          />
+        )}
 
-      {showSettings && (
-        <SettingsModal
-          settings={systemSettings}
-          mobileUsers={mobileUsers}
-          onChangeMobileUserRole={updateMobileUserRole}
-          onRefreshMobileUsers={loadMobileUsers}
-          onClose={() => setShowSettings(false)}
-          onSave={(s) => {
-            persistSystemSettings({ ...systemSettings, ...s });
-            setShowSettings(false);
-          }}
-        />
-      )}
-
-      <AppDialog dialog={dialogs.dialog} onResolve={dialogs.resolve} />
-    </div>
+        <AppDialog dialog={dialogs.dialog} onResolve={dialogs.resolve} />
+      </div>
     </I18nContext.Provider>
   );
 }
@@ -3367,19 +3957,19 @@ function BusinessGrid({
   const sourceRows = customer[tableKey] || [];
   const rows = useMemo(() => {
     if (viewKey === "orders") {
-      return sourceRows.filter(row => normalizeOrderStatus(row.status) !== "已付款");
+      return sourceRows.filter((row) => normalizeOrderStatus(row.status) !== "已付款");
     }
     if (viewKey === "productionSchedule") {
-      return sourceRows.filter(row => normalizeOrderStatus(row.status) === "已排产");
+      return sourceRows.filter((row) => normalizeOrderStatus(row.status) === "已排产");
     }
     if (viewKey === "historyOrders") {
-      return sourceRows.filter(row => normalizeOrderStatus(row.status) === "已付款");
+      return sourceRows.filter((row) => normalizeOrderStatus(row.status) === "已付款");
     }
     if (viewKey === "deliveries") {
-      return sourceRows.filter(row => !isFinalDelivery(row));
+      return sourceRows.filter((row) => !isFinalDelivery(row));
     }
     if (viewKey === "finalDeliveries") {
-      return sourceRows.filter(row => isFinalDelivery(row));
+      return sourceRows.filter((row) => isFinalDelivery(row));
     }
     return sourceRows;
   }, [sourceRows, viewKey]);
@@ -3388,11 +3978,12 @@ function BusinessGrid({
   const filteredRows = useMemo(() => {
     const activeFilters = Object.entries(columnFilters);
     if (!activeFilters.length) return rows;
-    return rows.filter(row =>
+    return rows.filter((row) =>
       activeFilters.every(([field, allowedValues]) => {
-        const value = tableKey === "orders" && field === "status"
-          ? normalizeOrderStatus(row[field])
-          : row[field];
+        const value =
+          tableKey === "orders" && field === "status"
+            ? normalizeOrderStatus(row[field])
+            : row[field];
         return allowedValues.has(filterValue(value).key);
       }),
     );
@@ -3412,8 +4003,10 @@ function BusinessGrid({
       const expanded = expandedDeliveryGroups.has(key);
       const groupStatus = getDeliveryGroupStatus(groupRows);
       const statusCounts = finalDeliveryStatusOptions
-        .map(status => {
-          const count = groupRows.filter(row => normalizeFinalDeliveryStatus(row.status) === status).length;
+        .map((status) => {
+          const count = groupRows.filter(
+            (row) => normalizeFinalDeliveryStatus(row.status) === status,
+          ).length;
           return count ? `${t(status)} ${count}` : "";
         })
         .filter(Boolean)
@@ -3422,7 +4015,9 @@ function BusinessGrid({
         (sum, row) => sum + parseNumericValue(row[deliveryQuantityField]),
         0,
       );
-      const linkedOrders = new Set(groupRows.map(row => row[linkedOrderIdField] || row.orderNo).filter(Boolean));
+      const linkedOrders = new Set(
+        groupRows.map((row) => row[linkedOrderIdField] || row.orderNo).filter(Boolean),
+      );
       const firstRow = groupRows[0] || {};
       result.push({
         ...firstRow,
@@ -3438,28 +4033,31 @@ function BusinessGrid({
         [deliveryQuantityField]: quantity,
       });
       if (expanded) {
-        result.push(...groupRows.map(row => ({ ...row, __deliveryGroupChild: true })));
+        result.push(...groupRows.map((row) => ({ ...row, __deliveryGroupChild: true })));
       }
     }
 
     return result;
   }, [expandedDeliveryGroups, filteredRows, viewKey]);
-  const canCreateDeliveryFromOrders = tableKey === "orders"
-    && viewKey === "orders"
-    && !readOnly
-    && typeof onCreateDeliveryFromOrders === "function";
-  const canScheduleOrders = tableKey === "orders"
-    && (viewKey === "orders" || viewKey === "productionSchedule")
-    && !readOnly
-    && typeof onScheduleOrders === "function";
-  const canFinalizeDeliveryDrafts = tableKey === "deliveries"
-    && viewKey === "deliveries"
-    && !readOnly
-    && typeof onFinalizeDeliveryDrafts === "function";
+  const canCreateDeliveryFromOrders =
+    tableKey === "orders" &&
+    viewKey === "orders" &&
+    !readOnly &&
+    typeof onCreateDeliveryFromOrders === "function";
+  const canScheduleOrders =
+    tableKey === "orders" &&
+    (viewKey === "orders" || viewKey === "productionSchedule") &&
+    !readOnly &&
+    typeof onScheduleOrders === "function";
+  const canFinalizeDeliveryDrafts =
+    tableKey === "deliveries" &&
+    viewKey === "deliveries" &&
+    !readOnly &&
+    typeof onFinalizeDeliveryDrafts === "function";
   const canCreateRows = !readOnly && !config.disableRowCreate;
 
   const toggleDeliveryGroup = useCallback((key) => {
-    setExpandedDeliveryGroups(current => {
+    setExpandedDeliveryGroups((current) => {
       const next = new Set(current);
       if (next.has(key)) next.delete(key);
       else next.add(key);
@@ -3467,38 +4065,47 @@ function BusinessGrid({
     });
   }, []);
 
-  const updateDeliveryGroupStatus = useCallback((key, status) => {
-    const normalizedStatus = normalizeFinalDeliveryStatus(status);
-    let changed = false;
-    const changedRowIds = [];
-    const updatedRows = sourceRows.map(row => {
-      if (!isFinalDelivery(row) || deliveryGroupKey(row) !== key) return row;
-      if (normalizeFinalDeliveryStatus(row.status) === normalizedStatus) return row;
-      changed = true;
-      changedRowIds.push(row.id);
-      return { ...row, status: normalizedStatus };
-    });
+  const updateDeliveryGroupStatus = useCallback(
+    (key, status) => {
+      const normalizedStatus = normalizeFinalDeliveryStatus(status);
+      let changed = false;
+      const changedRowIds = [];
+      const updatedRows = sourceRows.map((row) => {
+        if (!isFinalDelivery(row) || deliveryGroupKey(row) !== key) return row;
+        if (normalizeFinalDeliveryStatus(row.status) === normalizedStatus) return row;
+        changed = true;
+        changedRowIds.push(row.id);
+        return { ...row, status: normalizedStatus };
+      });
 
-    if (!changed) return;
-    onBeforeDataChange?.();
-    onRowsChange(tableKey, updatedRows, { formulaRowIds: changedRowIds });
-  }, [onBeforeDataChange, onRowsChange, sourceRows, tableKey]);
+      if (!changed) return;
+      onBeforeDataChange?.();
+      onRowsChange(tableKey, updatedRows, { formulaRowIds: changedRowIds });
+    },
+    [onBeforeDataChange, onRowsChange, sourceRows, tableKey],
+  );
 
-  const advanceOrderStatus = useCallback((rowId, nextStatus, rowData) => {
-    if (!getNextStatuses(normalizeOrderStatus(rowData?.status)).includes(nextStatus)) return;
-    onBeforeDataChange?.();
-    const updatedRows = sourceRows.map(row =>
-      row.id === rowId
-        ? {
-          ...row,
-          status: nextStatus,
-          statusChangedAt: new Date().toISOString(),
-          statusChangeLog: appendAuditLog(row.statusChangeLog, `进度：${row.status || "未完成"} -> ${nextStatus}`),
-        }
-        : row
-    );
-    onRowsChange(tableKey, updatedRows, { formulaRowIds: [rowId] });
-  }, [onBeforeDataChange, onRowsChange, sourceRows, tableKey]);
+  const advanceOrderStatus = useCallback(
+    (rowId, nextStatus, rowData) => {
+      if (!getNextStatuses(normalizeOrderStatus(rowData?.status)).includes(nextStatus)) return;
+      onBeforeDataChange?.();
+      const updatedRows = sourceRows.map((row) =>
+        row.id === rowId
+          ? {
+              ...row,
+              status: nextStatus,
+              statusChangedAt: new Date().toISOString(),
+              statusChangeLog: appendAuditLog(
+                row.statusChangeLog,
+                `进度：${row.status || "未完成"} -> ${nextStatus}`,
+              ),
+            }
+          : row,
+      );
+      onRowsChange(tableKey, updatedRows, { formulaRowIds: [rowId] });
+    },
+    [onBeforeDataChange, onRowsChange, sourceRows, tableKey],
+  );
 
   const columnDefs = useMemo(() => {
     const rowNumberColumn = {
@@ -3514,7 +4121,8 @@ function BusinessGrid({
       resizable: false,
       editable: false,
       headerComponent: RowNumberHeader,
-      valueGetter: (params) => (params.node?.rowPinned ? t("合计") : (params.node?.rowIndex ?? 0) + 1),
+      valueGetter: (params) =>
+        params.node?.rowPinned ? t("合计") : (params.node?.rowIndex ?? 0) + 1,
       cellClass: "row-number-cell",
       cellClassRules: selectionCellClassRules,
     };
@@ -3542,12 +4150,12 @@ function BusinessGrid({
       ),
     };
 
-    const defaultFields = new Set(config.defaultColumns.map(column => column.field));
+    const defaultFields = new Set(config.defaultColumns.map((column) => column.field));
     const allCols = [
-      ...config.defaultColumns.map(column => toGridColumn(column, t, true)),
+      ...config.defaultColumns.map((column) => toGridColumn(column, t, true)),
       ...customColumns
-        .filter(column => !defaultFields.has(column.field))
-        .map(column => toGridColumn(column, t, true)),
+        .filter((column) => !defaultFields.has(column.field))
+        .map((column) => toGridColumn(column, t, true)),
     ];
 
     if (savedOrder?.length) {
@@ -3558,19 +4166,17 @@ function BusinessGrid({
       });
     }
 
-    const orderedCols = tableKey === "orders"
-      ? [
-        ...allCols.filter(column => column.field !== "status"),
-        ...allCols.filter(column => column.field === "status"),
-      ]
-      : allCols;
-    const isEditableColumn = (column, params) => (
-      typeof column.editable === "function" ? column.editable(params) : column.editable !== false
-    );
-    const visibleCols = orderedCols.map(column => {
-      const nextColumn = readOnly
-        ? { ...column, editable: false }
-        : column;
+    const orderedCols =
+      tableKey === "orders"
+        ? [
+            ...allCols.filter((column) => column.field !== "status"),
+            ...allCols.filter((column) => column.field === "status"),
+          ]
+        : allCols;
+    const isEditableColumn = (column, params) =>
+      typeof column.editable === "function" ? column.editable(params) : column.editable !== false;
+    const visibleCols = orderedCols.map((column) => {
+      const nextColumn = readOnly ? { ...column, editable: false } : column;
 
       // Orders 视图：进度列增加快捷流转按钮
       if (viewKey === "orders" && column.field === "status" && !readOnly) {
@@ -3584,9 +4190,11 @@ function BusinessGrid({
             }
             return (
               <div style={{ display: "flex", alignItems: "center", gap: 4, height: "100%" }}>
-                <span className={`status-chip ${statusClass(value)}`} style={{ flexShrink: 0 }}>{t(value)}</span>
+                <span className={`status-chip ${statusClass(value)}`} style={{ flexShrink: 0 }}>
+                  {t(value)}
+                </span>
                 <span className="status-actions">
-                  {nextStatuses.map(ns => (
+                  {nextStatuses.map((ns) => (
                     <button
                       key={ns}
                       className="status-next-btn"
@@ -3610,7 +4218,7 @@ function BusinessGrid({
       // Orders 视图：产品列关联客户产品库下拉选择
       if (viewKey === "orders" && column.field === "product" && !readOnly) {
         const products = customer.products || [];
-        const productNames = products.map(p => p.name);
+        const productNames = products.map((p) => p.name);
         return {
           ...nextColumn,
           cellEditor: "agSelectCellEditor",
@@ -3618,9 +4226,9 @@ function BusinessGrid({
             values: productNames,
           },
           onCellValueChanged: (params) => {
-            const selectedProduct = products.find(p => p.name === params.newValue);
+            const selectedProduct = products.find((p) => p.name === params.newValue);
             if (selectedProduct && params.data) {
-              const updatedRows = sourceRows.map(row => {
+              const updatedRows = sourceRows.map((row) => {
                 if (row.id !== params.data.id) return row;
                 return {
                   ...row,
@@ -3630,7 +4238,10 @@ function BusinessGrid({
                   ...(selectedProduct.unitPrice ? { unitPrice: selectedProduct.unitPrice } : {}),
                 };
               });
-              setTimeout(() => onRowsChange(tableKey, updatedRows, { formulaRowIds: [params.data.id] }), 0);
+              setTimeout(
+                () => onRowsChange(tableKey, updatedRows, { formulaRowIds: [params.data.id] }),
+                0,
+              );
             }
           },
         };
@@ -3643,7 +4254,10 @@ function BusinessGrid({
           cellStyle: (params) => {
             if (!params.value || !params.data?.date) return null;
             if (params.value < params.data.date) {
-              return { backgroundColor: "rgba(210, 153, 34, 0.15)", borderLeft: "3px solid var(--amber)" };
+              return {
+                backgroundColor: "rgba(210, 153, 34, 0.15)",
+                borderLeft: "3px solid var(--amber)",
+              };
             }
             return null;
           },
@@ -3655,7 +4269,8 @@ function BusinessGrid({
       if (column.field === "deliveryNo") {
         return {
           ...nextColumn,
-          editable: (params) => !params.data?.__isDeliveryGroup && isEditableColumn(nextColumn, params),
+          editable: (params) =>
+            !params.data?.__isDeliveryGroup && isEditableColumn(nextColumn, params),
           cellRenderer: (params) => {
             if (!params.data?.__isDeliveryGroup) return params.value || "";
             return (
@@ -3672,9 +4287,13 @@ function BusinessGrid({
                 <strong>{params.value}</strong>
                 <small>
                   {t("{count} 行", { count: params.data.__deliveryGroupCount })}
-                  {params.data.__deliveryGroupOrderCount ? ` / ${t("{count} 单", { count: params.data.__deliveryGroupOrderCount })}` : ""}
+                  {params.data.__deliveryGroupOrderCount
+                    ? ` / ${t("{count} 单", { count: params.data.__deliveryGroupOrderCount })}`
+                    : ""}
                   {` / ${normalizeCalculatedNumber(parseNumericValue(params.data[deliveryQuantityField]))}`}
-                  {params.data.__deliveryGroupStatusSummary ? ` / ${params.data.__deliveryGroupStatusSummary}` : ""}
+                  {params.data.__deliveryGroupStatusSummary
+                    ? ` / ${params.data.__deliveryGroupStatusSummary}`
+                    : ""}
                 </small>
               </button>
             );
@@ -3685,15 +4304,12 @@ function BusinessGrid({
       if (column.field === "status") {
         return {
           ...nextColumn,
-          editable: (params) => !params.data?.__isDeliveryGroup && isEditableColumn(nextColumn, params),
+          editable: (params) =>
+            !params.data?.__isDeliveryGroup && isEditableColumn(nextColumn, params),
           cellRenderer: (params) => {
             if (!params.data?.__isDeliveryGroup) {
               const value = normalizeFinalDeliveryStatus(params.value);
-              return (
-                <span className={`status-chip ${statusClass(value)}`}>
-                  {t(value)}
-                </span>
-              );
+              return <span className={`status-chip ${statusClass(value)}`}>{t(value)}</span>;
             }
 
             const value = normalizeFinalDeliveryStatus(params.value);
@@ -3703,11 +4319,15 @@ function BusinessGrid({
                 value={value}
                 onMouseDown={(event) => event.stopPropagation()}
                 onClick={(event) => event.stopPropagation()}
-                onChange={(event) => updateDeliveryGroupStatus(params.data.__deliveryGroupKey, event.target.value)}
+                onChange={(event) =>
+                  updateDeliveryGroupStatus(params.data.__deliveryGroupKey, event.target.value)
+                }
                 title={t("设置整张送货单状态")}
               >
-                {finalDeliveryStatusOptions.map(option => (
-                  <option key={option} value={option}>{t(option)}</option>
+                {finalDeliveryStatusOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {t(option)}
+                  </option>
                 ))}
               </select>
             );
@@ -3717,11 +4337,14 @@ function BusinessGrid({
 
       return {
         ...nextColumn,
-        editable: (params) => !params.data?.__isDeliveryGroup && isEditableColumn(nextColumn, params),
+        editable: (params) =>
+          !params.data?.__isDeliveryGroup && isEditableColumn(nextColumn, params),
       };
     });
 
-    return onPrintRow ? [rowNumberColumn, ...visibleCols, actionColumn] : [rowNumberColumn, ...visibleCols];
+    return onPrintRow
+      ? [rowNumberColumn, ...visibleCols, actionColumn]
+      : [rowNumberColumn, ...visibleCols];
   }, [
     config.defaultColumns,
     customColumns,
@@ -3737,9 +4360,8 @@ function BusinessGrid({
   ]);
 
   const selectableColumnFields = useMemo(
-    () => columnDefs
-      .map(column => column.field)
-      .filter(field => field && !field.startsWith("__")),
+    () =>
+      columnDefs.map((column) => column.field).filter((field) => field && !field.startsWith("__")),
     [columnDefs],
   );
 
@@ -3752,12 +4374,12 @@ function BusinessGrid({
   }, [selectableColumnFields, selectionRange]);
 
   const customColumnFieldSet = useMemo(
-    () => new Set(customColumns.map(column => column.field)),
+    () => new Set(customColumns.map((column) => column.field)),
     [customColumns],
   );
 
   const removableSelectedColumnFields = useMemo(
-    () => selectedColumnFields.filter(field => customColumnFieldSet.has(field)),
+    () => selectedColumnFields.filter((field) => customColumnFieldSet.has(field)),
     [customColumnFieldSet, selectedColumnFields],
   );
 
@@ -3766,14 +4388,15 @@ function BusinessGrid({
     [config.defaultColumns, customColumns],
   );
   const formulaColumnFields = useMemo(
-    () => tableColumns
-      .filter(column => normalizeFormulaInput(column.formula))
-      .map(column => column.field),
+    () =>
+      tableColumns
+        .filter((column) => normalizeFormulaInput(column.formula))
+        .map((column) => column.field),
     [tableColumns],
   );
 
   const columnHeaderByField = useMemo(
-    () => new Map(tableColumns.map(column => [column.field, t(column.headerName)])),
+    () => new Map(tableColumns.map((column) => [column.field, t(column.headerName)])),
     [tableColumns, t],
   );
 
@@ -3796,12 +4419,14 @@ function BusinessGrid({
     return [summary];
   }, [filteredRows, selectableColumnFields, tableColumns, t]);
 
-  const canFillDown = selectionRange?.mode === "cells"
-    && Math.min(selectionRange.startRowIndex ?? 0, selectionRange.endRowIndex ?? 0)
-      < Math.max(selectionRange.startRowIndex ?? 0, selectionRange.endRowIndex ?? 0);
-  const canFillRight = selectionRange?.mode === "cells"
-    && Math.min(selectionRange.startColIndex ?? 0, selectionRange.endColIndex ?? 0)
-      < Math.max(selectionRange.startColIndex ?? 0, selectionRange.endColIndex ?? 0);
+  const canFillDown =
+    selectionRange?.mode === "cells" &&
+    Math.min(selectionRange.startRowIndex ?? 0, selectionRange.endRowIndex ?? 0) <
+      Math.max(selectionRange.startRowIndex ?? 0, selectionRange.endRowIndex ?? 0);
+  const canFillRight =
+    selectionRange?.mode === "cells" &&
+    Math.min(selectionRange.startColIndex ?? 0, selectionRange.endColIndex ?? 0) <
+      Math.max(selectionRange.startColIndex ?? 0, selectionRange.endColIndex ?? 0);
 
   const defaultColDef = useMemo(
     () => ({
@@ -3816,9 +4441,7 @@ function BusinessGrid({
   );
 
   const scheduleAutoSizeColumns = useCallback((options = {}) => {
-    const requestedFields = Array.isArray(options.fields)
-      ? options.fields.filter(Boolean)
-      : null;
+    const requestedFields = Array.isArray(options.fields) ? options.fields.filter(Boolean) : null;
     if (requestedFields?.length) {
       const pendingFields = pendingAutoSizeFieldsRef.current;
       pendingAutoSizeFieldsRef.current = pendingFields
@@ -3836,14 +4459,18 @@ function BusinessGrid({
       const pendingFields = pendingAutoSizeFieldsRef.current;
       pendingAutoSizeFieldsRef.current = null;
       const fieldSet = new Set(fields);
-      let colIds = (pendingFields?.length ? pendingFields : fields)
-        .filter(field => fieldSet.has(field));
+      let colIds = (pendingFields?.length ? pendingFields : fields).filter((field) =>
+        fieldSet.has(field),
+      );
 
       if (!pendingFields?.length) {
-        const displayedColumns = api.getAllDisplayedVirtualColumns?.() || api.getAllDisplayedColumns?.() || [];
+        const displayedColumns =
+          api.getAllDisplayedVirtualColumns?.() || api.getAllDisplayedColumns?.() || [];
         if (displayedColumns.length) {
-          const displayedIds = new Set(displayedColumns.map(column => column.getColId?.() || column.colId));
-          colIds = colIds.filter(field => displayedIds.has(field));
+          const displayedIds = new Set(
+            displayedColumns.map((column) => column.getColId?.() || column.colId),
+          );
+          colIds = colIds.filter((field) => displayedIds.has(field));
         }
       }
 
@@ -3866,23 +4493,27 @@ function BusinessGrid({
     if (autoSizeTimerRef.current) {
       window.clearTimeout(autoSizeTimerRef.current);
     }
-    autoSizeTimerRef.current = window.setTimeout(() => {
-      window.requestAnimationFrame(run);
-    }, options.delay ?? (requestedFields?.length ? 90 : 160));
+    autoSizeTimerRef.current = window.setTimeout(
+      () => {
+        window.requestAnimationFrame(run);
+      },
+      options.delay ?? (requestedFields?.length ? 90 : 160),
+    );
   }, []);
 
-  useEffect(() => () => {
-    if (autoSizeTimerRef.current) {
-      window.clearTimeout(autoSizeTimerRef.current);
-    }
-  }, []);
+  useEffect(
+    () => () => {
+      if (autoSizeTimerRef.current) {
+        window.clearTimeout(autoSizeTimerRef.current);
+      }
+    },
+    [],
+  );
 
-  const autoSizeSignature = useMemo(() => (
-    [
-      viewKey,
-      selectableColumnFields.join("|"),
-    ].join("::")
-  ), [selectableColumnFields, viewKey]);
+  const autoSizeSignature = useMemo(
+    () => [viewKey, selectableColumnFields.join("|")].join("::"),
+    [selectableColumnFields, viewKey],
+  );
 
   useEffect(() => {
     scheduleAutoSizeColumns();
@@ -3915,8 +4546,8 @@ function BusinessGrid({
   }, []);
 
   useEffect(() => {
-    const rowIds = new Set(rows.map(row => row.id));
-    setSelectedIds(current => current.filter(id => rowIds.has(id)));
+    const rowIds = new Set(rows.map((row) => row.id));
+    setSelectedIds((current) => current.filter((id) => rowIds.has(id)));
   }, [rows]);
 
   useEffect(() => {
@@ -4011,7 +4642,13 @@ function BusinessGrid({
     const ids = [];
 
     gridRef.current?.api?.forEachNodeAfterFilterAndSort((node) => {
-      if (node.rowIndex < minRow || node.rowIndex > maxRow || !node.data?.id || node.data.__isDeliveryGroup) return;
+      if (
+        node.rowIndex < minRow ||
+        node.rowIndex > maxRow ||
+        !node.data?.id ||
+        node.data.__isDeliveryGroup
+      )
+        return;
       ids.push(node.data.id);
     });
 
@@ -4025,7 +4662,8 @@ function BusinessGrid({
 
     gridRef.current?.api?.deselectAll();
     gridRef.current?.api?.forEachNodeAfterFilterAndSort((node) => {
-      if (node.rowPinned || node.rowIndex == null || !node.data?.id || node.data.__isDeliveryGroup) return;
+      if (node.rowPinned || node.rowIndex == null || !node.data?.id || node.data.__isDeliveryGroup)
+        return;
       ids.push(node.data.id);
       firstRowIndex ??= node.rowIndex;
       lastRowIndex = node.rowIndex;
@@ -4040,26 +4678,32 @@ function BusinessGrid({
     setSelectedIds(ids);
   }, []);
 
-  const selectRowsByRange = useCallback((startRowIndex, endRowIndex) => {
-    const nextSelection = { mode: "rows", startRowIndex, endRowIndex };
-    selectionRangeRef.current = nextSelection;
-    setSelectionRange(nextSelection);
-    setSelectedIds(getVisibleRowIdsInRange(startRowIndex, endRowIndex));
-  }, [getVisibleRowIdsInRange]);
+  const selectRowsByRange = useCallback(
+    (startRowIndex, endRowIndex) => {
+      const nextSelection = { mode: "rows", startRowIndex, endRowIndex };
+      selectionRangeRef.current = nextSelection;
+      setSelectionRange(nextSelection);
+      setSelectedIds(getVisibleRowIdsInRange(startRowIndex, endRowIndex));
+    },
+    [getVisibleRowIdsInRange],
+  );
 
-  const selectCellsByRange = useCallback((startRowIndex, endRowIndex, startColIndex, endColIndex) => {
-    const nextSelection = {
-      mode: "cells",
-      startRowIndex,
-      endRowIndex,
-      startColIndex,
-      endColIndex,
-    };
-    selectionRangeRef.current = nextSelection;
-    setSelectionRange(nextSelection);
-    setSelectedIds([]);
-    gridRef.current?.api?.deselectAll();
-  }, []);
+  const selectCellsByRange = useCallback(
+    (startRowIndex, endRowIndex, startColIndex, endColIndex) => {
+      const nextSelection = {
+        mode: "cells",
+        startRowIndex,
+        endRowIndex,
+        startColIndex,
+        endColIndex,
+      };
+      selectionRangeRef.current = nextSelection;
+      setSelectionRange(nextSelection);
+      setSelectedIds([]);
+      gridRef.current?.api?.deselectAll();
+    },
+    [],
+  );
 
   const selectColumnsByRange = useCallback((startColIndex, endColIndex) => {
     const nextSelection = { mode: "columns", startColIndex, endColIndex };
@@ -4069,141 +4713,155 @@ function BusinessGrid({
     gridRef.current?.api?.deselectAll();
   }, []);
 
-  const handleCellMouseDown = useCallback((event) => {
-    if (event.event?.button !== 0 || !event.node || event.node.rowPinned || isInteractiveTarget(event.event?.target)) return;
+  const handleCellMouseDown = useCallback(
+    (event) => {
+      if (
+        event.event?.button !== 0 ||
+        !event.node ||
+        event.node.rowPinned ||
+        isInteractiveTarget(event.event?.target)
+      )
+        return;
 
-    if (event.data?.__isDeliveryGroup) {
+      if (event.data?.__isDeliveryGroup) {
+        event.event.preventDefault();
+        toggleDeliveryGroup(event.data.__deliveryGroupKey);
+        return;
+      }
+
+      const field = event.column?.getColId();
+      if (field === "__actions") return;
+
       event.event.preventDefault();
-      toggleDeliveryGroup(event.data.__deliveryGroupKey);
-      return;
-    }
 
-    const field = event.column?.getColId();
-    if (field === "__actions") return;
-
-    event.event.preventDefault();
-
-    if (field === "__rowNumber") {
-      dragSelectionRef.current = {
-        mode: "rows",
-        startRowIndex: event.node.rowIndex,
-      };
-      selectRowsByRange(event.node.rowIndex, event.node.rowIndex);
-      return;
-    }
-
-    const colIndex = selectableColumnFields.indexOf(field);
-    if (colIndex === -1) return;
-
-    const selection = selectionRangeRef.current;
-    if (selection?.mode === "cells" && isFillHandleHit(event.event)) {
-      const minRow = Math.min(selection.startRowIndex ?? 0, selection.endRowIndex ?? 0);
-      const maxRow = Math.max(selection.startRowIndex ?? 0, selection.endRowIndex ?? 0);
-      const minCol = Math.min(selection.startColIndex ?? 0, selection.endColIndex ?? 0);
-      const maxCol = Math.max(selection.startColIndex ?? 0, selection.endColIndex ?? 0);
-
-      if (event.node.rowIndex === maxRow && colIndex === maxCol) {
+      if (field === "__rowNumber") {
         dragSelectionRef.current = {
-          mode: "fill",
-          minRow,
-          maxRow,
-          minCol,
-          maxCol,
-          fillDirection: null,
+          mode: "rows",
+          startRowIndex: event.node.rowIndex,
         };
-        return;
-      }
-    }
-
-    dragSelectionRef.current = {
-      mode: "cells",
-      startRowIndex: event.node.rowIndex,
-      startColIndex: colIndex,
-    };
-    selectCellsByRange(event.node.rowIndex, event.node.rowIndex, colIndex, colIndex);
-  }, [selectableColumnFields, selectCellsByRange, selectRowsByRange, toggleDeliveryGroup]);
-
-  const handleCellMouseOver = useCallback((event) => {
-    const drag = dragSelectionRef.current;
-    if (!drag || !event.node || event.node.rowPinned) return;
-
-    if (drag.mode === "rows") {
-      selectRowsByRange(drag.startRowIndex, event.node.rowIndex);
-      return;
-    }
-
-    if (drag.mode === "cells") {
-      const colIndex = selectableColumnFields.indexOf(event.column?.getColId());
-      if (colIndex === -1) return;
-      selectCellsByRange(drag.startRowIndex, event.node.rowIndex, drag.startColIndex, colIndex);
-      return;
-    }
-
-    if (drag.mode === "fill") {
-      const colIndex = selectableColumnFields.indexOf(event.column?.getColId());
-      if (colIndex === -1) return;
-
-      if (
-        event.node.rowIndex > drag.maxRow &&
-        colIndex >= drag.minCol &&
-        colIndex <= drag.maxCol
-      ) {
-        drag.fillDirection = "down";
-        selectCellsByRange(drag.minRow, event.node.rowIndex, drag.minCol, drag.maxCol);
-        return;
-      }
-
-      if (
-        colIndex > drag.maxCol &&
-        event.node.rowIndex >= drag.minRow &&
-        event.node.rowIndex <= drag.maxRow
-      ) {
-        drag.fillDirection = "right";
-        selectCellsByRange(drag.minRow, drag.maxRow, drag.minCol, colIndex);
-        return;
-      }
-
-      drag.fillDirection = null;
-      selectCellsByRange(drag.minRow, drag.maxRow, drag.minCol, drag.maxCol);
-    }
-  }, [selectableColumnFields, selectCellsByRange, selectRowsByRange]);
-
-  const handleCellContextMenu = useCallback((event) => {
-    if (!event.node || event.node.rowPinned || isInteractiveTarget(event.event?.target)) return;
-
-    const mouseEvent = event.event;
-    mouseEvent?.preventDefault();
-
-    const field = event.column?.getColId();
-    if (field === "__actions") return;
-
-    if (field === "__rowNumber") {
-      if (!isCellInsideSelection(event.node.rowIndex, 0)) {
         selectRowsByRange(event.node.rowIndex, event.node.rowIndex);
+        return;
+      }
+
+      const colIndex = selectableColumnFields.indexOf(field);
+      if (colIndex === -1) return;
+
+      const selection = selectionRangeRef.current;
+      if (selection?.mode === "cells" && isFillHandleHit(event.event)) {
+        const minRow = Math.min(selection.startRowIndex ?? 0, selection.endRowIndex ?? 0);
+        const maxRow = Math.max(selection.startRowIndex ?? 0, selection.endRowIndex ?? 0);
+        const minCol = Math.min(selection.startColIndex ?? 0, selection.endColIndex ?? 0);
+        const maxCol = Math.max(selection.startColIndex ?? 0, selection.endColIndex ?? 0);
+
+        if (event.node.rowIndex === maxRow && colIndex === maxCol) {
+          dragSelectionRef.current = {
+            mode: "fill",
+            minRow,
+            maxRow,
+            minCol,
+            maxCol,
+            fillDirection: null,
+          };
+          return;
+        }
+      }
+
+      dragSelectionRef.current = {
+        mode: "cells",
+        startRowIndex: event.node.rowIndex,
+        startColIndex: colIndex,
+      };
+      selectCellsByRange(event.node.rowIndex, event.node.rowIndex, colIndex, colIndex);
+    },
+    [selectableColumnFields, selectCellsByRange, selectRowsByRange, toggleDeliveryGroup],
+  );
+
+  const handleCellMouseOver = useCallback(
+    (event) => {
+      const drag = dragSelectionRef.current;
+      if (!drag || !event.node || event.node.rowPinned) return;
+
+      if (drag.mode === "rows") {
+        selectRowsByRange(drag.startRowIndex, event.node.rowIndex);
+        return;
+      }
+
+      if (drag.mode === "cells") {
+        const colIndex = selectableColumnFields.indexOf(event.column?.getColId());
+        if (colIndex === -1) return;
+        selectCellsByRange(drag.startRowIndex, event.node.rowIndex, drag.startColIndex, colIndex);
+        return;
+      }
+
+      if (drag.mode === "fill") {
+        const colIndex = selectableColumnFields.indexOf(event.column?.getColId());
+        if (colIndex === -1) return;
+
+        if (
+          event.node.rowIndex > drag.maxRow &&
+          colIndex >= drag.minCol &&
+          colIndex <= drag.maxCol
+        ) {
+          drag.fillDirection = "down";
+          selectCellsByRange(drag.minRow, event.node.rowIndex, drag.minCol, drag.maxCol);
+          return;
+        }
+
+        if (
+          colIndex > drag.maxCol &&
+          event.node.rowIndex >= drag.minRow &&
+          event.node.rowIndex <= drag.maxRow
+        ) {
+          drag.fillDirection = "right";
+          selectCellsByRange(drag.minRow, drag.maxRow, drag.minCol, colIndex);
+          return;
+        }
+
+        drag.fillDirection = null;
+        selectCellsByRange(drag.minRow, drag.maxRow, drag.minCol, drag.maxCol);
+      }
+    },
+    [selectableColumnFields, selectCellsByRange, selectRowsByRange],
+  );
+
+  const handleCellContextMenu = useCallback(
+    (event) => {
+      if (!event.node || event.node.rowPinned || isInteractiveTarget(event.event?.target)) return;
+
+      const mouseEvent = event.event;
+      mouseEvent?.preventDefault();
+
+      const field = event.column?.getColId();
+      if (field === "__actions") return;
+
+      if (field === "__rowNumber") {
+        if (!isCellInsideSelection(event.node.rowIndex, 0)) {
+          selectRowsByRange(event.node.rowIndex, event.node.rowIndex);
+        }
+        positionContextMenu(mouseEvent);
+        return;
+      }
+
+      const colIndex = selectableColumnFields.indexOf(field);
+      if (colIndex === -1) return;
+
+      if (!isCellInsideSelection(event.node.rowIndex, colIndex)) {
+        selectCellsByRange(event.node.rowIndex, event.node.rowIndex, colIndex, colIndex);
       }
       positionContextMenu(mouseEvent);
-      return;
-    }
-
-    const colIndex = selectableColumnFields.indexOf(field);
-    if (colIndex === -1) return;
-
-    if (!isCellInsideSelection(event.node.rowIndex, colIndex)) {
-      selectCellsByRange(event.node.rowIndex, event.node.rowIndex, colIndex, colIndex);
-    }
-    positionContextMenu(mouseEvent);
-  }, [
-    isCellInsideSelection,
-    positionContextMenu,
-    selectCellsByRange,
-    selectableColumnFields,
-    selectRowsByRange,
-  ]);
+    },
+    [
+      isCellInsideSelection,
+      positionContextMenu,
+      selectCellsByRange,
+      selectableColumnFields,
+      selectRowsByRange,
+    ],
+  );
 
   const handleSelectionChanged = useCallback((event) => {
-    const selectedRows = event.api.getSelectedRows()
-      .filter(row => !row.__isDeliveryGroup);
-    setSelectedIds(selectedRows.map(row => row.id));
+    const selectedRows = event.api.getSelectedRows().filter((row) => !row.__isDeliveryGroup);
+    setSelectedIds(selectedRows.map((row) => row.id));
   }, []);
 
   const getSelectedAreaScope = useCallback((selection = selectionRangeRef.current) => {
@@ -4212,9 +4870,10 @@ function BusinessGrid({
     const fields = selectableColumnFieldsRef.current;
     const minCol = Math.min(selection.startColIndex ?? 0, selection.endColIndex ?? 0);
     const maxCol = Math.max(selection.startColIndex ?? 0, selection.endColIndex ?? 0);
-    const selectedFields = selection.mode === "rows"
-      ? fields
-      : fields.filter((_, index) => index >= minCol && index <= maxCol);
+    const selectedFields =
+      selection.mode === "rows"
+        ? fields
+        : fields.filter((_, index) => index >= minCol && index <= maxCol);
     if (!selectedFields.length) return null;
 
     const minRow = Math.min(selection.startRowIndex ?? 0, selection.endRowIndex ?? 0);
@@ -4223,7 +4882,8 @@ function BusinessGrid({
 
     gridRef.current?.api?.forEachNodeAfterFilterAndSort((node) => {
       if (!node.data?.id || node.data.__isDeliveryGroup) return;
-      if (selection.mode !== "columns" && (node.rowIndex < minRow || node.rowIndex > maxRow)) return;
+      if (selection.mode !== "columns" && (node.rowIndex < minRow || node.rowIndex > maxRow))
+        return;
       rowIds.add(node.data.id);
     });
 
@@ -4237,7 +4897,7 @@ function BusinessGrid({
     if (!rowIds.size || !fields.length) return null;
 
     const fieldSet = new Set(fields);
-    const selectedRows = gridRows.filter(row => rowIds.has(row.id) && !row.__isDeliveryGroup);
+    const selectedRows = gridRows.filter((row) => rowIds.has(row.id) && !row.__isDeliveryGroup);
     const values = [];
     for (const row of selectedRows) {
       for (const field of fieldSet) {
@@ -4257,55 +4917,74 @@ function BusinessGrid({
     };
   }, [getSelectedAreaScope, gridRows, selectableColumnFields, selectedIds, selectionRange]);
 
-  const startColumnSelection = useCallback((field, mouseEvent) => {
-    if (mouseEvent.button !== 0) return;
+  const startColumnSelection = useCallback(
+    (field, mouseEvent) => {
+      if (mouseEvent.button !== 0) return;
 
-    const colIndex = selectableColumnFields.indexOf(field);
-    if (colIndex === -1) return;
+      const colIndex = selectableColumnFields.indexOf(field);
+      if (colIndex === -1) return;
 
-    mouseEvent.preventDefault();
-    dragSelectionRef.current = {
-      mode: "columns",
-      startColIndex: colIndex,
-    };
-    selectColumnsByRange(colIndex, colIndex);
-  }, [selectableColumnFields, selectColumnsByRange]);
-
-  const updateColumnSelection = useCallback((field, mouseEvent) => {
-    const drag = dragSelectionRef.current;
-    if (!drag || drag.mode !== "columns" || mouseEvent.buttons !== 1) return;
-
-    const colIndex = selectableColumnFields.indexOf(field);
-    if (colIndex === -1) return;
-
-    selectColumnsByRange(drag.startColIndex, colIndex);
-  }, [selectableColumnFields, selectColumnsByRange]);
-
-  const openHeaderContextMenu = useCallback((field, mouseEvent) => {
-    const colIndex = selectableColumnFields.indexOf(field);
-    if (colIndex === -1) return;
-
-    mouseEvent.preventDefault();
-    if (!isCellInsideSelection(0, colIndex)) {
+      mouseEvent.preventDefault();
+      dragSelectionRef.current = {
+        mode: "columns",
+        startColIndex: colIndex,
+      };
       selectColumnsByRange(colIndex, colIndex);
-    }
-    positionContextMenu(mouseEvent);
-  }, [isCellInsideSelection, positionContextMenu, selectableColumnFields, selectColumnsByRange]);
+    },
+    [selectableColumnFields, selectColumnsByRange],
+  );
 
-  const handleDragStopped = useCallback((event) => {
-    if (!onColumnOrderChange) return;
-    const order = event.api.getColumnState()
-      .filter(c => c.colId !== '__actions')
-      .map(c => c.colId);
-    onColumnOrderChange(tableKey, order);
-  }, [onColumnOrderChange, tableKey]);
+  const updateColumnSelection = useCallback(
+    (field, mouseEvent) => {
+      const drag = dragSelectionRef.current;
+      if (!drag || drag.mode !== "columns" || mouseEvent.buttons !== 1) return;
+
+      const colIndex = selectableColumnFields.indexOf(field);
+      if (colIndex === -1) return;
+
+      selectColumnsByRange(drag.startColIndex, colIndex);
+    },
+    [selectableColumnFields, selectColumnsByRange],
+  );
+
+  const openHeaderContextMenu = useCallback(
+    (field, mouseEvent) => {
+      const colIndex = selectableColumnFields.indexOf(field);
+      if (colIndex === -1) return;
+
+      mouseEvent.preventDefault();
+      if (!isCellInsideSelection(0, colIndex)) {
+        selectColumnsByRange(colIndex, colIndex);
+      }
+      positionContextMenu(mouseEvent);
+    },
+    [isCellInsideSelection, positionContextMenu, selectableColumnFields, selectColumnsByRange],
+  );
+
+  const handleDragStopped = useCallback(
+    (event) => {
+      if (!onColumnOrderChange) return;
+      const order = event.api
+        .getColumnState()
+        .filter((c) => c.colId !== "__actions")
+        .map((c) => c.colId);
+      onColumnOrderChange(tableKey, order);
+    },
+    [onColumnOrderChange, tableKey],
+  );
 
   const handleBatchDelete = async () => {
     if (!selectedIds.length) return;
-    if (!(await dialogs.confirm(t("确认删除选中的 {count} 行？此操作不可恢复。", { count: selectedIds.length }), {
-      title: "删除选中行",
-      tone: "danger",
-    }))) return;
+    if (
+      !(await dialogs.confirm(
+        t("确认删除选中的 {count} 行？此操作不可恢复。", { count: selectedIds.length }),
+        {
+          title: "删除选中行",
+          tone: "danger",
+        },
+      ))
+    )
+      return;
     onDeleteRows(tableKey, selectedIds);
     setSelectedIds([]);
     gridRef.current?.api?.deselectAll();
@@ -4349,10 +5028,16 @@ function BusinessGrid({
     if (selection.mode === "rows") {
       const rowIds = getVisibleRowIdsInRange(selection.startRowIndex, selection.endRowIndex);
       if (!rowIds.length) return;
-      if (!(await dialogs.confirm(t("确认删除选中的 {count} 行？此操作不可恢复。", { count: rowIds.length }), {
-        title: "删除选中行",
-        tone: "danger",
-      }))) return;
+      if (
+        !(await dialogs.confirm(
+          t("确认删除选中的 {count} 行？此操作不可恢复。", { count: rowIds.length }),
+          {
+            title: "删除选中行",
+            tone: "danger",
+          },
+        ))
+      )
+        return;
       onDeleteRows(tableKey, rowIds);
       setSelectedIds([]);
       gridRef.current?.api?.deselectAll();
@@ -4395,7 +5080,16 @@ function BusinessGrid({
     if (!changed) return;
     onBeforeDataChange?.();
     onRowsChange(tableKey, clearedRows, { formulaRowIds: targetRowIds });
-  }, [dialogs.confirm, getVisibleRowIdsInRange, onBeforeDataChange, onDeleteRows, onRowsChange, sourceRows, tableKey, t]);
+  }, [
+    dialogs.confirm,
+    getVisibleRowIdsInRange,
+    onBeforeDataChange,
+    onDeleteRows,
+    onRowsChange,
+    sourceRows,
+    tableKey,
+    t,
+  ]);
 
   const getSelectedAreaForCopy = useCallback(() => {
     const selection = selectionRangeRef.current;
@@ -4404,9 +5098,10 @@ function BusinessGrid({
     const fields = selectableColumnFieldsRef.current;
     const minCol = Math.min(selection.startColIndex ?? 0, selection.endColIndex ?? 0);
     const maxCol = Math.max(selection.startColIndex ?? 0, selection.endColIndex ?? 0);
-    const selectedFields = selection.mode === "rows"
-      ? fields
-      : fields.filter((_, index) => index >= minCol && index <= maxCol);
+    const selectedFields =
+      selection.mode === "rows"
+        ? fields
+        : fields.filter((_, index) => index >= minCol && index <= maxCol);
     if (!selectedFields.length) return null;
 
     const minRow = Math.min(selection.startRowIndex ?? 0, selection.endRowIndex ?? 0);
@@ -4415,7 +5110,8 @@ function BusinessGrid({
 
     gridRef.current?.api?.forEachNodeAfterFilterAndSort((node) => {
       if (!node.data?.id || node.data.__isDeliveryGroup) return;
-      if (selection.mode !== "columns" && (node.rowIndex < minRow || node.rowIndex > maxRow)) return;
+      if (selection.mode !== "columns" && (node.rowIndex < minRow || node.rowIndex > maxRow))
+        return;
       rowNodes.push(node);
     });
 
@@ -4423,160 +5119,172 @@ function BusinessGrid({
     return { rowNodes, fields: selectedFields };
   }, []);
 
-  const getSelectedAreaText = useCallback((includeHeaders = false) => {
-    const area = getSelectedAreaForCopy();
-    if (!area) return "";
+  const getSelectedAreaText = useCallback(
+    (includeHeaders = false) => {
+      const area = getSelectedAreaForCopy();
+      if (!area) return "";
 
-    const body = area.rowNodes
-      .map(node => area.fields
-        .map(field => encodeClipboardCell(node.data?.[field]))
-        .join("\t"))
-      .join("\r\n");
-    if (!includeHeaders) return body;
+      const body = area.rowNodes
+        .map((node) =>
+          area.fields.map((field) => encodeClipboardCell(node.data?.[field])).join("\t"),
+        )
+        .join("\r\n");
+      if (!includeHeaders) return body;
 
-    const headers = area.fields
-      .map(field => encodeClipboardCell(columnHeaderByField.get(field) || field))
-      .join("\t");
-    return body ? `${headers}\r\n${body}` : headers;
-  }, [columnHeaderByField, getSelectedAreaForCopy]);
+      const headers = area.fields
+        .map((field) => encodeClipboardCell(columnHeaderByField.get(field) || field))
+        .join("\t");
+      return body ? `${headers}\r\n${body}` : headers;
+    },
+    [columnHeaderByField, getSelectedAreaForCopy],
+  );
 
-  const copySelectedArea = useCallback((clipboardData) => {
-    if (!clipboardData) return false;
-    const text = getSelectedAreaText();
-    if (!text) return false;
+  const copySelectedArea = useCallback(
+    (clipboardData) => {
+      if (!clipboardData) return false;
+      const text = getSelectedAreaText();
+      if (!text) return false;
 
-    clipboardData.setData("text/plain", text);
-    return true;
-  }, [getSelectedAreaText]);
+      clipboardData.setData("text/plain", text);
+      return true;
+    },
+    [getSelectedAreaText],
+  );
 
-  const pasteClipboardData = useCallback((text) => {
-    const selection = selectionRangeRef.current;
-    if (!selection || !text) return false;
+  const pasteClipboardData = useCallback(
+    (text) => {
+      const selection = selectionRangeRef.current;
+      if (!selection || !text) return false;
 
-    const table = parseClipboardTable(text);
-    if (!table.length) return false;
+      const table = parseClipboardTable(text);
+      if (!table.length) return false;
 
-    const fields = selectableColumnFieldsRef.current;
-    const minCol = Math.min(selection.startColIndex ?? 0, selection.endColIndex ?? 0);
-    const startColIndex = selection.mode === "rows" ? 0 : minCol;
-    if (startColIndex >= fields.length) return false;
+      const fields = selectableColumnFieldsRef.current;
+      const minCol = Math.min(selection.startColIndex ?? 0, selection.endColIndex ?? 0);
+      const startColIndex = selection.mode === "rows" ? 0 : minCol;
+      if (startColIndex >= fields.length) return false;
 
-    const minRow = Math.min(selection.startRowIndex ?? 0, selection.endRowIndex ?? 0);
-    const anchorRowIndex = selection.mode === "columns" ? 0 : minRow;
-    const visibleNodes = [];
+      const minRow = Math.min(selection.startRowIndex ?? 0, selection.endRowIndex ?? 0);
+      const anchorRowIndex = selection.mode === "columns" ? 0 : minRow;
+      const visibleNodes = [];
 
-    gridRef.current?.api?.forEachNodeAfterFilterAndSort((node) => {
-      if (node.data?.id && !node.data.__isDeliveryGroup) visibleNodes.push(node);
-    });
+      gridRef.current?.api?.forEachNodeAfterFilterAndSort((node) => {
+        if (node.data?.id && !node.data.__isDeliveryGroup) visibleNodes.push(node);
+      });
 
-    const startRowPosition = visibleNodes.findIndex(node => node.rowIndex === anchorRowIndex);
-    if (startRowPosition === -1) return false;
+      const startRowPosition = visibleNodes.findIndex((node) => node.rowIndex === anchorRowIndex);
+      if (startRowPosition === -1) return false;
 
-    const updatedRowsById = new Map();
+      const updatedRowsById = new Map();
 
-    for (let rowOffset = 0; rowOffset < table.length; rowOffset++) {
-      const node = visibleNodes[startRowPosition + rowOffset];
-      if (!node?.data?.id) break;
-
-      let next = node.data;
-      for (let colOffset = 0; colOffset < table[rowOffset].length; colOffset++) {
-        const field = fields[startColIndex + colOffset];
-        if (!field) break;
-
-        const value = table[rowOffset][colOffset];
-        if (next[field] === value) continue;
-        if (next === node.data) next = { ...node.data };
-        next[field] = value;
-      }
-
-      if (next !== node.data) {
-        updatedRowsById.set(node.data.id, next);
-      }
-    }
-
-    if (!updatedRowsById.size) return false;
-
-    gridRef.current?.api?.stopEditing();
-    onBeforeDataChange?.();
-    onRowsChange(
-      tableKey,
-      sourceRows.map(row => updatedRowsById.get(row.id) || row),
-      { formulaRowIds: updatedRowsById.keys() },
-    );
-    return true;
-  }, [onBeforeDataChange, onRowsChange, sourceRows, tableKey]);
-
-  const fillSelectedCells = useCallback((direction) => {
-    const selection = selectionRangeRef.current;
-    if (!selection || selection.mode !== "cells") return false;
-
-    const fields = selectableColumnFieldsRef.current;
-    const minCol = Math.min(selection.startColIndex ?? 0, selection.endColIndex ?? 0);
-    const maxCol = Math.max(selection.startColIndex ?? 0, selection.endColIndex ?? 0);
-    const minRow = Math.min(selection.startRowIndex ?? 0, selection.endRowIndex ?? 0);
-    const maxRow = Math.max(selection.startRowIndex ?? 0, selection.endRowIndex ?? 0);
-    const selectedFields = fields.filter((_, index) => index >= minCol && index <= maxCol);
-    if (!selectedFields.length) return false;
-    if (direction === "down" && minRow >= maxRow) return false;
-    if (direction === "right" && minCol >= maxCol) return false;
-
-    const selectedNodes = [];
-    gridRef.current?.api?.forEachNodeAfterFilterAndSort((node) => {
-      if (!node.data?.id || node.data.__isDeliveryGroup) return;
-      if (node.rowIndex < minRow || node.rowIndex > maxRow) return;
-      selectedNodes.push(node);
-    });
-    if (!selectedNodes.length) return false;
-
-    const updatedRowsById = new Map();
-
-    if (direction === "down") {
-      const sourceNode = selectedNodes.find(node => node.rowIndex === minRow);
-      if (!sourceNode?.data) return false;
-
-      for (const node of selectedNodes) {
-        if (node.rowIndex === minRow) continue;
+      for (let rowOffset = 0; rowOffset < table.length; rowOffset++) {
+        const node = visibleNodes[startRowPosition + rowOffset];
+        if (!node?.data?.id) break;
 
         let next = node.data;
-        for (const field of selectedFields) {
-          const value = sourceNode.data[field];
+        for (let colOffset = 0; colOffset < table[rowOffset].length; colOffset++) {
+          const field = fields[startColIndex + colOffset];
+          if (!field) break;
+
+          const value = table[rowOffset][colOffset];
           if (next[field] === value) continue;
           if (next === node.data) next = { ...node.data };
           next[field] = value;
         }
-        if (next !== node.data) updatedRowsById.set(node.data.id, next);
-      }
-    }
 
-    if (direction === "right") {
-      const sourceField = fields[minCol];
-      if (!sourceField) return false;
-
-      for (const node of selectedNodes) {
-        let next = node.data;
-        const value = node.data[sourceField];
-
-        for (let colIndex = minCol + 1; colIndex <= maxCol; colIndex++) {
-          const field = fields[colIndex];
-          if (!field || next[field] === value) continue;
-          if (next === node.data) next = { ...node.data };
-          next[field] = value;
+        if (next !== node.data) {
+          updatedRowsById.set(node.data.id, next);
         }
-        if (next !== node.data) updatedRowsById.set(node.data.id, next);
       }
-    }
 
-    if (!updatedRowsById.size) return false;
+      if (!updatedRowsById.size) return false;
 
-    gridRef.current?.api?.stopEditing();
-    onBeforeDataChange?.();
-    onRowsChange(
-      tableKey,
-      sourceRows.map(row => updatedRowsById.get(row.id) || row),
-      { formulaRowIds: updatedRowsById.keys() },
-    );
-    return true;
-  }, [onBeforeDataChange, onRowsChange, sourceRows, tableKey]);
+      gridRef.current?.api?.stopEditing();
+      onBeforeDataChange?.();
+      onRowsChange(
+        tableKey,
+        sourceRows.map((row) => updatedRowsById.get(row.id) || row),
+        { formulaRowIds: updatedRowsById.keys() },
+      );
+      return true;
+    },
+    [onBeforeDataChange, onRowsChange, sourceRows, tableKey],
+  );
+
+  const fillSelectedCells = useCallback(
+    (direction) => {
+      const selection = selectionRangeRef.current;
+      if (!selection || selection.mode !== "cells") return false;
+
+      const fields = selectableColumnFieldsRef.current;
+      const minCol = Math.min(selection.startColIndex ?? 0, selection.endColIndex ?? 0);
+      const maxCol = Math.max(selection.startColIndex ?? 0, selection.endColIndex ?? 0);
+      const minRow = Math.min(selection.startRowIndex ?? 0, selection.endRowIndex ?? 0);
+      const maxRow = Math.max(selection.startRowIndex ?? 0, selection.endRowIndex ?? 0);
+      const selectedFields = fields.filter((_, index) => index >= minCol && index <= maxCol);
+      if (!selectedFields.length) return false;
+      if (direction === "down" && minRow >= maxRow) return false;
+      if (direction === "right" && minCol >= maxCol) return false;
+
+      const selectedNodes = [];
+      gridRef.current?.api?.forEachNodeAfterFilterAndSort((node) => {
+        if (!node.data?.id || node.data.__isDeliveryGroup) return;
+        if (node.rowIndex < minRow || node.rowIndex > maxRow) return;
+        selectedNodes.push(node);
+      });
+      if (!selectedNodes.length) return false;
+
+      const updatedRowsById = new Map();
+
+      if (direction === "down") {
+        const sourceNode = selectedNodes.find((node) => node.rowIndex === minRow);
+        if (!sourceNode?.data) return false;
+
+        for (const node of selectedNodes) {
+          if (node.rowIndex === minRow) continue;
+
+          let next = node.data;
+          for (const field of selectedFields) {
+            const value = sourceNode.data[field];
+            if (next[field] === value) continue;
+            if (next === node.data) next = { ...node.data };
+            next[field] = value;
+          }
+          if (next !== node.data) updatedRowsById.set(node.data.id, next);
+        }
+      }
+
+      if (direction === "right") {
+        const sourceField = fields[minCol];
+        if (!sourceField) return false;
+
+        for (const node of selectedNodes) {
+          let next = node.data;
+          const value = node.data[sourceField];
+
+          for (let colIndex = minCol + 1; colIndex <= maxCol; colIndex++) {
+            const field = fields[colIndex];
+            if (!field || next[field] === value) continue;
+            if (next === node.data) next = { ...node.data };
+            next[field] = value;
+          }
+          if (next !== node.data) updatedRowsById.set(node.data.id, next);
+        }
+      }
+
+      if (!updatedRowsById.size) return false;
+
+      gridRef.current?.api?.stopEditing();
+      onBeforeDataChange?.();
+      onRowsChange(
+        tableKey,
+        sourceRows.map((row) => updatedRowsById.get(row.id) || row),
+        { formulaRowIds: updatedRowsById.keys() },
+      );
+      return true;
+    },
+    [onBeforeDataChange, onRowsChange, sourceRows, tableKey],
+  );
 
   useEffect(() => {
     fillSelectedCellsRef.current = fillSelectedCells;
@@ -4606,29 +5314,32 @@ function BusinessGrid({
     return true;
   }, [getSelectedAreaScope, onBeforeDataChange, onRowsChange, sourceRows, tableKey]);
 
-  const setSelectedAreaValue = useCallback((value) => {
-    const scope = getSelectedAreaScope();
-    if (!scope) return false;
+  const setSelectedAreaValue = useCallback(
+    (value) => {
+      const scope = getSelectedAreaScope();
+      if (!scope) return false;
 
-    let changed = false;
-    const updatedRows = sourceRows.map((row) => {
-      if (!scope.rowIds.has(row.id)) return row;
+      let changed = false;
+      const updatedRows = sourceRows.map((row) => {
+        if (!scope.rowIds.has(row.id)) return row;
 
-      let next = row;
-      for (const field of scope.fields) {
-        if (next[field] === value) continue;
-        if (next === row) next = { ...row };
-        next[field] = value;
-        changed = true;
-      }
-      return next;
-    });
+        let next = row;
+        for (const field of scope.fields) {
+          if (next[field] === value) continue;
+          if (next === row) next = { ...row };
+          next[field] = value;
+          changed = true;
+        }
+        return next;
+      });
 
-    if (!changed) return false;
-    onBeforeDataChange?.();
-    onRowsChange(tableKey, updatedRows, { formulaRowIds: scope.rowIds });
-    return true;
-  }, [getSelectedAreaScope, onBeforeDataChange, onRowsChange, sourceRows, tableKey]);
+      if (!changed) return false;
+      onBeforeDataChange?.();
+      onRowsChange(tableKey, updatedRows, { formulaRowIds: scope.rowIds });
+      return true;
+    },
+    [getSelectedAreaScope, onBeforeDataChange, onRowsChange, sourceRows, tableKey],
+  );
 
   const batchModifySelectedArea = useCallback(async () => {
     if (!selectionRangeRef.current) return;
@@ -4689,19 +5400,34 @@ function BusinessGrid({
     const selection = selectionRangeRef.current;
     const fields = selectableColumnFieldsRef.current;
     const minCol = Math.min(selection?.startColIndex ?? 0, selection?.endColIndex ?? 0);
-    const maxCol = Math.max(selection?.startColIndex ?? fields.length - 1, selection?.endColIndex ?? fields.length - 1);
-    const fieldsToReplace = !selection || selection.mode === "rows"
-      ? fields
-      : fields.filter((_, index) => index >= minCol && index <= maxCol);
+    const maxCol = Math.max(
+      selection?.startColIndex ?? fields.length - 1,
+      selection?.endColIndex ?? fields.length - 1,
+    );
+    const fieldsToReplace =
+      !selection || selection.mode === "rows"
+        ? fields
+        : fields.filter((_, index) => index >= minCol && index <= maxCol);
     if (!fieldsToReplace.length) return;
 
-    const minRow = Math.min(selection?.startRowIndex ?? 0, selection?.endRowIndex ?? Number.MAX_SAFE_INTEGER);
-    const maxRow = Math.max(selection?.startRowIndex ?? 0, selection?.endRowIndex ?? Number.MAX_SAFE_INTEGER);
+    const minRow = Math.min(
+      selection?.startRowIndex ?? 0,
+      selection?.endRowIndex ?? Number.MAX_SAFE_INTEGER,
+    );
+    const maxRow = Math.max(
+      selection?.startRowIndex ?? 0,
+      selection?.endRowIndex ?? Number.MAX_SAFE_INTEGER,
+    );
     const targetRowIds = new Set();
 
     gridRef.current?.api?.forEachNodeAfterFilterAndSort((node) => {
       if (!node.data?.id || node.data.__isDeliveryGroup) return;
-      if (selection && selection.mode !== "columns" && (node.rowIndex < minRow || node.rowIndex > maxRow)) return;
+      if (
+        selection &&
+        selection.mode !== "columns" &&
+        (node.rowIndex < minRow || node.rowIndex > maxRow)
+      )
+        return;
       targetRowIds.add(node.data.id);
     });
 
@@ -4727,7 +5453,9 @@ function BusinessGrid({
 
     onBeforeDataChange?.();
     onRowsChange(tableKey, updatedRows, { formulaRowIds: targetRowIds });
-    await dialogs.alert(t("已替换 {count} 个单元格。", { count: replaceCount }), { title: "替换完成" });
+    await dialogs.alert(t("已替换 {count} 个单元格。", { count: replaceCount }), {
+      title: "替换完成",
+    });
   }, [dialogs.alert, dialogs.prompt, onBeforeDataChange, onRowsChange, sourceRows, tableKey, t]);
 
   const duplicateSelectedRows = useCallback(() => {
@@ -4738,63 +5466,92 @@ function BusinessGrid({
     const rowIds = getVisibleRowIdsInRange(selection.startRowIndex, selection.endRowIndex);
     if (!rowIds.length) return false;
 
-    const selectedRowById = new Map(sourceRows.map(row => [row.id, row]));
+    const selectedRowById = new Map(sourceRows.map((row) => [row.id, row]));
     const clonedRows = rowIds
-      .map(id => selectedRowById.get(id))
+      .map((id) => selectedRowById.get(id))
       .filter(Boolean)
-      .map(row => ({ ...row, id: makeId(tableKey) }));
+      .map((row) => ({ ...row, id: makeId(tableKey) }));
     if (!clonedRows.length) return false;
 
     const maxRow = Math.max(selection.startRowIndex ?? 0, selection.endRowIndex ?? 0);
     const targetNode = getVisibleNodeAtRowIndex(maxRow);
     const originalIndex = targetNode?.data?.id
-      ? sourceRows.findIndex(row => row.id === targetNode.data.id)
+      ? sourceRows.findIndex((row) => row.id === targetNode.data.id)
       : -1;
     const insertIndex = originalIndex === -1 ? sourceRows.length : originalIndex + 1;
     const nextRows = [...sourceRows];
     nextRows.splice(insertIndex, 0, ...clonedRows);
 
     onBeforeDataChange?.();
-    onRowsChange(tableKey, nextRows, { formulaRowIds: clonedRows.map(row => row.id) });
+    onRowsChange(tableKey, nextRows, { formulaRowIds: clonedRows.map((row) => row.id) });
     return true;
-  }, [canCreateRows, getVisibleNodeAtRowIndex, getVisibleRowIdsInRange, onBeforeDataChange, onRowsChange, sourceRows, tableKey]);
+  }, [
+    canCreateRows,
+    getVisibleNodeAtRowIndex,
+    getVisibleRowIdsInRange,
+    onBeforeDataChange,
+    onRowsChange,
+    sourceRows,
+    tableKey,
+  ]);
 
-  const getInsertRowCount = useCallback((placement) => {
-    const parsed = Number.parseInt(insertRowCounts[placement], 10);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
-  }, [insertRowCounts]);
+  const getInsertRowCount = useCallback(
+    (placement) => {
+      const parsed = Number.parseInt(insertRowCounts[placement], 10);
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+    },
+    [insertRowCounts],
+  );
 
-  const insertRowAtSelection = useCallback((placement, count = 1) => {
-    if (!canCreateRows) return;
-    const selection = selectionRangeRef.current;
-    const minRow = Math.min(selection?.startRowIndex ?? 0, selection?.endRowIndex ?? 0);
-    const maxRow = Math.max(selection?.startRowIndex ?? 0, selection?.endRowIndex ?? 0);
-    const targetNode = getVisibleNodeAtRowIndex(placement === "above" ? minRow : maxRow);
-    const originalIndex = targetNode?.data?.id
-      ? sourceRows.findIndex(row => row.id === targetNode.data.id)
-      : -1;
-    const insertIndex = originalIndex === -1
-      ? (placement === "above" ? 0 : sourceRows.length)
-      : originalIndex + (placement === "below" ? 1 : 0);
-    const normalizedCount = Math.floor(count);
-    const rowCount = Number.isFinite(normalizedCount) && normalizedCount > 0 ? normalizedCount : 1;
-    const newRows = Array.from({ length: rowCount }, () => ({
-      id: makeId(tableKey),
-      ...config.emptyRow,
-      date: today(),
-    }));
-    const nextRows = [...sourceRows];
-    nextRows.splice(insertIndex, 0, ...newRows);
+  const insertRowAtSelection = useCallback(
+    (placement, count = 1) => {
+      if (!canCreateRows) return;
+      const selection = selectionRangeRef.current;
+      const minRow = Math.min(selection?.startRowIndex ?? 0, selection?.endRowIndex ?? 0);
+      const maxRow = Math.max(selection?.startRowIndex ?? 0, selection?.endRowIndex ?? 0);
+      const targetNode = getVisibleNodeAtRowIndex(placement === "above" ? minRow : maxRow);
+      const originalIndex = targetNode?.data?.id
+        ? sourceRows.findIndex((row) => row.id === targetNode.data.id)
+        : -1;
+      const insertIndex =
+        originalIndex === -1
+          ? placement === "above"
+            ? 0
+            : sourceRows.length
+          : originalIndex + (placement === "below" ? 1 : 0);
+      const normalizedCount = Math.floor(count);
+      const rowCount =
+        Number.isFinite(normalizedCount) && normalizedCount > 0 ? normalizedCount : 1;
+      const newRows = Array.from({ length: rowCount }, () => ({
+        id: makeId(tableKey),
+        ...config.emptyRow,
+        date: today(),
+      }));
+      const nextRows = [...sourceRows];
+      nextRows.splice(insertIndex, 0, ...newRows);
 
-    onBeforeDataChange?.();
-    onRowsChange(tableKey, nextRows, { formulaRowIds: newRows.map(row => row.id) });
-  }, [canCreateRows, config.emptyRow, getVisibleNodeAtRowIndex, onBeforeDataChange, onRowsChange, sourceRows, tableKey]);
+      onBeforeDataChange?.();
+      onRowsChange(tableKey, nextRows, { formulaRowIds: newRows.map((row) => row.id) });
+    },
+    [
+      canCreateRows,
+      config.emptyRow,
+      getVisibleNodeAtRowIndex,
+      onBeforeDataChange,
+      onRowsChange,
+      sourceRows,
+      tableKey,
+    ],
+  );
 
-  const submitInsertRows = useCallback((event, placement) => {
-    event.preventDefault();
-    insertRowAtSelection(placement, getInsertRowCount(placement));
-    setContextMenu(null);
-  }, [getInsertRowCount, insertRowAtSelection]);
+  const submitInsertRows = useCallback(
+    (event, placement) => {
+      event.preventDefault();
+      insertRowAtSelection(placement, getInsertRowCount(placement));
+      setContextMenu(null);
+    },
+    [getInsertRowCount, insertRowAtSelection],
+  );
 
   const getSelectedRowIdsForMenu = useCallback(() => {
     const selection = selectionRangeRef.current;
@@ -4806,10 +5563,16 @@ function BusinessGrid({
   const deleteRowsFromMenu = useCallback(async () => {
     const rowIds = getSelectedRowIdsForMenu();
     if (!rowIds.length) return;
-    if (!(await dialogs.confirm(t("确认删除选中的 {count} 行？此操作不可恢复。", { count: rowIds.length }), {
-      title: "删除选中行",
-      tone: "danger",
-    }))) return;
+    if (
+      !(await dialogs.confirm(
+        t("确认删除选中的 {count} 行？此操作不可恢复。", { count: rowIds.length }),
+        {
+          title: "删除选中行",
+          tone: "danger",
+        },
+      ))
+    )
+      return;
 
     onDeleteRows(tableKey, rowIds);
     setSelectedIds([]);
@@ -4821,21 +5584,26 @@ function BusinessGrid({
     if (!onRemoveColumns || !removableSelectedColumnFields.length) return;
 
     const columnNames = removableSelectedColumnFields
-      .map(field => columnHeaderByField.get(field) || field)
+      .map((field) => columnHeaderByField.get(field) || field)
       .join("、");
     const lockedCount = selectedColumnFields.length - removableSelectedColumnFields.length;
-    const lockedMessage = lockedCount > 0
-      ? t("\n其中 {count} 个默认表头不会删除。", { count: lockedCount })
-      : "";
+    const lockedMessage =
+      lockedCount > 0 ? t("\n其中 {count} 个默认表头不会删除。", { count: lockedCount }) : "";
 
-    if (!(await dialogs.confirm(t("确认删除选中的 {count} 个自定义表头？\n{names}{lockedMessage}", {
-      count: removableSelectedColumnFields.length,
-      names: columnNames,
-      lockedMessage,
-    }), {
-      title: "删除表头",
-      tone: "danger",
-    }))) return;
+    if (
+      !(await dialogs.confirm(
+        t("确认删除选中的 {count} 个自定义表头？\n{names}{lockedMessage}", {
+          count: removableSelectedColumnFields.length,
+          names: columnNames,
+          lockedMessage,
+        }),
+        {
+          title: "删除表头",
+          tone: "danger",
+        },
+      ))
+    )
+      return;
 
     onRemoveColumns(tableKey, removableSelectedColumnFields);
     setSelectionRange(null);
@@ -4849,15 +5617,18 @@ function BusinessGrid({
     t,
   ]);
 
-  const sortSelectedColumnFromMenu = useCallback((sort) => {
-    const field = selectedColumnFields[0];
-    if (!field) return;
+  const sortSelectedColumnFromMenu = useCallback(
+    (sort) => {
+      const field = selectedColumnFields[0];
+      if (!field) return;
 
-    gridRef.current?.api?.applyColumnState({
-      defaultState: { sort: null },
-      state: [{ colId: field, sort }],
-    });
-  }, [selectedColumnFields]);
+      gridRef.current?.api?.applyColumnState({
+        defaultState: { sort: null },
+        state: [{ colId: field, sort }],
+      });
+    },
+    [selectedColumnFields],
+  );
 
   const clearSortFromMenu = useCallback(() => {
     gridRef.current?.api?.applyColumnState({
@@ -4865,16 +5636,19 @@ function BusinessGrid({
     });
   }, []);
 
-  const copyFromMenu = useCallback(async (includeHeaders = false) => {
-    const text = getSelectedAreaText(includeHeaders);
-    if (!text) return;
+  const copyFromMenu = useCallback(
+    async (includeHeaders = false) => {
+      const text = getSelectedAreaText(includeHeaders);
+      if (!text) return;
 
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch (err) {
-      await dialogs.alert(`复制失败：${err.message}`, { title: "复制失败" });
-    }
-  }, [dialogs.alert, getSelectedAreaText]);
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch (err) {
+        await dialogs.alert(`复制失败：${err.message}`, { title: "复制失败" });
+      }
+    },
+    [dialogs.alert, getSelectedAreaText],
+  );
 
   const pasteFromMenu = useCallback(async () => {
     try {
@@ -4926,11 +5700,8 @@ function BusinessGrid({
     const handleFillKeyDown = (event) => {
       const key = event.key?.toLowerCase();
       const isShortcut = event.ctrlKey || event.metaKey;
-      const direction = isShortcut && key === "d"
-        ? "down"
-        : isShortcut && key === "r"
-          ? "right"
-          : null;
+      const direction =
+        isShortcut && key === "d" ? "down" : isShortcut && key === "r" ? "right" : null;
       if (!direction || !selectionRangeRef.current) return;
       if (isInteractiveTarget(event.target)) return;
 
@@ -4995,13 +5766,16 @@ function BusinessGrid({
     setFilterPopup(null);
   }, []);
 
-  const openImagePreview = useCallback((src, title) => {
-    if (!src) return;
-    setPhotoPreview({
-      src,
-      title: title || t("照片证明"),
-    });
-  }, [t]);
+  const openImagePreview = useCallback(
+    (src, title) => {
+      if (!src) return;
+      setPhotoPreview({
+        src,
+        title: title || t("照片证明"),
+      });
+    },
+    [t],
+  );
 
   const closeImagePreview = useCallback(() => {
     setPhotoPreview(null);
@@ -5018,11 +5792,13 @@ function BusinessGrid({
     return () => document.removeEventListener("keydown", closeOnEscape);
   }, [closeImagePreview, photoPreview]);
 
-  const cloneColumnFilters = useCallback((filters) => (
-    Object.fromEntries(
-      Object.entries(filters).map(([field, values]) => [field, new Set(values)]),
-    )
-  ), []);
+  const cloneColumnFilters = useCallback(
+    (filters) =>
+      Object.fromEntries(
+        Object.entries(filters).map(([field, values]) => [field, new Set(values)]),
+      ),
+    [],
+  );
 
   const pushColumnFilterUndo = useCallback(() => {
     filterUndoStackRef.current = [
@@ -5031,29 +5807,35 @@ function BusinessGrid({
     ].slice(-MAX_UNDO_STEPS);
   }, [cloneColumnFilters, columnFilters]);
 
-  const applyColumnFilter = useCallback((field, selectedValues, allValues) => {
-    pushColumnFilterUndo();
-    setColumnFilters(current => {
-      const next = { ...current };
-      if (selectedValues.size === allValues.length) delete next[field];
-      else next[field] = new Set(selectedValues);
-      return next;
-    });
-    setFilterPopup(null);
-    gridRef.current?.api?.deselectAll();
-    setSelectedIds([]);
-    setSelectionRange(null);
-  }, [pushColumnFilterUndo]);
+  const applyColumnFilter = useCallback(
+    (field, selectedValues, allValues) => {
+      pushColumnFilterUndo();
+      setColumnFilters((current) => {
+        const next = { ...current };
+        if (selectedValues.size === allValues.length) delete next[field];
+        else next[field] = new Set(selectedValues);
+        return next;
+      });
+      setFilterPopup(null);
+      gridRef.current?.api?.deselectAll();
+      setSelectedIds([]);
+      setSelectionRange(null);
+    },
+    [pushColumnFilterUndo],
+  );
 
-  const clearColumnFilter = useCallback((field) => {
-    pushColumnFilterUndo();
-    setColumnFilters(current => {
-      const next = { ...current };
-      delete next[field];
-      return next;
-    });
-    setFilterPopup(null);
-  }, [pushColumnFilterUndo]);
+  const clearColumnFilter = useCallback(
+    (field) => {
+      pushColumnFilterUndo();
+      setColumnFilters((current) => {
+        const next = { ...current };
+        delete next[field];
+        return next;
+      });
+      setFilterPopup(null);
+    },
+    [pushColumnFilterUndo],
+  );
 
   const restoreLastColumnFilter = useCallback(() => {
     if (!filterUndoStackRef.current.length) return false;
@@ -5078,29 +5860,32 @@ function BusinessGrid({
     return () => window.removeEventListener("crm:undo-filter", handleFilterUndo);
   }, [restoreLastColumnFilter]);
 
-  const gridContext = useMemo(() => ({
-    language,
-    t,
-    openColumnFilter,
-    openImagePreview,
-    activeFilterFields: new Set(Object.keys(columnFilters)),
-    selectionRangeRef,
-    selectableColumnFieldsRef,
-    selectAllRows: selectAllVisibleRows,
-    startColumnSelection,
-    updateColumnSelection,
-    openHeaderContextMenu,
-  }), [
-    columnFilters,
-    language,
-    openHeaderContextMenu,
-    openColumnFilter,
-    openImagePreview,
-    selectAllVisibleRows,
-    startColumnSelection,
-    t,
-    updateColumnSelection,
-  ]);
+  const gridContext = useMemo(
+    () => ({
+      language,
+      t,
+      openColumnFilter,
+      openImagePreview,
+      activeFilterFields: new Set(Object.keys(columnFilters)),
+      selectionRangeRef,
+      selectableColumnFieldsRef,
+      selectAllRows: selectAllVisibleRows,
+      startColumnSelection,
+      updateColumnSelection,
+      openHeaderContextMenu,
+    }),
+    [
+      columnFilters,
+      language,
+      openHeaderContextMenu,
+      openColumnFilter,
+      openImagePreview,
+      selectAllVisibleRows,
+      startColumnSelection,
+      t,
+      updateColumnSelection,
+    ],
+  );
 
   const handleGridReady = useCallback(() => {
     scheduleAutoSizeColumns({ delay: 80 });
@@ -5119,7 +5904,13 @@ function BusinessGrid({
 
       if ((e.ctrlKey || e.metaKey) && e.key === "n") {
         e.preventDefault();
-        const newRow = { ...config.emptyRow, id: makeId(tableKey), date: tableKey === "orders" ? today() : "", orderNo: "", status: "未完成" };
+        const newRow = {
+          ...config.emptyRow,
+          id: makeId(tableKey),
+          date: tableKey === "orders" ? today() : "",
+          orderNo: "",
+          status: "未完成",
+        };
         const newRows = [...sourceRows, newRow];
         onBeforeDataChange?.();
         onRowsChange(tableKey, newRows);
@@ -5128,12 +5919,15 @@ function BusinessGrid({
           if (!api) return;
           const lastIndex = api.getDisplayedRowCount() - 1;
           api.ensureIndexVisible(lastIndex);
-          api.startEditingCell({ rowIndex: lastIndex, colKey: selectableColumnFields[1] || selectableColumnFields[0] });
+          api.startEditingCell({
+            rowIndex: lastIndex,
+            colKey: selectableColumnFields[1] || selectableColumnFields[0],
+          });
         }, 150);
       }
       if ((e.ctrlKey || e.metaKey) && e.key === "d" && selectedIds.length === 1) {
         e.preventDefault();
-        const row = sourceRows.find(r => r.id === selectedIds[0]);
+        const row = sourceRows.find((r) => r.id === selectedIds[0]);
         if (row) {
           const copiedRow = { ...row, id: makeId(tableKey), orderNo: "", date: today() };
           const newRows = [...sourceRows, copiedRow];
@@ -5151,7 +5945,7 @@ function BusinessGrid({
   }, [selectedIds, sourceRows, tableKey, onRowsChange, onBeforeDataChange]);
 
   const getGridRowClass = useCallback(
-    (params) => params.data?.__isDeliveryGroup ? "delivery-group-row" : undefined,
+    (params) => (params.data?.__isDeliveryGroup ? "delivery-group-row" : undefined),
     [],
   );
 
@@ -5163,8 +5957,8 @@ function BusinessGrid({
 
   const applyBulkEdit = () => {
     if (!bulkEditField || !selectedIds.length) return;
-    const updatedRows = sourceRows.map(row =>
-      selectedIds.includes(row.id) ? { ...row, [bulkEditField]: bulkEditValue } : row
+    const updatedRows = sourceRows.map((row) =>
+      selectedIds.includes(row.id) ? { ...row, [bulkEditField]: bulkEditValue } : row,
     );
     onBeforeDataChange?.();
     onRowsChange(tableKey, updatedRows);
@@ -5183,24 +5977,40 @@ function BusinessGrid({
           <span>{t("已选中 {count} 行", { count: selectedIds.length })}</span>
           <div className="grid-selection-actions">
             {canScheduleOrders && (
-              <button className="secondary-button compact" type="button" onClick={handleScheduleSelectedRows}>
+              <button
+                className="secondary-button compact"
+                type="button"
+                onClick={handleScheduleSelectedRows}
+              >
                 <KanbanSquare size={14} />
                 {t("排产")}
               </button>
             )}
             {canCreateDeliveryFromOrders && (
-              <button className="secondary-button compact" type="button" onClick={handleCreateDeliveryFromSelectedRows}>
+              <button
+                className="secondary-button compact"
+                type="button"
+                onClick={handleCreateDeliveryFromSelectedRows}
+              >
                 <Truck size={14} />
                 {t("生成送货单自动关联订单")}
               </button>
             )}
             {canFinalizeDeliveryDrafts && (
-              <button className="secondary-button compact" type="button" onClick={handleFinalizeSelectedDeliveryDrafts}>
+              <button
+                className="secondary-button compact"
+                type="button"
+                onClick={handleFinalizeSelectedDeliveryDrafts}
+              >
                 <Truck size={14} />
                 {t("确认生成送货单")}
               </button>
             )}
-            <button className="secondary-button compact" type="button" onClick={() => setShowBulkEdit(!showBulkEdit)}>
+            <button
+              className="secondary-button compact"
+              type="button"
+              onClick={() => setShowBulkEdit(!showBulkEdit)}
+            >
               <Pencil size={14} />
               {t("批量修改")}
             </button>
@@ -5211,19 +6021,28 @@ function BusinessGrid({
           </div>
           {showBulkEdit && (
             <div className="bulk-edit-row">
-              <select value={bulkEditField} onChange={e => setBulkEditField(e.target.value)}>
+              <select value={bulkEditField} onChange={(e) => setBulkEditField(e.target.value)}>
                 <option value="">{t("选择字段")}</option>
-                {tableColumns.filter(c => c.field !== "id" && c.field !== "__actions").map(c => (
-                  <option key={c.field} value={c.field}>{t(c.headerName)}</option>
-                ))}
+                {tableColumns
+                  .filter((c) => c.field !== "id" && c.field !== "__actions")
+                  .map((c) => (
+                    <option key={c.field} value={c.field}>
+                      {t(c.headerName)}
+                    </option>
+                  ))}
               </select>
               <input
                 value={bulkEditValue}
-                onChange={e => setBulkEditValue(e.target.value)}
+                onChange={(e) => setBulkEditValue(e.target.value)}
                 placeholder={t("新值")}
-                onKeyDown={e => e.key === "Enter" && applyBulkEdit()}
+                onKeyDown={(e) => e.key === "Enter" && applyBulkEdit()}
               />
-              <button className="primary-action compact" type="button" onClick={applyBulkEdit} style={{ minHeight: 32 }}>
+              <button
+                className="primary-action compact"
+                type="button"
+                onClick={applyBulkEdit}
+                style={{ minHeight: 32 }}
+              >
                 {t("应用")}
               </button>
             </div>
@@ -5301,27 +6120,69 @@ function BusinessGrid({
           role="menu"
           onContextMenu={(event) => event.preventDefault()}
         >
-          <button type="button" role="menuitem" onClick={() => { findInTable(); setContextMenu(null); }}>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              findInTable();
+              setContextMenu(null);
+            }}
+          >
             <Search size={14} />
             {t("查找")}
           </button>
-          <button type="button" role="menuitem" onClick={() => { replaceInTable(); setContextMenu(null); }}>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              replaceInTable();
+              setContextMenu(null);
+            }}
+          >
             <SquarePen size={14} />
             {t("替换")}
           </button>
-          <button type="button" role="menuitem" onClick={() => { copyFromMenu(); setContextMenu(null); }}>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              copyFromMenu();
+              setContextMenu(null);
+            }}
+          >
             <Copy size={14} />
             {t("复制")}
           </button>
-          <button type="button" role="menuitem" onClick={() => { copyFromMenu(true); setContextMenu(null); }}>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              copyFromMenu(true);
+              setContextMenu(null);
+            }}
+          >
             <ClipboardList size={14} />
             {t("复制带表头")}
           </button>
-          <button type="button" role="menuitem" onClick={() => { pasteFromMenu(); setContextMenu(null); }}>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              pasteFromMenu();
+              setContextMenu(null);
+            }}
+          >
             <ClipboardPaste size={14} />
             {t("粘贴")}
           </button>
-          <button type="button" role="menuitem" onClick={() => { clearSelectedContents(); setContextMenu(null); }}>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              clearSelectedContents();
+              setContextMenu(null);
+            }}
+          >
             <Eraser size={14} />
             {t("清空内容")}
           </button>
@@ -5329,7 +6190,10 @@ function BusinessGrid({
             type="button"
             role="menuitem"
             disabled={!selectionRange}
-            onClick={() => { batchModifySelectedArea(); setContextMenu(null); }}
+            onClick={() => {
+              batchModifySelectedArea();
+              setContextMenu(null);
+            }}
           >
             <SquarePen size={14} />
             {t("批量修改选区")}
@@ -5340,7 +6204,10 @@ function BusinessGrid({
                 type="button"
                 role="menuitem"
                 disabled={!canFillDown}
-                onClick={() => { fillSelectedCells("down"); setContextMenu(null); }}
+                onClick={() => {
+                  fillSelectedCells("down");
+                  setContextMenu(null);
+                }}
               >
                 <ArrowDown size={14} />
                 {t("向下填充")}
@@ -5349,7 +6216,10 @@ function BusinessGrid({
                 type="button"
                 role="menuitem"
                 disabled={!canFillRight}
-                onClick={() => { fillSelectedCells("right"); setContextMenu(null); }}
+                onClick={() => {
+                  fillSelectedCells("right");
+                  setContextMenu(null);
+                }}
               >
                 <ArrowRight size={14} />
                 {t("向右填充")}
@@ -5363,7 +6233,10 @@ function BusinessGrid({
                 type="button"
                 role="menuitem"
                 disabled={!selectedColumnFields.length}
-                onClick={() => { sortSelectedColumnFromMenu("asc"); setContextMenu(null); }}
+                onClick={() => {
+                  sortSelectedColumnFromMenu("asc");
+                  setContextMenu(null);
+                }}
               >
                 <ArrowUp size={14} />
                 {t("升序排序")}
@@ -5372,7 +6245,10 @@ function BusinessGrid({
                 type="button"
                 role="menuitem"
                 disabled={!selectedColumnFields.length}
-                onClick={() => { sortSelectedColumnFromMenu("desc"); setContextMenu(null); }}
+                onClick={() => {
+                  sortSelectedColumnFromMenu("desc");
+                  setContextMenu(null);
+                }}
               >
                 <ArrowDown size={14} />
                 {t("降序排序")}
@@ -5380,7 +6256,10 @@ function BusinessGrid({
               <button
                 type="button"
                 role="menuitem"
-                onClick={() => { clearSortFromMenu(); setContextMenu(null); }}
+                onClick={() => {
+                  clearSortFromMenu();
+                  setContextMenu(null);
+                }}
               >
                 <RotateCcw size={14} />
                 {t("清除排序")}
@@ -5391,8 +6270,15 @@ function BusinessGrid({
                 type="button"
                 role="menuitem"
                 disabled={!removableSelectedColumnFields.length}
-                title={removableSelectedColumnFields.length ? t("删除选中的自定义表头") : t("默认表头不可删除")}
-                onClick={() => { deleteSelectedColumnsFromMenu(); setContextMenu(null); }}
+                title={
+                  removableSelectedColumnFields.length
+                    ? t("删除选中的自定义表头")
+                    : t("默认表头不可删除")
+                }
+                onClick={() => {
+                  deleteSelectedColumnsFromMenu();
+                  setContextMenu(null);
+                }}
               >
                 <Trash2 size={14} />
                 {t("删除选中列（表头）")}
@@ -5405,14 +6291,20 @@ function BusinessGrid({
                 type="button"
                 role="menuitem"
                 disabled={!canCreateRows || selectionRange?.mode !== "rows"}
-                onClick={() => { duplicateSelectedRows(); setContextMenu(null); }}
+                onClick={() => {
+                  duplicateSelectedRows();
+                  setContextMenu(null);
+                }}
               >
                 <Copy size={14} />
                 {t("复制选中行为新行")}
               </button>
               {canCreateRows && (
                 <>
-                  <form className="grid-context-menu-insert" onSubmit={(event) => submitInsertRows(event, "above")}>
+                  <form
+                    className="grid-context-menu-insert"
+                    onSubmit={(event) => submitInsertRows(event, "above")}
+                  >
                     <button type="submit" role="menuitem">
                       <Plus size={14} />
                       {t("在上方插入")}
@@ -5424,14 +6316,19 @@ function BusinessGrid({
                       placeholder="1"
                       type="number"
                       value={insertRowCounts.above}
-                      onChange={(event) => setInsertRowCounts(current => ({
-                        ...current,
-                        above: event.target.value,
-                      }))}
+                      onChange={(event) =>
+                        setInsertRowCounts((current) => ({
+                          ...current,
+                          above: event.target.value,
+                        }))
+                      }
                     />
                     <span>{t("行")}</span>
                   </form>
-                  <form className="grid-context-menu-insert" onSubmit={(event) => submitInsertRows(event, "below")}>
+                  <form
+                    className="grid-context-menu-insert"
+                    onSubmit={(event) => submitInsertRows(event, "below")}
+                  >
                     <button type="submit" role="menuitem">
                       <Plus size={14} />
                       {t("在下方插入")}
@@ -5443,10 +6340,12 @@ function BusinessGrid({
                       placeholder="1"
                       type="number"
                       value={insertRowCounts.below}
-                      onChange={(event) => setInsertRowCounts(current => ({
-                        ...current,
-                        below: event.target.value,
-                      }))}
+                      onChange={(event) =>
+                        setInsertRowCounts((current) => ({
+                          ...current,
+                          below: event.target.value,
+                        }))
+                      }
                     />
                     <span>{t("行")}</span>
                   </form>
@@ -5457,7 +6356,10 @@ function BusinessGrid({
                 type="button"
                 role="menuitem"
                 disabled={selectionRange?.mode !== "rows"}
-                onClick={() => { deleteRowsFromMenu(); setContextMenu(null); }}
+                onClick={() => {
+                  deleteRowsFromMenu();
+                  setContextMenu(null);
+                }}
               >
                 <Trash2 size={14} />
                 {t("删除选中行")}
@@ -5480,11 +6382,15 @@ function BusinessGrid({
         <div className="selection-summary">
           <span className="selection-summary-item">
             <span className="selection-summary-label">{t("合计")}</span>
-            <span className="selection-summary-value">{Number(selectionAgg.sum).toLocaleString()}</span>
+            <span className="selection-summary-value">
+              {Number(selectionAgg.sum).toLocaleString()}
+            </span>
           </span>
           <span className="selection-summary-item">
             <span className="selection-summary-label">{t("平均")}</span>
-            <span className="selection-summary-value">{Number(selectionAgg.avg).toLocaleString()}</span>
+            <span className="selection-summary-value">
+              {Number(selectionAgg.avg).toLocaleString()}
+            </span>
           </span>
           <span className="selection-summary-item">
             <span className="selection-summary-label">{t("计数")}</span>
@@ -5493,13 +6399,17 @@ function BusinessGrid({
           {selectionAgg.min !== undefined && (
             <span className="selection-summary-item">
               <span className="selection-summary-label">{t("最小")}</span>
-              <span className="selection-summary-value">{Number(selectionAgg.min).toLocaleString()}</span>
+              <span className="selection-summary-value">
+                {Number(selectionAgg.min).toLocaleString()}
+              </span>
             </span>
           )}
           {selectionAgg.max !== undefined && (
             <span className="selection-summary-item">
               <span className="selection-summary-label">{t("最大")}</span>
-              <span className="selection-summary-value">{Number(selectionAgg.max).toLocaleString()}</span>
+              <span className="selection-summary-value">
+                {Number(selectionAgg.max).toLocaleString()}
+              </span>
             </span>
           )}
         </div>
@@ -5524,9 +6434,10 @@ const selectionCellClassRules = {
       return rowIndex >= minRow && rowIndex <= maxRow;
     }
 
-    const selectableColumnFields = params.context?.selectableColumnFieldsRef?.current
-      ?? params.context?.selectableColumnFields
-      ?? [];
+    const selectableColumnFields =
+      params.context?.selectableColumnFieldsRef?.current ??
+      params.context?.selectableColumnFields ??
+      [];
     const colIndex = selectableColumnFields.indexOf(field);
     if (colIndex === -1) return false;
 
@@ -5547,13 +6458,19 @@ const selectionCellClassRules = {
   },
   "grid-fill-handle-cell": (params) => {
     const selection = params.context?.selectionRangeRef?.current ?? params.context?.selectionRange;
-    if (!selection || selection.mode !== "cells" || params.node?.rowPinned || params.node?.rowIndex == null) {
+    if (
+      !selection ||
+      selection.mode !== "cells" ||
+      params.node?.rowPinned ||
+      params.node?.rowIndex == null
+    ) {
       return false;
     }
 
-    const selectableColumnFields = params.context?.selectableColumnFieldsRef?.current
-      ?? params.context?.selectableColumnFields
-      ?? [];
+    const selectableColumnFields =
+      params.context?.selectableColumnFieldsRef?.current ??
+      params.context?.selectableColumnFields ??
+      [];
     const field = params.column?.getColId();
     const colIndex = selectableColumnFields.indexOf(field);
     if (colIndex === -1) return false;
@@ -5569,7 +6486,7 @@ function toGridColumn(column, t = defaultTranslator, translateHeader = true) {
   const isEditable = column.editable !== false;
   const cellClasses = [
     column.required ? "required-cell" : null,
-    (column.type === "number" || hasFormula) ? "number-cell" : null,
+    column.type === "number" || hasFormula ? "number-cell" : null,
     hasFormula ? "formula-cell" : null,
     column.field === "status" ? "status-cell" : null,
     column.type === "image" ? "image-cell" : null,
@@ -5634,12 +6551,11 @@ function toGridColumn(column, t = defaultTranslator, translateHeader = true) {
     gridColumn.cellEditor = "agSelectCellEditor";
     gridColumn.cellEditorParams = { values: column.options || [] };
     gridColumn.cellRenderer = (params) => {
-      const value = column.options === statusOptions
-        ? normalizeOrderStatus(params.value)
-        : params.value;
+      const value =
+        column.options === statusOptions ? normalizeOrderStatus(params.value) : params.value;
       return (
         <span className={`status-chip ${statusClass(value)}`}>
-          {column.field === "status" ? t(value || "未设置") : (value || t("未设置"))}
+          {column.field === "status" ? t(value || "未设置") : value || t("未设置")}
         </span>
       );
     };
@@ -5732,9 +6648,10 @@ function ColumnValueFilter({ popup, rows, appliedValues, onApply, onClear, onClo
     const seen = new Set();
     const result = [];
     const addValue = (rawValue) => {
-      const normalizedValue = popup.field === "status" && popup.optionValues?.includes("未完成")
-        ? normalizeOrderStatus(rawValue)
-        : rawValue;
+      const normalizedValue =
+        popup.field === "status" && popup.optionValues?.includes("未完成")
+          ? normalizeOrderStatus(rawValue)
+          : rawValue;
       const value = filterValue(normalizedValue);
       if (seen.has(value.key)) return;
       seen.add(value.key);
@@ -5753,12 +6670,14 @@ function ColumnValueFilter({ popup, rows, appliedValues, onApply, onClear, onClo
       : result.sort((a, b) => a.label.localeCompare(b.label, "zh-CN", { numeric: true }));
   }, [popup.field, popup.optionValues, rows]);
 
-  const [draftValues, setDraftValues] = useState(() =>
-    new Set(appliedValues ? Array.from(appliedValues) : values.map(value => value.key)),
+  const [draftValues, setDraftValues] = useState(
+    () => new Set(appliedValues ? Array.from(appliedValues) : values.map((value) => value.key)),
   );
 
   useEffect(() => {
-    setDraftValues(new Set(appliedValues ? Array.from(appliedValues) : values.map(value => value.key)));
+    setDraftValues(
+      new Set(appliedValues ? Array.from(appliedValues) : values.map((value) => value.key)),
+    );
   }, [appliedValues, values]);
 
   useEffect(() => {
@@ -5770,26 +6689,32 @@ function ColumnValueFilter({ popup, rows, appliedValues, onApply, onClear, onClo
   }, [onClose]);
 
   const toggleValue = (key, checked) => {
-    setDraftValues(current => {
+    setDraftValues((current) => {
       const next = new Set(current);
       if (checked) next.add(key);
       else next.delete(key);
       return next;
     });
   };
-  const getDisplayLabel = (value) => (
-    value.key === "" || popup.field === "status" ? t(value.label) : value.label
-  );
+  const getDisplayLabel = (value) =>
+    value.key === "" || popup.field === "status" ? t(value.label) : value.label;
 
   return (
     <div className="column-filter-popover" style={{ left: popup.left, top: popup.top }}>
       <div className="column-filter-title">{popup.headerName}</div>
       <div className="column-filter-actions">
-        <button type="button" onClick={() => setDraftValues(new Set(values.map(value => value.key)))}>{t("全选")}</button>
-        <button type="button" onClick={() => setDraftValues(new Set())}>{t("清空")}</button>
+        <button
+          type="button"
+          onClick={() => setDraftValues(new Set(values.map((value) => value.key)))}
+        >
+          {t("全选")}
+        </button>
+        <button type="button" onClick={() => setDraftValues(new Set())}>
+          {t("清空")}
+        </button>
       </div>
       <div className="column-filter-options">
-        {values.map(value => (
+        {values.map((value) => (
           <label className="column-filter-option" key={value.key}>
             <input
               type="checkbox"
@@ -5801,9 +6726,19 @@ function ColumnValueFilter({ popup, rows, appliedValues, onApply, onClear, onClo
         ))}
       </div>
       <div className="column-filter-footer">
-        <button type="button" onClick={() => onClear(popup.field)}>{t("重置")}</button>
-        <button type="button" onClick={onClose}>{t("取消")}</button>
-        <button className="is-primary" type="button" onClick={() => onApply(popup.field, draftValues, values)}>{t("确定")}</button>
+        <button type="button" onClick={() => onClear(popup.field)}>
+          {t("重置")}
+        </button>
+        <button type="button" onClick={onClose}>
+          {t("取消")}
+        </button>
+        <button
+          className="is-primary"
+          type="button"
+          onClick={() => onApply(popup.field, draftValues, values)}
+        >
+          {t("确定")}
+        </button>
       </div>
     </div>
   );
@@ -5822,14 +6757,15 @@ function statusClass(value = "") {
   if (value === "已付款") return "is-paid";
   if (value === "已开对账单") return "is-reconciled";
   if (value === "已开送货单") return "is-delivery-opened";
-  if (value === "部分送货") return "is-partial-delivered";
-  if (value === "已送货" || value === "已发货") return "is-delivered";
+  if (value === "部分送货" || value === "部分签收") return "is-partial-delivered";
+  if (value === "已送货" || value === "已发货" || value === "已签收") return "is-delivered";
   if (value === "已完成") return "is-completed";
   if (value === "已排产") return "is-scheduled";
   if (value === "未完成") return "is-pending";
   // legacy fallbacks
-  if (value === "未排产" || value === "未送" || value === "待确认" || value === "待发货") return "is-unfinished";
-  if (value === "已送" || value.includes("签收")) return "is-delivered";
+  if (value === "未排产" || value === "未送" || value === "待确认" || value === "待发货")
+    return "is-unfinished";
+  if (value === "已送") return "is-delivered";
   if (value.includes("异常")) return "is-risk";
   if (value.includes("配送")) return "is-live";
   if (value.includes("装车")) return "is-waiting";
@@ -5858,15 +6794,17 @@ function ProductionScheduleModal({ customer, orders, onClose, onSave }) {
   });
   const [saving, setSaving] = useState(false);
 
-  const totalQuantity = useMemo(() => (
-    orders.reduce((sum, order) => {
-      const quantity = parseNumericValue(order[orderRemainingQuantityField] || order.quantity);
-      return sum + quantity;
-    }, 0)
-  ), [orders]);
+  const totalQuantity = useMemo(
+    () =>
+      orders.reduce((sum, order) => {
+        const quantity = parseNumericValue(order[orderRemainingQuantityField] || order.quantity);
+        return sum + quantity;
+      }, 0),
+    [orders],
+  );
 
   const update = (field, value) => {
-    setForm(current => ({ ...current, [field]: value }));
+    setForm((current) => ({ ...current, [field]: value }));
   };
 
   const submit = async (event) => {
@@ -5886,7 +6824,12 @@ function ProductionScheduleModal({ customer, orders, onClose, onSave }) {
         <div className="modal-head">
           <div>
             <p className="eyebrow">PRODUCTION SCHEDULE</p>
-            <h3>{t("{customer} · 排产 {count} 条订单", { customer: customer.name, count: orders.length })}</h3>
+            <h3>
+              {t("{customer} · 排产 {count} 条订单", {
+                customer: customer.name,
+                count: orders.length,
+              })}
+            </h3>
           </div>
           <button className="icon-button" type="button" onClick={onClose} title={t("关闭")}>
             <X size={18} />
@@ -5895,7 +6838,9 @@ function ProductionScheduleModal({ customer, orders, onClose, onSave }) {
 
         <div className="production-summary">
           <span>{t("订单数：{count}", { count: orders.length })}</span>
-          <span>{t("待排数量：{quantity}", { quantity: normalizeCalculatedNumber(totalQuantity) })}</span>
+          <span>
+            {t("待排数量：{quantity}", { quantity: normalizeCalculatedNumber(totalQuantity) })}
+          </span>
         </div>
 
         <div className="form-grid">
@@ -5922,12 +6867,11 @@ function ProductionScheduleModal({ customer, orders, onClose, onSave }) {
             />
           </Field>
           <Field label={t("排产后进度")}>
-            <select
-              value={form.status}
-              onChange={(event) => update("status", event.target.value)}
-            >
-              {productionScheduleStatusOptions.map(option => (
-                <option key={option} value={option}>{t(option)}</option>
+            <select value={form.status} onChange={(event) => update("status", event.target.value)}>
+              {productionScheduleStatusOptions.map((option) => (
+                <option key={option} value={option}>
+                  {t(option)}
+                </option>
               ))}
             </select>
           </Field>
@@ -5941,14 +6885,18 @@ function ProductionScheduleModal({ customer, orders, onClose, onSave }) {
         </div>
 
         <div className="production-order-list">
-          {orders.map(order => (
+          {orders.map((order) => (
             <div className="production-order-row" key={order.id}>
               <div>
                 <strong>{order.orderNo || order.product || order.id}</strong>
                 <span>{order.product || t("未填写产品")}</span>
               </div>
               <small>
-                {t("数量 {quantity}", { quantity: normalizeCalculatedNumber(parseNumericValue(order[orderRemainingQuantityField] || order.quantity)) })}
+                {t("数量 {quantity}", {
+                  quantity: normalizeCalculatedNumber(
+                    parseNumericValue(order[orderRemainingQuantityField] || order.quantity),
+                  ),
+                })}
                 {order.dueDate ? t(" · 交期 {date}", { date: order.dueDate }) : ""}
               </small>
             </div>
@@ -6020,15 +6968,17 @@ function CustomerModal({ customer, customerGroups = customerLevelOptions, onClos
             />
           </Field>
           <Field label={t("联系电话")}>
-            <input
-              value={form.phone}
-              onChange={(event) => update("phone", event.target.value)}
-            />
+            <input value={form.phone} onChange={(event) => update("phone", event.target.value)} />
           </Field>
           <Field label={t("客户等级")}>
             <select
               value={form.level || UNGROUPED_CUSTOMER_GROUP}
-              onChange={(event) => update("level", event.target.value === UNGROUPED_CUSTOMER_GROUP ? "" : event.target.value)}
+              onChange={(event) =>
+                update(
+                  "level",
+                  event.target.value === UNGROUPED_CUSTOMER_GROUP ? "" : event.target.value,
+                )
+              }
             >
               {customerGroups.map((level) => (
                 <option key={level} value={level}>
@@ -6045,10 +6995,7 @@ function CustomerModal({ customer, customerGroups = customerLevelOptions, onClos
             />
           </Field>
           <Field label={t("税号")}>
-            <input
-              value={form.taxNo}
-              onChange={(event) => update("taxNo", event.target.value)}
-            />
+            <input value={form.taxNo} onChange={(event) => update("taxNo", event.target.value)} />
           </Field>
           <Field label={t("送货地址")} wide>
             <input
@@ -6079,14 +7026,7 @@ function CustomerModal({ customer, customerGroups = customerLevelOptions, onClos
   );
 }
 
-function ColumnModal({
-  tableKey,
-  customer,
-  onClose,
-  onAddColumn,
-  onUpdateColumn,
-  onRemoveColumn,
-}) {
+function ColumnModal({ tableKey, customer, onClose, onAddColumn, onUpdateColumn, onRemoveColumn }) {
   const { t } = useI18n();
   const [headerName, setHeaderName] = useState("");
   const [type, setType] = useState("text");
@@ -6096,9 +7036,11 @@ function ColumnModal({
   const config = tableConfigs[tableKey];
 
   useEffect(() => {
-    setFormulaDrafts(Object.fromEntries(
-      customColumns.map(column => [column.field, normalizeFormulaInput(column.formula)]),
-    ));
+    setFormulaDrafts(
+      Object.fromEntries(
+        customColumns.map((column) => [column.field, normalizeFormulaInput(column.formula)]),
+      ),
+    );
   }, [customColumns]);
 
   const commitFormula = (column) => {
@@ -6130,7 +7072,9 @@ function ColumnModal({
         <div className="modal-head">
           <div>
             <p className="eyebrow">CUSTOM TABLE HEADER</p>
-            <h3>{customer.name} · {t(config.label)}</h3>
+            <h3>
+              {customer.name} · {t(config.label)}
+            </h3>
           </div>
           <button className="icon-button" type="button" onClick={onClose} title={t("关闭")}>
             <X size={18} />
@@ -6163,7 +7107,10 @@ function ColumnModal({
                       className="column-formula-input"
                       value={formulaDrafts[column.field] ?? ""}
                       onChange={(event) =>
-                        setFormulaDrafts(current => ({ ...current, [column.field]: event.target.value }))
+                        setFormulaDrafts((current) => ({
+                          ...current,
+                          [column.field]: event.target.value,
+                        }))
                       }
                       onBlur={() => commitFormula(column)}
                       onKeyDown={(event) => {
@@ -6243,32 +7190,41 @@ function Field({ label, required = false, wide = false, children }) {
 
 function CustomerStatisticsPanel({ customers, onSelectCustomer }) {
   const { language, t } = useI18n();
-  const rows = useMemo(() => (
-    (customers || [])
-      .map(customer => ({
-        customer,
-        ...summarizeCustomerOrders(customer),
-      }))
-      .sort((a, b) => b.orderAmount - a.orderAmount || a.customer.name.localeCompare(b.customer.name))
-  ), [customers]);
+  const rows = useMemo(
+    () =>
+      (customers || [])
+        .map((customer) => ({
+          customer,
+          ...summarizeCustomerOrders(customer),
+        }))
+        .sort(
+          (a, b) => b.orderAmount - a.orderAmount || a.customer.name.localeCompare(b.customer.name),
+        ),
+    [customers],
+  );
 
-  const total = useMemo(() => (
-    rows.reduce((acc, row) => ({
-      orderAmount: acc.orderAmount + row.orderAmount,
-      unfinishedOrders: acc.unfinishedOrders + row.unfinishedOrders,
-      completedOrders: acc.completedOrders + row.completedOrders,
-      statementAmount: acc.statementAmount + row.statementAmount,
-      paidAmount: acc.paidAmount + row.paidAmount,
-      unpaidAmount: acc.unpaidAmount + row.unpaidAmount,
-    }), {
-      orderAmount: 0,
-      unfinishedOrders: 0,
-      completedOrders: 0,
-      statementAmount: 0,
-      paidAmount: 0,
-      unpaidAmount: 0,
-    })
-  ), [rows]);
+  const total = useMemo(
+    () =>
+      rows.reduce(
+        (acc, row) => ({
+          orderAmount: acc.orderAmount + row.orderAmount,
+          unfinishedOrders: acc.unfinishedOrders + row.unfinishedOrders,
+          completedOrders: acc.completedOrders + row.completedOrders,
+          statementAmount: acc.statementAmount + row.statementAmount,
+          paidAmount: acc.paidAmount + row.paidAmount,
+          unpaidAmount: acc.unpaidAmount + row.unpaidAmount,
+        }),
+        {
+          orderAmount: 0,
+          unfinishedOrders: 0,
+          completedOrders: 0,
+          statementAmount: 0,
+          paidAmount: 0,
+          unpaidAmount: 0,
+        },
+      ),
+    [rows],
+  );
 
   if (!rows.length) return null;
 
@@ -6299,7 +7255,7 @@ function CustomerStatisticsPanel({ customers, onSelectCustomer }) {
             </tr>
           </thead>
           <tbody>
-            {rows.map(row => (
+            {rows.map((row) => (
               <tr
                 key={row.customer.id}
                 tabIndex={0}
@@ -6350,9 +7306,19 @@ function DashboardView({ customers, alertMap, onCreateCustomer, onSelectCustomer
         if (!isOpenOrder(order.status) || !order.dueDate) continue;
         const dueTs = new Date(order.dueDate).setHours(0, 0, 0, 0);
         if (dueTs < todayTs) {
-          result.push({ ...order, customerName: customer.name, customerId: customer.id, overdue: true });
+          result.push({
+            ...order,
+            customerName: customer.name,
+            customerId: customer.id,
+            overdue: true,
+          });
         } else if (dueTs <= todayTs + 3 * 86400000) {
-          result.push({ ...order, customerName: customer.name, customerId: customer.id, overdue: false });
+          result.push({
+            ...order,
+            customerName: customer.name,
+            customerId: customer.id,
+            overdue: false,
+          });
         }
       }
     }
@@ -6361,8 +7327,11 @@ function DashboardView({ customers, alertMap, onCreateCustomer, onSelectCustomer
   }, [customers]);
 
   const recentOrders = useMemo(() => {
-    return customers.flatMap(c => (c.orders || []).map(o => ({ ...o, customerName: c.name, customerId: c.id })))
-      .filter(o => o.date)
+    return customers
+      .flatMap((c) =>
+        (c.orders || []).map((o) => ({ ...o, customerName: c.name, customerId: c.id })),
+      )
+      .filter((o) => o.date)
       .sort((a, b) => new Date(b.date) - new Date(a.date))
       .slice(0, 10);
   }, [customers]);
@@ -6374,14 +7343,23 @@ function DashboardView({ customers, alertMap, onCreateCustomer, onSelectCustomer
           <h2 style={{ fontSize: "clamp(22px, 2.5vw, 32px)", marginBottom: 8, lineHeight: 1.2 }}>
             {customers.length
               ? t("{customers} 个客户 · {orders} 个进行中订单", {
-                customers: customers.length,
-                orders: customers.flatMap(c => c.orders || []).filter(o => isOpenOrder(o.status)).length,
-              })
+                  customers: customers.length,
+                  orders: customers
+                    .flatMap((c) => c.orders || [])
+                    .filter((o) => isOpenOrder(o.status)).length,
+                })
               : t("欢迎使用泡沫厂客户管理系统")}
           </h2>
-          <p style={{ color: "var(--muted)", margin: 0 }}>{t("选择一个客户开始操作，或使用全局搜索快速定位订单/送货单")}</p>
+          <p style={{ color: "var(--muted)", margin: 0 }}>
+            {t("选择一个客户开始操作，或使用全局搜索快速定位订单/送货单")}
+          </p>
         </div>
-        <button className="primary-action compact" type="button" onClick={onCreateCustomer} style={{ padding: "0 20px", minHeight: 40 }}>
+        <button
+          className="primary-action compact"
+          type="button"
+          onClick={onCreateCustomer}
+          style={{ padding: "0 20px", minHeight: 40 }}
+        >
           <UserRoundPlus size={18} />
           {t("新增客户")}
         </button>
@@ -6394,7 +7372,7 @@ function DashboardView({ customers, alertMap, onCreateCustomer, onSelectCustomer
             {t("待跟进订单（逾期 & 即将到期）")}
           </h4>
           <div className="dashboard-order-list">
-            {overdueOrders.map(order => (
+            {overdueOrders.map((order) => (
               <button
                 key={order.id}
                 className={`dashboard-order-row ${order.overdue ? "overdue" : "warning"}`}
@@ -6405,11 +7383,16 @@ function DashboardView({ customers, alertMap, onCreateCustomer, onSelectCustomer
                 <span className="dashboard-order-no">{order.orderNo || order.product}</span>
                 <span className="dashboard-order-product">{order.product}</span>
                 <span className="dashboard-order-qty">{order.quantity || 0}</span>
-                <span className="dashboard-order-due" style={{ color: order.overdue ? "var(--red)" : "var(--amber)" }}>
+                <span
+                  className="dashboard-order-due"
+                  style={{ color: order.overdue ? "var(--red)" : "var(--amber)" }}
+                >
                   {order.dueDate}
                   {order.overdue ? t(" · 已逾期") : t(" · 即将到期")}
                 </span>
-                <span className={`status-chip ${statusClass(order.status)}`}>{t(normalizeOrderStatus(order.status))}</span>
+                <span className={`status-chip ${statusClass(order.status)}`}>
+                  {t(normalizeOrderStatus(order.status))}
+                </span>
               </button>
             ))}
           </div>
@@ -6420,7 +7403,7 @@ function DashboardView({ customers, alertMap, onCreateCustomer, onSelectCustomer
         <section className="dashboard-section">
           <h4>{t("最近订单")}</h4>
           <div className="dashboard-order-list">
-            {recentOrders.map(order => (
+            {recentOrders.map((order) => (
               <button
                 key={order.id}
                 className="dashboard-order-row"
@@ -6432,7 +7415,9 @@ function DashboardView({ customers, alertMap, onCreateCustomer, onSelectCustomer
                 <span className="dashboard-order-product">{order.product}</span>
                 <span className="dashboard-order-qty">{order.quantity || 0}</span>
                 <span className="dashboard-order-due">{order.date}</span>
-                <span className={`status-chip ${statusClass(order.status)}`}>{t(normalizeOrderStatus(order.status))}</span>
+                <span className={`status-chip ${statusClass(order.status)}`}>
+                  {t(normalizeOrderStatus(order.status))}
+                </span>
               </button>
             ))}
           </div>
@@ -6443,7 +7428,12 @@ function DashboardView({ customers, alertMap, onCreateCustomer, onSelectCustomer
         <div className="dashboard-empty">
           <Boxes size={48} style={{ color: "var(--muted)", marginBottom: 16 }} />
           <p style={{ color: "var(--muted)", fontSize: 16 }}>{t("暂无客户数据")}</p>
-          <button className="primary-action compact" type="button" onClick={onCreateCustomer} style={{ marginTop: 12 }}>
+          <button
+            className="primary-action compact"
+            type="button"
+            onClick={onCreateCustomer}
+            style={{ marginTop: 12 }}
+          >
             <UserRoundPlus size={18} />
             {t("创建第一个客户")}
           </button>
@@ -6453,7 +7443,16 @@ function DashboardView({ customers, alertMap, onCreateCustomer, onSelectCustomer
   );
 }
 
-function SettingsModal({ settings, mobileUsers = [], onChangeMobileUserRole, onRefreshMobileUsers, onClose, onSave }) {
+function SettingsModal({
+  settings,
+  mobileUsers = [],
+  mobileDisplaySettings = defaultMobileDisplaySettings,
+  mobileOrderFieldOptions = [],
+  onChangeMobileUserRole,
+  onRefreshMobileUsers,
+  onClose,
+  onSave,
+}) {
   const { t } = useI18n();
   const [form, setForm] = useState({
     companyName: settings.companyName || "",
@@ -6466,12 +7465,30 @@ function SettingsModal({ settings, mobileUsers = [], onChangeMobileUserRole, onR
     orderNoPrefix: settings.orderNoPrefix || "",
     language: normalizeLanguage(settings.language),
   });
+  const [displayForm, setDisplayForm] = useState(() =>
+    normalizeMobileDisplaySettings(mobileDisplaySettings),
+  );
+  const [saving, setSaving] = useState(false);
 
-  const update = (field, value) => setForm(c => ({ ...c, [field]: value }));
+  const update = (field, value) => setForm((c) => ({ ...c, [field]: value }));
+  const toggleDisplayField = (group, field) => {
+    setDisplayForm((current) => {
+      const list = current[group] || [];
+      return {
+        ...current,
+        [group]: list.includes(field) ? list.filter((item) => item !== field) : [...list, field],
+      };
+    });
+  };
 
-  const submit = (e) => {
+  const submit = async (e) => {
     e.preventDefault();
-    onSave(form);
+    setSaving(true);
+    try {
+      await onSave(form, displayForm);
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -6492,8 +7509,8 @@ function SettingsModal({ settings, mobileUsers = [], onChangeMobileUserRole, onR
           <div className="settings-grid">
             <label className="field">
               <span>{t("界面语言")}</span>
-              <select value={form.language} onChange={e => update("language", e.target.value)}>
-                {languageOptions.map(option => (
+              <select value={form.language} onChange={(e) => update("language", e.target.value)}>
+                {languageOptions.map((option) => (
                   <option key={option.value} value={option.value}>
                     {option.label}
                   </option>
@@ -6508,27 +7525,51 @@ function SettingsModal({ settings, mobileUsers = [], onChangeMobileUserRole, onR
           <div className="settings-grid">
             <label className="field">
               <span>{t("公司名称")}</span>
-              <input value={form.companyName} onChange={e => update("companyName", e.target.value)} placeholder={t("例如：XX泡沫包装有限公司")} />
+              <input
+                value={form.companyName}
+                onChange={(e) => update("companyName", e.target.value)}
+                placeholder={t("例如：XX泡沫包装有限公司")}
+              />
             </label>
             <label className="field">
               <span>{t("公司名称")} (English)</span>
-              <input value={form.companyNameEn} onChange={e => update("companyNameEn", e.target.value)} placeholder="e.g. XX FOAM PACKAGING CO.,LTD" />
+              <input
+                value={form.companyNameEn}
+                onChange={(e) => update("companyNameEn", e.target.value)}
+                placeholder="e.g. XX FOAM PACKAGING CO.,LTD"
+              />
             </label>
             <label className="field">
               <span>{t("联系电话")}</span>
-              <input value={form.companyPhone} onChange={e => update("companyPhone", e.target.value)} placeholder={t("例如：0757-8888 8888")} />
+              <input
+                value={form.companyPhone}
+                onChange={(e) => update("companyPhone", e.target.value)}
+                placeholder={t("例如：0757-8888 8888")}
+              />
             </label>
             <label className="field" style={{ gridColumn: "1 / -1" }}>
               <span>{t("公司地址")}</span>
-              <input value={form.companyAddress} onChange={e => update("companyAddress", e.target.value)} placeholder={t("例如：佛山市南海区XX工业园")} />
+              <input
+                value={form.companyAddress}
+                onChange={(e) => update("companyAddress", e.target.value)}
+                placeholder={t("例如：佛山市南海区XX工业园")}
+              />
             </label>
             <label className="field" style={{ gridColumn: "1 / -1" }}>
               <span>{t("公司地址")} (English)</span>
-              <input value={form.companyAddressEn} onChange={e => update("companyAddressEn", e.target.value)} placeholder="e.g. XX Industrial Park, Nanhai, Foshan" />
+              <input
+                value={form.companyAddressEn}
+                onChange={(e) => update("companyAddressEn", e.target.value)}
+                placeholder="e.g. XX Industrial Park, Nanhai, Foshan"
+              />
             </label>
             <label className="field">
               <span>{t("税号")}</span>
-              <input value={form.companyTaxNo} onChange={e => update("companyTaxNo", e.target.value)} placeholder={t("纳税人识别号")} />
+              <input
+                value={form.companyTaxNo}
+                onChange={(e) => update("companyTaxNo", e.target.value)}
+                placeholder={t("纳税人识别号")}
+              />
             </label>
           </div>
         </div>
@@ -6538,18 +7579,45 @@ function SettingsModal({ settings, mobileUsers = [], onChangeMobileUserRole, onR
           <div className="settings-grid">
             <label className="field">
               <span>{t("默认交期天数（新增订单时交期=今天+N天）")}</span>
-              <input type="number" value={form.defaultDueDays} onChange={e => update("defaultDueDays", e.target.value)} min="0" max="365" />
+              <input
+                type="number"
+                value={form.defaultDueDays}
+                onChange={(e) => update("defaultDueDays", e.target.value)}
+                min="0"
+                max="365"
+              />
             </label>
             <label className="field">
               <span>{t("订单号前缀（自动生成，留空则不自动生成）")}</span>
-              <input value={form.orderNoPrefix} onChange={e => update("orderNoPrefix", e.target.value)} placeholder={t("例如：KH-")} />
+              <input
+                value={form.orderNoPrefix}
+                onChange={(e) => update("orderNoPrefix", e.target.value)}
+                placeholder={t("例如：KH-")}
+              />
             </label>
           </div>
         </div>
 
         <div className="settings-section">
+          <h4>{t("手机端订单字段显示")}</h4>
+          <p className="settings-empty">{t("员工端只按这里配置的字段显示订单卡片和订单详情。")}</p>
+          <MobileDisplayFieldPicker
+            title={t("订单卡片显示字段")}
+            fields={displayForm.cardFields}
+            options={mobileOrderFieldOptions}
+            onToggle={(field) => toggleDisplayField("cardFields", field)}
+          />
+          <MobileDisplayFieldPicker
+            title={t("订单详情显示字段")}
+            fields={displayForm.detailFields}
+            options={mobileOrderFieldOptions}
+            onToggle={(field) => toggleDisplayField("detailFields", field)}
+          />
+        </div>
+
+        <div className="settings-section">
           <div className="settings-section-head">
-            <h4>{t("手机账号角色")}</h4>
+            <h4>{t("员工账号设置查看")}</h4>
             <button className="ghost-button compact" type="button" onClick={onRefreshMobileUsers}>
               <RotateCcw size={14} />
               {t("刷新")}
@@ -6557,15 +7625,30 @@ function SettingsModal({ settings, mobileUsers = [], onChangeMobileUserRole, onR
           </div>
           {mobileUsers.length ? (
             <div className="mobile-user-list">
-              {mobileUsers.map(user => (
+              {mobileUsers.map((user) => (
                 <div className="mobile-user-row" key={user.id}>
+                  <div className="mobile-user-avatar">
+                    {user.avatar ? (
+                      <img src={user.avatar} alt={user.name || t("员工头像")} />
+                    ) : (
+                      <span>{String(user.name || user.phone || "员").slice(0, 1)}</span>
+                    )}
+                  </div>
                   <div className="mobile-user-info">
                     <strong>{user.name || t("未填写")}</strong>
                     <span>{user.phone || "—"}</span>
+                    <small>
+                      {t("注册")}：{formatDateTimeForDisplay(user.createdAt)}
+                    </small>
+                    <small>
+                      {t("更新")}：{formatDateTimeForDisplay(user.updatedAt)}
+                    </small>
                   </div>
                   <select
-                    value={["pending", "admin", "employee"].includes(user.role) ? user.role : "pending"}
-                    onChange={event => onChangeMobileUserRole(user.id, event.target.value)}
+                    value={
+                      ["pending", "admin", "employee"].includes(user.role) ? user.role : "pending"
+                    }
+                    onChange={(event) => onChangeMobileUserRole(user.id, event.target.value)}
                   >
                     <option value="pending">{t("普通用户")}</option>
                     <option value="employee">{t("员工")}</option>
@@ -6575,15 +7658,19 @@ function SettingsModal({ settings, mobileUsers = [], onChangeMobileUserRole, onR
               ))}
             </div>
           ) : (
-            <p className="settings-empty">{t("暂无手机注册账号。员工先在手机端注册后，这里会显示账号。")}</p>
+            <p className="settings-empty">
+              {t("暂无手机注册账号。员工先在手机端注册后，这里会显示账号。")}
+            </p>
           )}
         </div>
 
         <div className="modal-actions">
-          <button className="ghost-button" type="button" onClick={onClose}>{t("取消")}</button>
-          <button className="primary-action compact" type="submit">
+          <button className="ghost-button" type="button" onClick={onClose} disabled={saving}>
+            {t("取消")}
+          </button>
+          <button className="primary-action compact" type="submit" disabled={saving}>
             <Save size={17} />
-            {t("保存设置")}
+            {saving ? t("保存中") : t("保存设置")}
           </button>
         </div>
       </form>
@@ -6591,11 +7678,39 @@ function SettingsModal({ settings, mobileUsers = [], onChangeMobileUserRole, onR
   );
 }
 
+function MobileDisplayFieldPicker({ title, fields, options, onToggle }) {
+  const { t } = useI18n();
+  const selected = new Set(fields || []);
+  return (
+    <div className="mobile-display-picker">
+      <div className="mobile-display-picker-head">
+        <strong>{title}</strong>
+        <span>{t("已选择 {count} 项", { count: selected.size })}</span>
+      </div>
+      <div className="mobile-display-field-list">
+        {options.map((option) => {
+          const active = selected.has(option.field);
+          return (
+            <button
+              key={`${title}-${option.field}`}
+              type="button"
+              className={`mobile-display-field-chip ${active ? "active" : ""}`}
+              onClick={() => onToggle(option.field)}
+            >
+              {option.label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function KanbanBoard({ customer, onStatusChange, onSelectOrder }) {
   const { t } = useI18n();
-  const orders = (customer.orders || []).filter(o => normalizeOrderStatus(o.status) !== "已付款");
-  const columns = statusOptions.filter(s => s !== "已付款");
-  const ordersByStatus = Object.fromEntries(columns.map(s => [s, []]));
+  const orders = (customer.orders || []).filter((o) => normalizeOrderStatus(o.status) !== "已付款");
+  const columns = statusOptions.filter((s) => s !== "已付款");
+  const ordersByStatus = Object.fromEntries(columns.map((s) => [s, []]));
   for (const order of orders) {
     const s = normalizeOrderStatus(order.status);
     if (ordersByStatus[s]) ordersByStatus[s].push(order);
@@ -6603,14 +7718,16 @@ function KanbanBoard({ customer, onStatusChange, onSelectOrder }) {
 
   return (
     <div className="kanban-board">
-      {columns.map(status => (
+      {columns.map((status) => (
         <div className="kanban-column" key={status}>
           <div className="kanban-column-header">
-            <span className={`status-chip ${statusClass(status)}`} style={{ fontSize: 12 }}>{t(status)}</span>
+            <span className={`status-chip ${statusClass(status)}`} style={{ fontSize: 12 }}>
+              {t(status)}
+            </span>
             <span className="count">{ordersByStatus[status]?.length || 0}</span>
           </div>
           <div className="kanban-column-body">
-            {ordersByStatus[status]?.map(order => (
+            {ordersByStatus[status]?.map((order) => (
               <div
                 className="kanban-card"
                 key={order.id}
@@ -6625,7 +7742,9 @@ function KanbanBoard({ customer, onStatusChange, onSelectOrder }) {
                 onClick={() => onSelectOrder(order.id)}
               >
                 <strong>{order.orderNo || order.product}</strong>
-                <small>{order.product || ""} · {order.quantity || 0} {t("件")}</small>
+                <small>
+                  {order.product || ""} · {order.quantity || 0} {t("件")}
+                </small>
                 <small>{order.dueDate ? t("交期 {date}", { date: order.dueDate }) : ""}</small>
               </div>
             ))}
@@ -6637,12 +7756,16 @@ function KanbanBoard({ customer, onStatusChange, onSelectOrder }) {
 }
 
 function generateStatement(customer, settings = {}, t = defaultTranslator) {
-  const billableOrders = (customer.orders || []).filter(o => {
+  const billableOrders = (customer.orders || []).filter((o) => {
     const s = normalizeOrderStatus(o.status);
     return s === "已送货" || s === "已开对账单" || s === "已付款";
   });
   if (!billableOrders.length) {
-    alert(t("客户 \"{name}\" 没有可对账的订单（需要已送货/已开对账单/已付款状态）。", { name: customer.name }));
+    alert(
+      t('客户 "{name}" 没有可对账的订单（需要已送货/已开对账单/已付款状态）。', {
+        name: customer.name,
+      }),
+    );
     return;
   }
 
@@ -6673,7 +7796,7 @@ function generateStatement(customer, settings = {}, t = defaultTranslator) {
 <table>
 <thead><tr><th>${t("订单号")}</th><th>${t("日期")}</th><th>${t("产品")}</th><th class="num">${t("数量")}</th><th class="num">${t("金额")}</th><th>${t("状态")}</th></tr></thead>
 <tbody>
-${billableOrders.map(o => `<tr><td>${o.orderNo || "-"}</td><td>${o.date || "-"}</td><td>${o.product || "-"}</td><td class="num">${o.quantity || 0}</td><td class="num">${Number(o.amount || 0).toFixed(2)}</td><td>${t(normalizeOrderStatus(o.status))}</td></tr>`).join("")}
+${billableOrders.map((o) => `<tr><td>${o.orderNo || "-"}</td><td>${o.date || "-"}</td><td>${o.product || "-"}</td><td class="num">${o.quantity || 0}</td><td class="num">${Number(o.amount || 0).toFixed(2)}</td><td>${t(normalizeOrderStatus(o.status))}</td></tr>`).join("")}
 </tbody>
 </table>
 <p class="total">${t("合计金额：")} ${totalText}</p>
@@ -6684,7 +7807,10 @@ ${billableOrders.map(o => `<tr><td>${o.orderNo || "-"}</td><td>${o.date || "-"}<
 </body></html>`;
 
   const w = window.open("", "_blank", "width=900,height=700");
-  if (w) { w.document.write(html); w.document.close(); }
+  if (w) {
+    w.document.write(html);
+    w.document.close();
+  }
 }
 
 export default App;

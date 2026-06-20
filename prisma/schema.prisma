@@ -110,10 +110,19 @@ model MobileUser {
   name         String   @default("")
   phone        String   @unique
   role         String   @default("pending")
+  avatar       String   @default("")
   passwordHash String   @default("") @map("password_hash")
   token        String   @unique
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
   @@map("mobile_users")
+}
+
+model AppSetting {
+  key       String   @id
+  data      Json     @default("{}")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("app_settings")
 }

@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "npm run db:start:local && concurrently \"node server/index.js\" \"vite --host 0.0.0.0\"",
+    "dev": "npm run db:start:local && node scripts/dev.mjs",
     "server": "node server/index.js",
     "db:generate": "prisma generate",
     "db:push": "prisma db push",

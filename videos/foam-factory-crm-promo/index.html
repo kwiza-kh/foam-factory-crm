@@ -1,0 +1,681 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=1920, height=1080">
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        width: 1920px;
+        height: 1080px;
+        margin: 0;
+        overflow: hidden;
+        background: #0a0e14;
+      }
+
+      body {
+        font-family:
+          "SF Pro Display",
+          Arial,
+          sans-serif;
+        color: #e6edf3;
+      }
+
+      #root {
+        position: relative;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: #0a0e14;
+      }
+
+      .scene {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #0a0e14;
+        opacity: 0;
+      }
+
+      .scene-content {
+        position: relative;
+        z-index: 5;
+        width: 100%;
+        height: 100%;
+        padding: 70px 86px;
+      }
+
+      .grain,
+      .grid-bg,
+      .glow-a,
+      .glow-b,
+      .scan-bars {
+        position: absolute;
+        pointer-events: none;
+      }
+
+      .grain {
+        inset: 0;
+        z-index: 30;
+        opacity: 0.06;
+        background-image:
+          radial-gradient(circle at 25% 25%, rgba(230, 237, 243, 0.22) 0 1px, rgba(230, 237, 243, 0) 1px),
+          radial-gradient(circle at 75% 75%, rgba(91, 141, 239, 0.16) 0 1px, rgba(91, 141, 239, 0) 1px);
+        background-size: 19px 19px, 23px 23px;
+        mix-blend-mode: screen;
+      }
+
+      .grid-bg {
+        inset: -100px;
+        z-index: 0;
+        opacity: 0.24;
+        background-image:
+          linear-gradient(rgba(91, 141, 239, 0.18) 1px, rgba(91, 141, 239, 0) 1px),
+          linear-gradient(90deg, rgba(91, 141, 239, 0.14) 1px, rgba(91, 141, 239, 0) 1px);
+        background-size: 90px 90px;
+      }
+
+      .glow-a {
+        width: 760px;
+        height: 760px;
+        left: -180px;
+        top: -210px;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(91, 141, 239, 0.22), rgba(91, 141, 239, 0) 65%);
+      }
+
+      .glow-b {
+        width: 680px;
+        height: 680px;
+        right: -170px;
+        bottom: -220px;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(63, 185, 80, 0.12), rgba(63, 185, 80, 0) 68%);
+      }
+
+      .scan-bars {
+        inset: 0;
+        z-index: 6;
+        opacity: 0.24;
+        background:
+          linear-gradient(90deg, rgba(91, 141, 239, 0) 0%, rgba(91, 141, 239, 0.28) 48%, rgba(91, 141, 239, 0) 54%) 0 0 / 420px 100%,
+          linear-gradient(180deg, rgba(230, 237, 243, 0.06) 1px, rgba(230, 237, 243, 0) 1px) 0 0 / 100% 54px;
+      }
+
+      .screenshot-shell {
+        position: absolute;
+        overflow: hidden;
+        border: 1px solid #2d3748;
+        border-radius: 8px;
+        background: #111620;
+        box-shadow:
+          0 34px 100px rgba(0, 0, 0, 0.52),
+          0 0 0 1px rgba(91, 141, 239, 0.08),
+          0 0 52px rgba(91, 141, 239, 0.16);
+        transform-style: preserve-3d;
+      }
+
+      .screenshot-shell img {
+        width: 100%;
+        height: 100%;
+        display: block;
+        object-fit: cover;
+      }
+
+      .hero-shot {
+        left: 170px;
+        top: 116px;
+        width: 1580px;
+        height: 888px;
+      }
+
+      .orders-shot {
+        right: 84px;
+        top: 118px;
+        width: 1280px;
+        height: 720px;
+      }
+
+      .prod-shot {
+        left: 145px;
+        top: 138px;
+        width: 1630px;
+        height: 690px;
+      }
+
+      .delivery-shot {
+        left: 92px;
+        top: 210px;
+        width: 825px;
+        height: 466px;
+      }
+
+      .statement-shot {
+        right: 92px;
+        top: 320px;
+        width: 825px;
+        height: 466px;
+      }
+
+      .brand-mark {
+        position: absolute;
+        z-index: 12;
+        display: grid;
+        grid-template-columns: repeat(2, 18px);
+        grid-template-rows: repeat(2, 18px);
+        gap: 8px;
+        width: 70px;
+        height: 70px;
+        padding: 13px;
+        border: 1px solid #2d3748;
+        border-radius: 8px;
+        background: #1b2231;
+        box-shadow: 0 0 32px rgba(91, 141, 239, 0.24);
+      }
+
+      .brand-mark span {
+        border: 2px solid #5b8def;
+        border-radius: 4px;
+      }
+
+      .scene-label {
+        margin: 0 0 8px;
+        color: #5b8def;
+        font-size: 18px;
+        font-weight: 800;
+        line-height: 1;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      .headline {
+        position: absolute;
+        z-index: 14;
+        max-width: 940px;
+        color: #e6edf3;
+        font-size: 76px;
+        font-weight: 900;
+        line-height: 0.96;
+        letter-spacing: 0;
+        text-shadow: 0 12px 40px rgba(0, 0, 0, 0.56);
+      }
+
+      .headline.small {
+        font-size: 52px;
+        line-height: 1.02;
+      }
+
+      .subline {
+        position: absolute;
+        z-index: 14;
+        max-width: 650px;
+        color: #b0b8c4;
+        font-size: 27px;
+        font-weight: 500;
+        line-height: 1.3;
+      }
+
+      .word {
+        display: inline-block;
+        margin-right: 0.13em;
+      }
+
+      .alert-line {
+        position: absolute;
+        z-index: 14;
+        left: 222px;
+        bottom: 124px;
+        width: 580px;
+        height: 5px;
+        border-radius: 999px;
+        background: #f85149;
+        box-shadow: 0 0 30px rgba(248, 81, 73, 0.58);
+      }
+
+      .module-chip {
+        position: absolute;
+        z-index: 16;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 170px;
+        height: 54px;
+        border: 1px solid #2d3748;
+        border-radius: 8px;
+        padding: 0 22px;
+        background: #1b2231;
+        color: #e6edf3;
+        font-size: 22px;
+        font-weight: 800;
+        box-shadow: 0 18px 42px rgba(0, 0, 0, 0.38);
+      }
+
+      .module-chip.active {
+        border-color: #5b8def;
+        background: #5b8def;
+        color: #ffffff;
+      }
+
+      .connector-svg {
+        position: absolute;
+        inset: 0;
+        z-index: 15;
+        overflow: visible;
+      }
+
+      .connector-path {
+        fill: none;
+        stroke: #5b8def;
+        stroke-width: 4;
+        stroke-linecap: round;
+        stroke-dasharray: 1200;
+        stroke-dashoffset: 1200;
+        filter: drop-shadow(0 0 12px rgba(91, 141, 239, 0.52));
+      }
+
+      .counter-wrap {
+        position: absolute;
+        z-index: 18;
+        left: 125px;
+        right: 125px;
+        top: 210px;
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 24px;
+      }
+
+      .counter-card {
+        min-height: 330px;
+        border: 1px solid #2d3748;
+        border-radius: 8px;
+        padding: 42px 34px;
+        background: rgba(17, 22, 32, 0.86);
+        box-shadow: 0 28px 74px rgba(0, 0, 0, 0.46);
+        backdrop-filter: blur(8px);
+      }
+
+      .counter-value {
+        display: block;
+        color: #e6edf3;
+        font-size: 78px;
+        font-weight: 900;
+        line-height: 0.95;
+        letter-spacing: 0;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .counter-label {
+        display: block;
+        margin-top: 18px;
+        color: #b0b8c4;
+        font-size: 24px;
+        font-weight: 800;
+      }
+
+      .counter-rule {
+        display: block;
+        width: 100%;
+        height: 4px;
+        margin-top: 38px;
+        border-radius: 999px;
+        background: #5b8def;
+        box-shadow: 0 0 22px rgba(91, 141, 239, 0.58);
+        transform-origin: left center;
+      }
+
+      .status-dots {
+        position: absolute;
+        z-index: 19;
+        left: 50%;
+        bottom: 160px;
+        display: flex;
+        gap: 16px;
+        width: 260px;
+        justify-content: center;
+        margin-left: -130px;
+      }
+
+      .dot {
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+      }
+
+      .dot.red {
+        background: #f85149;
+        box-shadow: 0 0 24px rgba(248, 81, 73, 0.62);
+      }
+
+      .dot.amber {
+        background: #d29922;
+        box-shadow: 0 0 24px rgba(210, 153, 34, 0.58);
+      }
+
+      .dot.green {
+        background: #3fb950;
+        box-shadow: 0 0 24px rgba(63, 185, 80, 0.58);
+      }
+
+      .route-path {
+        fill: none;
+        stroke: #5b8def;
+        stroke-width: 7;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-dasharray: 1600;
+        stroke-dashoffset: 1600;
+        filter: drop-shadow(0 0 14px rgba(91, 141, 239, 0.64));
+      }
+
+      .action-now {
+        position: absolute;
+        z-index: 20;
+        left: 675px;
+        top: 756px;
+        min-width: 570px;
+        border: 1px solid #5b8def;
+        border-radius: 8px;
+        padding: 22px 34px;
+        background: rgba(27, 34, 49, 0.92);
+        color: #ffffff;
+        font-size: 56px;
+        font-weight: 900;
+        text-align: center;
+        box-shadow: 0 22px 70px rgba(0, 0, 0, 0.48), 0 0 34px rgba(91, 141, 239, 0.32);
+      }
+
+      .lockup {
+        position: absolute;
+        z-index: 22;
+        left: 250px;
+        top: 225px;
+        display: grid;
+        grid-template-columns: 84px minmax(0, 1fr);
+        gap: 28px;
+        align-items: center;
+        width: 950px;
+        padding: 42px;
+        border: 1px solid #2d3748;
+        border-radius: 8px;
+        background: rgba(17, 22, 32, 0.78);
+        box-shadow: 0 30px 90px rgba(0, 0, 0, 0.48);
+        backdrop-filter: blur(9px);
+      }
+
+      .lockup .brand-mark {
+        position: relative;
+        left: auto;
+        top: auto;
+      }
+
+      .product-name {
+        margin: 0;
+        color: #e6edf3;
+        font-size: 74px;
+        font-weight: 950;
+        line-height: 0.95;
+      }
+
+      .promise {
+        grid-column: 1 / -1;
+        margin: 10px 0 0;
+        color: #b0b8c4;
+        font-size: 36px;
+        font-weight: 700;
+      }
+
+      .promise-rule {
+        grid-column: 1 / -1;
+        width: 100%;
+        height: 5px;
+        border-radius: 999px;
+        background: #5b8def;
+        transform-origin: left center;
+      }
+
+      .final-dip {
+        position: absolute;
+        inset: 0;
+        z-index: 40;
+        background: #0a0e14;
+        opacity: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div data-hf-id="hf-dogo" id="root" data-composition-id="foam-crm-promo" data-start="0" data-duration="20.5" data-width="1920" data-height="1080">
+      <audio data-hf-id="hf-gsb7" id="narration" src="narration.wav" data-start="0" data-duration="20.5" data-track-index="0" data-volume="1"></audio>
+
+      <div data-hf-id="hf-q4u8" class="grid-bg"></div>
+      <div data-hf-id="hf-u7ot" class="glow-a"></div>
+      <div data-hf-id="hf-y5su" class="glow-b"></div>
+      <div data-hf-id="hf-h60x" class="grain"></div>
+
+      <section data-hf-id="hf-k674" id="scene-1" class="scene">
+        <div data-hf-id="hf-dtii" class="scan-bars"></div>
+        <div data-hf-id="hf-cn5c" class="scene-content">
+          <div data-hf-id="hf-w41k" class="brand-mark" id="brand-open" style="left: 118px; top: 84px">
+            <span data-hf-id="hf-uckh"></span><span data-hf-id="hf-l73p"></span><span data-hf-id="hf-me0s"></span><span data-hf-id="hf-lzpr"></span>
+          </div>
+          <div data-hf-id="hf-nygk" class="screenshot-shell hero-shot" id="hero-shot" data-layout-allow-overflow="">
+            <img data-hf-id="hf-2okp" src="capture/screenshots/scroll-000-dashboard.png" alt="">
+          </div>
+          <h1 data-hf-id="hf-nuro" class="headline" id="headline-1" data-layout-allow-overlap="" style="left: 118px; top: 210px">
+            <span data-hf-id="hf-4g95" class="word">Factory</span><span data-hf-id="hf-g6j4" class="word">orders</span><span data-hf-id="hf-6uih" class="word">don't</span><span data-hf-id="hf-z5xy" class="word">wait.</span>
+          </h1>
+          <div data-hf-id="hf-b88x" class="alert-line"></div>
+        </div>
+      </section>
+
+      <section data-hf-id="hf-v1or" id="scene-2" class="scene">
+        <div data-hf-id="hf-o0eg" class="scene-content">
+          <p data-hf-id="hf-4fiq" class="scene-label" style="position: absolute; left: 106px; top: 92px">One Command Center</p>
+          <h2 data-hf-id="hf-mqxo" class="headline small" id="headline-2" style="left: 106px; top: 130px; max-width: 520px">
+            Customers, orders, production, delivery, payments.
+          </h2>
+          <p data-hf-id="hf-iw34" class="subline" id="subline-2" style="left: 106px; top: 430px">
+            One customer record.
+          </p>
+          <svg data-hf-id="hf-k4gg" class="connector-svg" viewBox="0 0 1920 1080" aria-hidden="true">
+            <path data-hf-id="hf-d7pr" class="connector-path" d="M 430 520 C 620 360 850 290 1080 300" />
+            <path data-hf-id="hf-353z" class="connector-path" d="M 430 592 C 720 590 910 560 1150 520" />
+            <path data-hf-id="hf-ma3r" class="connector-path" d="M 430 668 C 720 760 940 790 1210 742" />
+          </svg>
+          <div data-hf-id="hf-8gi1" class="module-chip active" style="left: 118px; top: 495px">Customers</div>
+          <div data-hf-id="hf-g6mv" class="module-chip" style="left: 262px; top: 585px">Orders</div>
+          <div data-hf-id="hf-hkaf" class="module-chip" style="left: 138px; top: 682px">Production</div>
+          <div data-hf-id="hf-crxh" class="module-chip" style="left: 330px; top: 775px">Delivery</div>
+          <div data-hf-id="hf-qylg" class="module-chip" style="left: 118px; top: 870px">Payments</div>
+          <div data-hf-id="hf-764y" class="screenshot-shell orders-shot" id="orders-shot" data-layout-allow-overflow="">
+            <img data-hf-id="hf-dieg" src="capture/screenshots/orders-grid.png" alt="">
+          </div>
+        </div>
+      </section>
+
+      <section data-hf-id="hf-r3kq" id="scene-3" class="scene">
+        <div data-hf-id="hf-hg1a" class="scan-bars"></div>
+        <div data-hf-id="hf-mthd" class="scene-content">
+          <div data-hf-id="hf-4kfy" class="screenshot-shell prod-shot" id="prod-shot" data-layout-allow-overflow="">
+            <img data-hf-id="hf-33hj" src="capture/screenshots/production-kanban.png" alt="">
+          </div>
+          <div data-hf-id="hf-n1k9" class="counter-wrap">
+            <div data-hf-id="hf-l1qf" class="counter-card">
+              <span data-hf-id="hf-8kf2" class="counter-value" data-count-target="4621" data-count-format="plain">0</span>
+              <span data-hf-id="hf-bhaz" class="counter-label">Open Orders</span>
+              <span data-hf-id="hf-8una" class="counter-rule"></span>
+            </div>
+            <div data-hf-id="hf-wo4n" class="counter-card">
+              <span data-hf-id="hf-c7zs" class="counter-value" data-count-target="54141.79" data-count-format="currency">¥0</span>
+              <span data-hf-id="hf-zkg3" class="counter-label">Order Value</span>
+              <span data-hf-id="hf-lokq" class="counter-rule"></span>
+            </div>
+            <div data-hf-id="hf-w9tm" class="counter-card">
+              <span data-hf-id="hf-ai3y" class="counter-value" data-count-target="23" data-count-format="plain">0</span>
+              <span data-hf-id="hf-wswn" class="counter-label">Delivery Notes</span>
+              <span data-hf-id="hf-m2vr" class="counter-rule"></span>
+            </div>
+          </div>
+          <div data-hf-id="hf-065f" class="status-dots">
+            <span data-hf-id="hf-8bbb" class="dot red"></span>
+            <span data-hf-id="hf-y5ar" class="dot amber"></span>
+            <span data-hf-id="hf-d96z" class="dot green"></span>
+          </div>
+        </div>
+      </section>
+
+      <section data-hf-id="hf-8bv1" id="scene-4" class="scene">
+        <div data-hf-id="hf-pypt" class="scene-content" data-layout-allow-overflow="">
+          <div data-hf-id="hf-41ak" class="screenshot-shell delivery-shot" id="delivery-shot" data-layout-allow-overflow="">
+            <img data-hf-id="hf-i39p" src="capture/screenshots/deliveries-grid.png" alt="">
+          </div>
+          <div data-hf-id="hf-fqsw" class="screenshot-shell statement-shot" id="statement-shot" data-layout-allow-overflow="">
+            <img data-hf-id="hf-yaxa" src="capture/screenshots/statistics-panel.png" alt="">
+          </div>
+          <svg data-hf-id="hf-mp9k" class="connector-svg" viewBox="0 0 1920 1080" aria-hidden="true">
+            <path data-hf-id="hf-kyq6" class="route-path" d="M 440 700 C 640 830 890 820 960 650 C 1030 480 1260 454 1480 540" />
+          </svg>
+          <div data-hf-id="hf-j667" class="action-now">Action now</div>
+        </div>
+      </section>
+
+      <section data-hf-id="hf-7k78" id="scene-5" class="scene">
+        <div data-hf-id="hf-n7se" class="scene-content">
+          <div data-hf-id="hf-2rb6" class="screenshot-shell hero-shot" id="final-shot" data-layout-allow-overflow="">
+            <img data-hf-id="hf-bihn" src="capture/screenshots/dashboard-final.png" alt="">
+          </div>
+          <div data-hf-id="hf-6jvi" class="lockup">
+            <div data-hf-id="hf-9m6n" class="brand-mark" id="brand-final">
+              <span data-hf-id="hf-n6mu"></span><span data-hf-id="hf-msbt"></span><span data-hf-id="hf-nz8w"></span><span data-hf-id="hf-nkxv"></span>
+            </div>
+            <h2 data-hf-id="hf-7nor" class="product-name">Foam Factory CRM</h2>
+            <p data-hf-id="hf-0988" class="promise">Run the floor from one screen.</p>
+            <span data-hf-id="hf-ox87" class="promise-rule"></span>
+          </div>
+        </div>
+      </section>
+
+      <div data-hf-id="hf-vnrc" class="final-dip"></div>
+    </div>
+
+    <script>
+      window.__timelines = window.__timelines || {};
+      const tl = gsap.timeline({ paused: true, defaults: { ease: "power2.out" } });
+      const DURATION = 20.5;
+
+      function showScene(selector, time) {
+        tl.set(selector, { opacity: 1, visibility: "visible" }, time);
+      }
+
+      function hideScene(selector, time) {
+        tl.set(selector, { opacity: 0, visibility: "hidden" }, time);
+      }
+
+      function blurIn(selector, time, duration) {
+        tl.fromTo(selector, { opacity: 0, filter: "blur(18px)", scale: 1.025 }, { opacity: 1, filter: "blur(0px)", scale: 1, duration, ease: "sine.inOut" }, time);
+      }
+
+      function zoomTransition(outScene, inScene, time) {
+        tl.to(outScene, { scale: 1.12, filter: "blur(10px)", opacity: 0.25, duration: 0.35, ease: "power3.inOut" }, time);
+        tl.set(outScene, { opacity: 0, visibility: "hidden", scale: 1, filter: "blur(0px)" }, time + 0.36);
+        showScene(inScene, time + 0.05);
+        tl.fromTo(inScene, { scale: 0.9, filter: "blur(12px)", opacity: 0 }, { scale: 1, filter: "blur(0px)", opacity: 1, duration: 0.6, ease: "power3.out" }, time + 0.05);
+      }
+
+      function pushTransition(outScene, inScene, time) {
+        tl.to(outScene, { x: -250, filter: "blur(12px)", opacity: 0.18, duration: 0.35, ease: "power3.in" }, time);
+        tl.set(outScene, { opacity: 0, visibility: "hidden", x: 0, filter: "blur(0px)" }, time + 0.36);
+        showScene(inScene, time);
+        tl.fromTo(inScene, { x: 250, filter: "blur(12px)", opacity: 0 }, { x: 0, filter: "blur(0px)", opacity: 1, duration: 0.55, ease: "power3.out" }, time);
+      }
+
+      function blockTransition(outScene, inScene, time) {
+        tl.to(outScene, { y: -120, filter: "blur(8px)", opacity: 0, duration: 0.28, ease: "power4.in" }, time);
+        tl.set(outScene, { opacity: 0, visibility: "hidden", y: 0, filter: "blur(0px)" }, time + 0.3);
+        showScene(inScene, time + 0.05);
+        tl.fromTo(inScene, { y: 96, opacity: 0, filter: "blur(8px)" }, { y: 0, opacity: 1, filter: "blur(0px)", duration: 0.45, ease: "expo.out" }, time + 0.05);
+      }
+
+      function countNumber(el, start, end, duration, format) {
+        const proxy = { value: start };
+        tl.to(proxy, {
+          value: end,
+          duration,
+          ease: "power3.out",
+          onUpdate: function () {
+            if (format === "currency") {
+              el.textContent = "¥" + proxy.value.toLocaleString("en-US", { maximumFractionDigits: 0 });
+            } else {
+              el.textContent = Math.round(proxy.value).toLocaleString("en-US");
+            }
+          },
+          onComplete: function () {
+            if (format === "currency") {
+              el.textContent = "¥54,141.79";
+            } else {
+              el.textContent = Math.round(end).toLocaleString("en-US");
+            }
+          },
+        }, 9.72);
+      }
+
+      showScene("#scene-1", 0);
+      tl.fromTo("#hero-shot", { scale: 0.92, y: 40, rotationY: -8, opacity: 0 }, { scale: 1.02, y: 0, rotationY: -3, opacity: 1, duration: 1.05, ease: "expo.out" }, 0.18);
+      tl.fromTo("#brand-open", { scale: 0.72, opacity: 0, y: -18 }, { scale: 1, opacity: 1, y: 0, duration: 0.55, ease: "back.out(1.7)" }, 0.34);
+      tl.fromTo("#headline-1 .word", { y: 52, opacity: 0, rotation: -2 }, { y: 0, opacity: 1, rotation: 0, duration: 0.52, stagger: 0.09, ease: "power3.out" }, 0.46);
+      tl.fromTo(".alert-line", { scaleX: 0, opacity: 0 }, { scaleX: 1, opacity: 1, duration: 0.54, ease: "power2.out" }, 1.7);
+      tl.to(".alert-line", { scaleY: 1.9, duration: 0.18, yoyo: true, repeat: 1, ease: "power1.inOut" }, 2.28);
+      tl.to(".grid-bg", { x: -90, y: -45, duration: DURATION, ease: "none" }, 0);
+      tl.to(".glow-a", { scale: 1.08, opacity: 0.72, duration: 2.2, yoyo: true, repeat: 9, ease: "sine.inOut" }, 0);
+      tl.to(".glow-b", { scale: 1.12, opacity: 0.78, duration: 2.8, yoyo: true, repeat: 7, ease: "sine.inOut" }, 0);
+
+      zoomTransition("#scene-1", "#scene-2", 3.0);
+      tl.fromTo("#headline-2", { y: 34, opacity: 0 }, { y: 0, opacity: 1, duration: 0.55, ease: "power3.out" }, 3.34);
+      tl.fromTo("#subline-2", { y: 24, opacity: 0 }, { y: 0, opacity: 1, duration: 0.5, ease: "power2.out" }, 3.72);
+      tl.fromTo("#orders-shot", { x: 120, rotationY: 10, opacity: 0 }, { x: 0, rotationY: -6, opacity: 1, duration: 0.72, ease: "expo.out" }, 3.36);
+      tl.fromTo(".module-chip", { y: 28, opacity: 0, scale: 0.9 }, { y: 0, opacity: 1, scale: 1, duration: 0.42, stagger: 0.1, ease: "back.out(1.35)" }, 4.18);
+      tl.to(".connector-path", { strokeDashoffset: 0, duration: 0.85, stagger: 0.12, ease: "power2.out" }, 4.78);
+      tl.to("#orders-shot img", { scale: 1.035, duration: 5.35, ease: "none" }, 3.5);
+      tl.to(".module-chip.active", { boxShadow: "0 18px 42px rgba(0,0,0,0.38), 0 0 38px rgba(91,141,239,0.62)", duration: 0.9, yoyo: true, repeat: 4, ease: "sine.inOut" }, 4.7);
+
+      pushTransition("#scene-2", "#scene-3", 8.9);
+      tl.fromTo("#prod-shot", { y: 60, opacity: 0, rotationX: 4 }, { y: 0, opacity: 1, rotationX: 0, duration: 0.62, ease: "power3.out" }, 9.18);
+      tl.fromTo(".counter-card", { y: 60, opacity: 0, scale: 0.94 }, { y: 0, opacity: 1, scale: 1, duration: 0.58, stagger: 0.13, ease: "back.out(1.25)" }, 9.38);
+      tl.fromTo(".counter-rule", { scaleX: 0 }, { scaleX: 1, duration: 0.58, stagger: 0.12, ease: "power2.out" }, 10.12);
+      document.querySelectorAll(".counter-value").forEach(function (el) {
+        countNumber(el, 0, Number(el.dataset.countTarget), 1.55, el.dataset.countFormat);
+      });
+      tl.fromTo(".status-dots .dot", { scale: 0.5, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.32, stagger: 0.12, ease: "back.out(1.7)" }, 11.12);
+      tl.to(".status-dots .dot", { scale: 1.22, duration: 0.55, yoyo: true, repeat: 7, stagger: 0.09, ease: "sine.inOut" }, 11.58);
+      tl.to("#prod-shot img", { scale: 1.035, duration: 6.4, ease: "none" }, 9.35);
+
+      blockTransition("#scene-3", "#scene-4", 15.9);
+      tl.fromTo("#delivery-shot", { x: -160, rotationY: -8, opacity: 0 }, { x: 0, rotationY: -3, opacity: 1, duration: 0.5, ease: "power3.out" }, 16.16);
+      tl.fromTo("#statement-shot", { x: 160, rotationY: 8, opacity: 0 }, { x: 0, rotationY: 3, opacity: 1, duration: 0.5, ease: "power3.out" }, 16.26);
+      tl.to(".route-path", { strokeDashoffset: 0, duration: 0.7, ease: "power2.out" }, 16.72);
+      tl.fromTo(".action-now", { y: 36, opacity: 0, scale: 0.92 }, { y: 0, opacity: 1, scale: 1, duration: 0.42, ease: "back.out(1.5)" }, 17.14);
+      tl.to("#delivery-shot img", { scale: 1.035, duration: 1.8, ease: "none" }, 16.22);
+      tl.to("#statement-shot img", { scale: 1.028, duration: 1.7, ease: "none" }, 16.32);
+
+      tl.to("#scene-4", { opacity: 0.08, filter: "blur(18px)", duration: 0.55, ease: "sine.inOut" }, 17.95);
+      tl.set("#scene-4", { opacity: 0, visibility: "hidden", filter: "blur(0px)" }, 18.52);
+      showScene("#scene-5", 18.05);
+      blurIn("#scene-5", 18.05, 0.64);
+      tl.fromTo("#final-shot", { scale: 1.07, rotationY: -4, opacity: 0 }, { scale: 1.01, rotationY: 0, opacity: 1, duration: 0.72, ease: "power3.out" }, 18.16);
+      tl.fromTo(".lockup", { y: 46, opacity: 0, scale: 0.94 }, { y: 0, opacity: 1, scale: 1, duration: 0.55, ease: "back.out(1.2)" }, 18.42);
+      tl.fromTo("#brand-final span", { scale: 0, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.32, stagger: 0.06, ease: "back.out(1.8)" }, 18.62);
+      tl.fromTo(".promise-rule", { scaleX: 0 }, { scaleX: 1, duration: 0.46, ease: "power2.out" }, 19.08);
+      tl.to("#final-shot img", { scale: 1.02, duration: 2.1, ease: "none" }, 18.2);
+      tl.to(".final-dip", { opacity: 1, duration: 0.25, ease: "sine.inOut" }, 20.25);
+
+      window.__timelines["foam-crm-promo"] = tl;
+    </script>
+  </body>
+</html>
