@@ -2,6 +2,12 @@ import { Router } from "express";
 import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from "crypto";
 import { prisma } from "../db.js";
 import { authMiddleware } from "../auth.js";
+import { bumpDataVersion } from "../syncVersion.js";
+import {
+  findEnvSuperAdminByToken,
+  isEnvSuperAdminLogin,
+  publicEnvSuperAdmin,
+} from "../envSuperAdmin.js";
 
 const router = Router();
 const VALID_ROLES = new Set(["pending", "admin", "employee"]);
@@ -27,6 +33,12 @@ const defaultMobileDisplaySettings = {
     "completionNote",
   ],
 };
+
+const TOKEN_EXPIRY_DAYS = 30;
+
+function tokenExpiryDate() {
+  return new Date(Date.now() + TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
+}
 
 function normalizeRole(role) {
   return VALID_ROLES.has(role) ? role : "pending";
@@ -80,13 +92,47 @@ function readMobileToken(req) {
 async function findUserByMobileToken(req) {
   const token = readMobileToken(req);
   if (!token) return null;
-  return prisma.mobileUser.findUnique({ where: { token } });
+  const envAdmin = findEnvSuperAdminByToken(token);
+  if (envAdmin) return envAdmin;
+  const user = await prisma.mobileUser.findUnique({ where: { token } });
+  if (!user) return null;
+  if (user.tokenExpiresAt && new Date(user.tokenExpiresAt) < new Date()) {
+    return null; // Token expired — treat as invalid
+  }
+  return user;
 }
 
 function mobileTokenOrAdmin(req, res, next) {
   if (readMobileToken(req)) return next();
   return authMiddleware(req, res, next);
 }
+
+router.post("/login", async (req, res) => {
+  const phone = String(req.body?.phone || "").trim();
+  const password = String(req.body?.password || "");
+
+  if (!phone || !password) {
+    return res.status(400).json({ error: "请填写手机号和密码" });
+  }
+
+  try {
+    if (isEnvSuperAdminLogin(phone, password)) {
+      return res.json({ ok: true, user: publicEnvSuperAdmin() });
+    }
+    const user = await prisma.mobileUser.findUnique({ where: { phone } });
+    if (!user || !verifyPassword(password, user.passwordHash)) {
+      return res.status(401).json({ error: "手机号或密码不正确" });
+    }
+    // Refresh token expiry on successful login
+    const updated = await prisma.mobileUser.update({
+      where: { id: user.id },
+      data: { tokenExpiresAt: tokenExpiryDate() },
+    });
+    res.json({ ok: true, user: publicUser(updated) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 router.post("/register", async (req, res) => {
   const name = String(req.body?.name || "").trim();
@@ -110,6 +156,7 @@ router.post("/register", async (req, res) => {
           ...(existing.passwordHash ? {} : { passwordHash: hashPassword(password) }),
         },
       });
+      bumpDataVersion();
       return res.json({ ok: true, user: publicUser(updated) });
     }
 
@@ -121,8 +168,10 @@ router.post("/register", async (req, res) => {
         role: "pending",
         passwordHash: hashPassword(password),
         token: randomUUID(),
+        tokenExpiresAt: tokenExpiryDate(),
       },
     });
+    bumpDataVersion();
     res.json({ ok: true, user: publicUser(user) });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -151,6 +200,7 @@ router.patch("/me/avatar", async (req, res) => {
       where: { id: user.id },
       data: { avatar },
     });
+    bumpDataVersion();
     res.json({ ok: true, user: publicUser(updated) });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -173,6 +223,7 @@ router.patch("/me/password", async (req, res) => {
       where: { id: user.id },
       data: { passwordHash: hashPassword(newPassword) },
     });
+    bumpDataVersion();
     res.json({ ok: true, user: publicUser(updated) });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -203,6 +254,7 @@ router.put("/mobile-display-settings", authMiddleware, async (req, res) => {
       create: { key: MOBILE_DISPLAY_SETTINGS_KEY, data },
       update: { data },
     });
+    bumpDataVersion();
     res.json({ ok: true, data: normalizeMobileDisplaySettings(setting.data) });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -227,6 +279,7 @@ router.patch("/:id/role", authMiddleware, async (req, res) => {
       where: { id: req.params.id },
       data: { role },
     });
+    bumpDataVersion();
     res.json({ ok: true, user: publicUser(user, { includeToken: false }) });
   } catch (err) {
     if (err.code === "P2025") return res.status(404).json({ error: "User not found" });
@@ -234,5 +287,5 @@ router.patch("/:id/role", authMiddleware, async (req, res) => {
   }
 });
 
-export { findUserByMobileToken, normalizeRole };
+export { findUserByMobileToken, normalizeMobileDisplaySettings, normalizeRole };
 export default router;

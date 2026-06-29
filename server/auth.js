@@ -1,39 +1,52 @@
-// Simple API key middleware for basic access control
-// Set API_KEY in .env to enable; if unset, all requests are allowed
+import { prisma } from "./db.js";
+import { findEnvSuperAdminByToken } from "./envSuperAdmin.js";
 
 const API_KEY = process.env.API_KEY;
 
-export function authMiddleware(req, res, next) {
-  const hasMobileUserToken = Boolean(req.headers['x-mobile-user-token']);
-  const isMobileCustomerRead = req.baseUrl === '/api/customers'
-    && req.method === 'GET'
-    && (req.path === '/' || req.path === '');
-  const isMobileOrderStatusUpdate = req.baseUrl === '/api/customers'
-    && req.method === 'PATCH'
-    && /^\/[^/]+\/orders\/[^/]+\/status$/.test(req.path);
-  const isMobileCostEntryCreate = req.baseUrl === '/api/customers'
-    && req.method === 'POST'
-    && /^\/[^/]+\/cost-entries$/.test(req.path);
-  const isMobileDeliverySign = req.baseUrl === '/api/customers'
-    && req.method === 'PATCH'
-    && /^\/[^/]+\/deliveries\/[^/]+\/sign$/.test(req.path);
-  const isMobileCostEntryApproval = req.baseUrl === '/api/customers'
-    && req.method === 'PATCH'
-    && /^\/[^/]+\/cost-entries\/[^/]+\/approval$/.test(req.path);
+function readUserToken(req) {
+  return String(
+    req.headers["x-mobile-user-token"] ||
+      req.headers["x-desktop-user-token"] ||
+      req.query?.mobileToken ||
+      "",
+  ).trim();
+}
 
-  if (hasMobileUserToken && (
-    isMobileCustomerRead
-    || isMobileOrderStatusUpdate
-    || isMobileCostEntryCreate
-    || isMobileDeliverySign
-    || isMobileCostEntryApproval
-  )) {
-    return next();
+export async function authMiddleware(req, res, next) {
+  const userToken = readUserToken(req);
+  if (userToken) {
+    const envAdmin = findEnvSuperAdminByToken(userToken);
+    if (envAdmin) {
+      req.authUser = envAdmin;
+      return next();
+    }
+    try {
+      const user = await prisma.mobileUser.findUnique({ where: { token: userToken } });
+      if (!user) return res.status(401).json({ error: "登录已失效，请重新登录" });
+      if (user.tokenExpiresAt && new Date(user.tokenExpiresAt) < new Date()) {
+        return res.status(401).json({ error: "登录已过期，请重新登录" });
+      }
+      req.authUser = user;
+      return next();
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
   }
 
-  // If no API_KEY configured, allow all requests (development-friendly)
   if (!API_KEY) {
-    return next();
+    const clientIp = req.ip || req.socket?.remoteAddress || "";
+    const isLocalhost =
+      clientIp === "127.0.0.1" ||
+      clientIp === "::1" ||
+      clientIp === "::ffff:127.0.0.1" ||
+      clientIp === "localhost";
+    if (isLocalhost) {
+      return next();
+    }
+    console.warn(
+      "API_KEY is not set — rejecting non-localhost request. Set API_KEY in .env for production.",
+    );
+    return res.status(401).json({ error: "Authentication required" });
   }
 
   const authHeader = req.headers.authorization;

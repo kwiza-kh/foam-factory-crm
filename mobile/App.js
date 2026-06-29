@@ -2,7 +2,7 @@ import { StatusBar } from "expo-status-bar";
 import Constants from "expo-constants";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as ImagePicker from "expo-image-picker";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -13,13 +13,13 @@ import {
   Platform,
   Pressable,
   RefreshControl,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from "react-native";
+import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 
 const statusOptions = [
   "未完成",
@@ -40,6 +40,7 @@ const completionPhotoAtField = "completionPhotoAt";
 const mobileUserStorageKey = "foam-crm-mobile-user";
 const mobileApiStorageKey = "foam-crm-mobile-api-url";
 const mobileOfflineQueueStorageKey = "foam-crm-mobile-offline-queue";
+const syncPollIntervalMs = 3000;
 const defaultMobileDisplaySettings = {
   cardFields: ["_customerName", "orderNo", "status", "product", "quantity", "dueDate"],
   detailFields: [
@@ -62,13 +63,13 @@ const defaultMobileDisplaySettings = {
   ],
 };
 const mobileNavigationTabs = [
-  { key: "workbench", label: "工作台", icon: "台" },
-  { key: "alerts", label: "提醒", icon: "铃" },
-  { key: "schedule", label: "排产", icon: "排" },
-  { key: "delivery", label: "签收", icon: "签" },
-  { key: "cost", label: "成本", icon: "本" },
-  { key: "dashboard", label: "看板", icon: "板", adminOnly: true },
-  { key: "approval", label: "审批", icon: "审", adminOnly: true },
+  { key: "workbench", label: "工作台", icon: "workbench" },
+  { key: "alerts", label: "提醒", icon: "alerts" },
+  { key: "schedule", label: "排产", icon: "schedule" },
+  { key: "delivery", label: "签收", icon: "delivery" },
+  { key: "cost", label: "成本", icon: "cost" },
+  { key: "dashboard", label: "看板", icon: "dashboard", adminOnly: true },
+  { key: "approval", label: "审批", icon: "approval", adminOnly: true },
 ];
 const internalOrderFields = new Set(["id", completionPhotoField]);
 const baseMobileOrderFields = [
@@ -271,6 +272,23 @@ function normalizeMobileDisplaySettings(value = {}) {
     cardFields: normalizeFieldList(data.cardFields, defaultMobileDisplaySettings.cardFields),
     detailFields: normalizeFieldList(data.detailFields, defaultMobileDisplaySettings.detailFields),
   };
+}
+
+function getCustomerMobileDisplaySettings(customer, fallback = defaultMobileDisplaySettings) {
+  return normalizeMobileDisplaySettings(customer?.customColumns?.mobileDisplaySettings || fallback);
+}
+
+function buildCustomerDisplayFields(
+  order,
+  customers = [],
+  allFieldOptions = [],
+  fieldType = "card",
+) {
+  const customer = customers.find((item) => item.id === order?._customerId);
+  const settings = getCustomerMobileDisplaySettings(customer);
+  const fields = fieldType === "detail" ? settings.detailFields : settings.cardFields;
+  const optionByField = new Map(allFieldOptions.map((option) => [option.field, option]));
+  return fields.map((field) => optionByField.get(field)).filter(Boolean);
 }
 
 function buildMobileOrderDisplayFields(customers = []) {
@@ -609,7 +627,39 @@ function orderSearchText(order) {
     .toLowerCase();
 }
 
-export default function App() {
+function scheduleOrderGroupKey(order = {}) {
+  const orderNo = String(order.orderNo || "").trim();
+  return orderNo || `${order._customerId || ""}:${order.id || ""}`;
+}
+
+function buildScheduleOrderGroups(orders = []) {
+  const groups = new Map();
+  for (const order of orders) {
+    const key = scheduleOrderGroupKey(order);
+    if (!groups.has(key)) {
+      groups.set(key, {
+        type: "schedule-group",
+        key,
+        orderNo: order.orderNo || "未填写订单号",
+        customerNames: new Set(),
+        orders: [],
+      });
+    }
+    const group = groups.get(key);
+    if (order._customerName) group.customerNames.add(order._customerName);
+    group.orders.push(order);
+  }
+
+  return Array.from(groups.values()).map((group) => ({
+    ...group,
+    customerName:
+      group.customerNames.size === 1
+        ? Array.from(group.customerNames)[0]
+        : `${group.customerNames.size} 个客户`,
+  }));
+}
+
+function MobileApp() {
   const [apiBaseUrl, setApiBaseUrl] = useState(defaultApiBaseUrl);
   const [apiDraft, setApiDraft] = useState(defaultApiBaseUrl);
   const [authLoading, setAuthLoading] = useState(true);
@@ -633,7 +683,6 @@ export default function App() {
   const [completionOperator, setCompletionOperator] = useState("");
   const [completionNote, setCompletionNote] = useState("");
   const [completionPhoto, setCompletionPhoto] = useState(null);
-  const [mobileDisplaySettings, setMobileDisplaySettings] = useState(defaultMobileDisplaySettings);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmNewPassword, setConfirmNewPassword] = useState("");
@@ -654,8 +703,10 @@ export default function App() {
   const [deliverySignPhoto, setDeliverySignPhoto] = useState(null);
   const [deliverySelectedItems, setDeliverySelectedItems] = useState([]);
   const [expandedDeliveryGroups, setExpandedDeliveryGroups] = useState({});
+  const [expandedScheduleGroups, setExpandedScheduleGroups] = useState({});
   const [savingDeliveryId, setSavingDeliveryId] = useState("");
   const [approvalNoteByEntry, setApprovalNoteByEntry] = useState({});
+  const syncVersionRef = useRef(0);
 
   const request = useCallback(
     async (path, options = {}) => {
@@ -699,25 +750,37 @@ export default function App() {
           setCustomers([]);
           return;
         }
-        try {
-          const displaySettingsResult = await request("/users/mobile-display-settings");
-          setMobileDisplaySettings(
-            normalizeMobileDisplaySettings(
-              displaySettingsResult.data || displaySettingsResult || {},
-            ),
-          );
-        } catch (settingsErr) {
-          console.warn("Load mobile display settings failed:", settingsErr.message);
-          setMobileDisplaySettings(defaultMobileDisplaySettings);
+        const [firstPage, versionResult] = await Promise.all([
+          request("/customers?limit=200"),
+          request("/sync-version").catch(() => null),
+        ]);
+        let list = firstPage.data || firstPage;
+        list = Array.isArray(list) ? list : [];
+
+        // Load remaining pages if more exist
+        const pagination = firstPage.pagination;
+        if (pagination && pagination.totalPages > 1) {
+          const remainingPages = [];
+          for (let page = 2; page <= pagination.totalPages; page++) {
+            remainingPages.push(request(`/customers?page=${page}&limit=200`));
+          }
+          const extraResults = await Promise.all(remainingPages);
+          for (const result of extraResults) {
+            const pageData = result.data || result;
+            if (Array.isArray(pageData)) list = list.concat(pageData);
+          }
         }
-        const result = await request("/customers?limit=200");
-        const list = result.data || result;
-        setCustomers(Array.isArray(list) ? list : []);
+
+        setCustomers(list);
+        const nextVersion = Number(versionResult?.version || 0);
+        if (nextVersion) syncVersionRef.current = nextVersion;
       } catch (err) {
         if (err.status === 401) {
           await AsyncStorage.removeItem(mobileUserStorageKey);
+          await AsyncStorage.removeItem(mobileOfflineQueueStorageKey);
           setCurrentUser(null);
           setCustomers([]);
+          setOfflineQueue([]);
         }
         setError(err.message || "连接失败");
       } finally {
@@ -930,22 +993,6 @@ export default function App() {
     () => buildMobileOrderDisplayFields(customers),
     [customers],
   );
-  const selectedMobileCardDisplayFields = useMemo(() => {
-    const optionByField = new Map(
-      mobileDisplayFieldOptions.map((option) => [option.field, option]),
-    );
-    return mobileDisplaySettings.cardFields
-      .map((field) => optionByField.get(field))
-      .filter(Boolean);
-  }, [mobileDisplayFieldOptions, mobileDisplaySettings.cardFields]);
-  const selectedDetailDisplayFields = useMemo(() => {
-    const optionByField = new Map(
-      mobileDisplayFieldOptions.map((option) => [option.field, option]),
-    );
-    return mobileDisplaySettings.detailFields
-      .map((field) => optionByField.get(field))
-      .filter(Boolean);
-  }, [mobileDisplayFieldOptions, mobileDisplaySettings.detailFields]);
   useEffect(() => {
     const employeeViews = new Set(["workbench", "alerts", "schedule", "delivery", "cost"]);
     if (!isAdmin && !employeeViews.has(activeView)) setActiveView("workbench");
@@ -998,6 +1045,23 @@ export default function App() {
         return parseDateValue(b.date) - parseDateValue(a.date) || b._orderIndex - a._orderIndex;
       });
   }, [activeView, allOrders, isAdmin, query, selectedCustomerId]);
+  const scheduleOrderGroups = useMemo(
+    () => buildScheduleOrderGroups(visibleOrders),
+    [visibleOrders],
+  );
+  const scheduleListItems = useMemo(
+    () =>
+      scheduleOrderGroups.flatMap((group) => {
+        if (group.orders.length <= 1) return group.orders;
+        if (!expandedScheduleGroups[group.key]) return [group];
+        return [
+          group,
+          ...group.orders.map((order) => ({ ...order, _scheduleGroupKey: group.key })),
+        ];
+      }),
+    [expandedScheduleGroups, scheduleOrderGroups],
+  );
+  const orderListItems = activeView === "schedule" ? scheduleListItems : visibleOrders;
 
   const stats = useMemo(() => {
     const open = allOrders.filter(isScheduledProductionOrder).length;
@@ -1023,6 +1087,55 @@ export default function App() {
     setRefreshing(true);
     loadCustomers({ silent: true });
   }, [loadCustomers]);
+
+  useEffect(() => {
+    if (authLoading || !currentUser?.token || !isRoleAssigned) return undefined;
+
+    let stopped = false;
+    const pollSyncVersion = async () => {
+      if (
+        stopped ||
+        offlineQueue.length ||
+        syncingQueue ||
+        savingOrderId ||
+        savingCost ||
+        savingDeliveryId
+      ) {
+        return;
+      }
+      try {
+        const result = await request("/sync-version");
+        const nextVersion = Number(result?.version || 0);
+        if (!nextVersion) return;
+        if (!syncVersionRef.current) {
+          syncVersionRef.current = nextVersion;
+          return;
+        }
+        if (nextVersion > syncVersionRef.current) {
+          await loadCustomers({ silent: true });
+        }
+      } catch {
+        // Keep the current mobile data visible when the network is temporarily unavailable.
+      }
+    };
+
+    const intervalId = setInterval(pollSyncVersion, syncPollIntervalMs);
+    return () => {
+      stopped = true;
+      clearInterval(intervalId);
+    };
+  }, [
+    authLoading,
+    currentUser?.token,
+    isRoleAssigned,
+    loadCustomers,
+    offlineQueue.length,
+    request,
+    savingCost,
+    savingDeliveryId,
+    savingOrderId,
+    syncingQueue,
+  ]);
 
   const registerMobileUser = useCallback(async () => {
     const name = registerName.trim();
@@ -1275,11 +1388,13 @@ export default function App() {
         setSyncStatus((current) => ({ ...current, [item.id]: "syncing" }));
         try {
           if (item.type === "complete-order") {
+            const body = { status: "已完成", ...(item.payload || {}) };
+            if (item.ifMatchStatus) body.ifMatchStatus = item.ifMatchStatus;
             const result = await request(
               `/customers/${item.customerId}/orders/${item.orderId}/status`,
               {
                 method: "PATCH",
-                body: JSON.stringify({ status: "已完成", ...(item.payload || {}) }),
+                body: JSON.stringify(body),
               },
             );
             updateLocalOrder(
@@ -1294,7 +1409,7 @@ export default function App() {
             });
             const syncedRow = result.row || {
               ...(item.payload || {}),
-              id: item.localRowId || makeQueueId("costEntries"),
+              id: item.localRowId || item.payload?.id || item.id,
             };
             setCustomers((current) =>
               current.map((customer) =>
@@ -1346,7 +1461,14 @@ export default function App() {
           setSyncStatus((current) => ({ ...current, [item.id]: "synced" }));
           hasSuccess = true;
           await persistOfflineQueue(nextQueue);
-        } catch {
+        } catch (err) {
+          // 409 Conflict — data changed on server since queued; drop the item
+          if (err.status === 409) {
+            nextQueue = nextQueue.filter((queued) => queued.id !== item.id);
+            setSyncStatus((current) => ({ ...current, [item.id]: "synced" }));
+            await persistOfflineQueue(nextQueue);
+            continue;
+          }
           // Mark for retry with backoff
           const updatedItem = {
             ...item,
@@ -1364,10 +1486,12 @@ export default function App() {
       setSyncingQueue(false);
       if (hasSuccess) {
         setLastSyncAt(new Date().toISOString());
+        await loadCustomers({ silent: true });
       }
     }
   }, [
     currentUser?.token,
+    loadCustomers,
     offlineQueue,
     persistOfflineQueue,
     request,
@@ -1475,6 +1599,7 @@ export default function App() {
         type: "complete-order",
         customerId: completionOrder._customerId,
         orderId: completionOrder.id,
+        ifMatchStatus: completionOrder.status,
         payload: patch,
       });
       setCompletionOrder(null);
@@ -1549,6 +1674,10 @@ export default function App() {
 
   const toggleDeliveryGroupExpanded = useCallback((groupId) => {
     setExpandedDeliveryGroups((current) => ({ ...current, [groupId]: !current[groupId] }));
+  }, []);
+
+  const toggleScheduleGroupExpanded = useCallback((groupId) => {
+    setExpandedScheduleGroups((current) => ({ ...current, [groupId]: !current[groupId] }));
   }, []);
 
   const takeDeliverySignPhoto = useCallback(async () => {
@@ -2140,19 +2269,32 @@ export default function App() {
 
   return appChrome(
     <FlatList
-      data={visibleOrders}
-      keyExtractor={(item) => `${item._customerId}-${item.id}`}
+      data={orderListItems}
+      keyExtractor={(item) =>
+        item.type === "schedule-group"
+          ? `schedule-group-${item.key}`
+          : `${item._customerId}-${item.id}`
+      }
       ListHeaderComponent={contentHeader}
       ListEmptyComponent={loading ? <LoadingState /> : <EmptyState />}
-      renderItem={({ item }) => (
-        <OrderCard
-          order={item}
-          saving={savingOrderId === item.id}
-          displayFields={selectedMobileCardDisplayFields}
-          onOpen={openDetail}
-          onComplete={markCompleted}
-        />
-      )}
+      renderItem={({ item }) =>
+        item.type === "schedule-group" ? (
+          <ScheduleOrderGroupCard
+            group={item}
+            expanded={Boolean(expandedScheduleGroups[item.key])}
+            onToggle={toggleScheduleGroupExpanded}
+          />
+        ) : (
+          <OrderCard
+            order={item}
+            saving={savingOrderId === item.id}
+            customers={customers}
+            displayFieldOptions={mobileDisplayFieldOptions}
+            onOpen={openDetail}
+            onComplete={markCompleted}
+          />
+        )
+      }
       contentContainerStyle={styles.listContent}
       refreshControl={
         <RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={iosPalette.accent} />
@@ -2166,7 +2308,8 @@ export default function App() {
       <OrderDetailModal
         order={selectedOrder}
         saving={selectedOrder ? savingOrderId === selectedOrder.id : false}
-        displayFields={selectedDetailDisplayFields}
+        customers={customers}
+        displayFieldOptions={mobileDisplayFieldOptions}
         onClose={() => setSelectedOrder(null)}
         onComplete={markCompleted}
       />
@@ -2185,6 +2328,14 @@ export default function App() {
         onSubmit={submitCompletion}
       />
     </>,
+  );
+}
+
+export default function App() {
+  return (
+    <SafeAreaProvider>
+      <MobileApp />
+    </SafeAreaProvider>
   );
 }
 
@@ -3059,9 +3210,7 @@ function BottomTabBar({ tabs, activeView, onChange }) {
               style={[styles.bottomTab, active && styles.bottomTabActive]}
               onPress={() => onChange(tab.key)}
             >
-              <Text style={[styles.bottomTabIcon, active && styles.bottomTabIconActive]}>
-                {tab.icon}
-              </Text>
+              <BottomTabIcon name={tab.icon} active={active} />
               <Text
                 numberOfLines={1}
                 style={[styles.bottomTabLabel, active && styles.bottomTabLabelActive]}
@@ -3076,20 +3225,143 @@ function BottomTabBar({ tabs, activeView, onChange }) {
   );
 }
 
-function OrderCard({ order, saving, displayFields, onOpen, onComplete }) {
+function BottomTabIcon({ name, active }) {
+  const color = active ? iosPalette.accent : iosPalette.muted;
+  const softColor = active ? iosPalette.accentSoft : iosPalette.grouped;
+
+  if (name === "workbench") {
+    return (
+      <View style={styles.bottomTabIconWrap}>
+        <View style={styles.tabIconGrid}>
+          {[0, 1, 2, 3].map((item) => (
+            <View key={item} style={[styles.tabIconTile, { backgroundColor: color }]} />
+          ))}
+        </View>
+      </View>
+    );
+  }
+
+  if (name === "alerts") {
+    return (
+      <View style={styles.bottomTabIconWrap}>
+        <View style={[styles.tabIconCircle, { borderColor: color, backgroundColor: softColor }]}>
+          <Text style={[styles.tabIconGlyph, { color }]}>!</Text>
+        </View>
+      </View>
+    );
+  }
+
+  if (name === "schedule") {
+    return (
+      <View style={styles.bottomTabIconWrap}>
+        <View style={[styles.tabIconCalendar, { borderColor: color }]}>
+          <View style={[styles.tabIconCalendarTop, { backgroundColor: color }]} />
+          <View style={styles.tabIconCalendarDots}>
+            {[0, 1, 2, 3].map((item) => (
+              <View key={item} style={[styles.tabIconDot, { backgroundColor: color }]} />
+            ))}
+          </View>
+        </View>
+      </View>
+    );
+  }
+
+  if (name === "delivery") {
+    return (
+      <View style={styles.bottomTabIconWrap}>
+        <View style={[styles.tabIconCircle, { borderColor: color }]}>
+          <Text style={[styles.tabIconGlyph, styles.tabIconCheck, { color }]}>✓</Text>
+        </View>
+      </View>
+    );
+  }
+
+  if (name === "cost") {
+    return (
+      <View style={styles.bottomTabIconWrap}>
+        <View style={[styles.tabIconCoin, { borderColor: color, backgroundColor: softColor }]}>
+          <Text style={[styles.tabIconGlyph, { color }]}>¥</Text>
+        </View>
+      </View>
+    );
+  }
+
+  if (name === "dashboard") {
+    return (
+      <View style={styles.bottomTabIconWrap}>
+        <View style={styles.tabIconBars}>
+          {[10, 16, 7].map((height, index) => (
+            <View
+              key={`${height}-${index}`}
+              style={[styles.tabIconBar, { height, backgroundColor: color }]}
+            />
+          ))}
+        </View>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.bottomTabIconWrap}>
+      <View style={[styles.tabIconApproval, { borderColor: color, backgroundColor: softColor }]}>
+        <Text style={[styles.tabIconGlyph, styles.tabIconCheck, { color }]}>✓</Text>
+      </View>
+    </View>
+  );
+}
+
+function ScheduleOrderGroupCard({ group, expanded, onToggle }) {
+  const totalQuantity = group.orders.reduce(
+    (sum, order) => sum + parseMobileNumber(order.productionQuantity || order.quantity),
+    0,
+  );
+  const firstOrder = group.orders[0] || {};
+  const scheduleDate = firstOrder.productionDate || firstOrder.dueDate || "";
+
+  return (
+    <Pressable style={styles.scheduleGroupCard} onPress={() => onToggle(group.key)}>
+      <View style={styles.scheduleGroupHeader}>
+        <View style={styles.scheduleGroupTitleWrap}>
+          <Text style={styles.scheduleGroupTitle}>{group.orderNo}</Text>
+          <Text style={styles.scheduleGroupMeta}>
+            {group.customerName} · {group.orders.length} 条明细
+          </Text>
+        </View>
+        <View style={styles.scheduleGroupBadge}>
+          <Text style={styles.scheduleGroupBadgeText}>{expanded ? "收起" : "展开"}</Text>
+        </View>
+      </View>
+      <View style={styles.scheduleGroupSummary}>
+        <Meta label="排产数量" value={formatNumber(totalQuantity)} />
+        <Meta label="排产日期" value={scheduleDate || "-"} />
+        <Meta label="产品" value={firstOrder.product || "-"} />
+      </View>
+    </Pressable>
+  );
+}
+
+function OrderCard({ order, saving, customers, displayFieldOptions, onOpen, onComplete }) {
   const status = normalizeStatus(order.status);
   const canComplete = status !== "已完成";
-  const visibleFields = getOrderDisplayFields(order, displayFields || []);
+  const displayFields = buildCustomerDisplayFields(
+    order,
+    customers,
+    displayFieldOptions || [],
+    "card",
+  );
+  const visibleFields = getOrderDisplayFields(order, displayFields);
 
   return (
     <Pressable style={styles.orderCard} onPress={() => onOpen(order)}>
       {visibleFields.length > 0 ? (
-        <View style={styles.metaGrid}>
+        <View style={styles.orderMetaList}>
           {visibleFields.map((fieldConfig) => (
             <Meta
               key={fieldConfig.field}
               label={fieldConfig.label}
               value={formatMobileFieldValue(order, fieldConfig)}
+              variant="row"
+              valueNumberOfLines={null}
             />
           ))}
         </View>
@@ -3115,11 +3387,14 @@ function OrderCard({ order, saving, displayFields, onOpen, onComplete }) {
   );
 }
 
-function Meta({ label, value }) {
+function Meta({ label, value, variant = "tile", valueNumberOfLines = 1 }) {
+  const isRow = variant === "row";
+  const valueLineProps = valueNumberOfLines ? { numberOfLines: valueNumberOfLines } : {};
+
   return (
-    <View style={styles.metaItem}>
-      <Text style={styles.metaLabel}>{label}</Text>
-      <Text style={styles.metaValue} numberOfLines={1}>
+    <View style={isRow ? styles.orderMetaRow : styles.metaItem}>
+      <Text style={isRow ? styles.orderMetaLabel : styles.metaLabel}>{label}</Text>
+      <Text style={isRow ? styles.orderMetaValue : styles.metaValue} {...valueLineProps}>
         {value}
       </Text>
     </View>
@@ -3174,10 +3449,14 @@ function StatusChip({ status }) {
   );
 }
 
-function OrderDetailModal({ order, saving, displayFields, onClose, onComplete }) {
+function OrderDetailModal({ order, saving, customers, displayFieldOptions, onClose, onComplete }) {
   const visibleDetailFields = useMemo(
-    () => getOrderDisplayFields(order, displayFields || []),
-    [displayFields, order],
+    () =>
+      getOrderDisplayFields(
+        order,
+        buildCustomerDisplayFields(order, customers, displayFieldOptions || [], "detail"),
+      ),
+    [customers, displayFieldOptions, order],
   );
 
   return (
@@ -4197,6 +4476,53 @@ const legacyStyles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#22334d",
   },
+  scheduleGroupCard: {
+    marginBottom: 10,
+    borderRadius: 8,
+    padding: 14,
+    backgroundColor: "#0b1424",
+    borderWidth: 1,
+    borderColor: "#2f456a",
+  },
+  scheduleGroupHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+  scheduleGroupTitleWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  scheduleGroupTitle: {
+    color: "#f4fbff",
+    fontSize: 16,
+    fontWeight: "900",
+  },
+  scheduleGroupMeta: {
+    marginTop: 4,
+    color: "#9eb3c8",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  scheduleGroupBadge: {
+    minHeight: 30,
+    justifyContent: "center",
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    backgroundColor: "#10243e",
+  },
+  scheduleGroupBadgeText: {
+    color: "#9ed8ff",
+    fontSize: 12,
+    fontWeight: "900",
+  },
+  scheduleGroupSummary: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginTop: 12,
+  },
   cardEmptyHint: {
     minHeight: 46,
     borderRadius: 8,
@@ -4260,6 +4586,40 @@ const legacyStyles = StyleSheet.create({
     color: "#f4fbff",
     fontSize: 14,
     fontWeight: "800",
+  },
+  orderMetaList: {
+    gap: 8,
+    marginTop: 12,
+  },
+  orderMetaRow: {
+    width: "100%",
+    minHeight: 42,
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 12,
+    borderRadius: 8,
+    paddingVertical: 9,
+    paddingHorizontal: 10,
+    backgroundColor: "#0b1424",
+    borderWidth: 1,
+    borderColor: "#1c2d46",
+  },
+  orderMetaLabel: {
+    width: 82,
+    flexShrink: 0,
+    color: "#7f93aa",
+    fontSize: 12,
+    fontWeight: "700",
+    lineHeight: 18,
+  },
+  orderMetaValue: {
+    flex: 1,
+    color: "#f4fbff",
+    fontSize: 14,
+    fontWeight: "800",
+    lineHeight: 20,
+    textAlign: "right",
   },
   cardActions: {
     flexDirection: "row",
@@ -5350,13 +5710,96 @@ const styles = {
     bottomTabActive: {
       backgroundColor: iosPalette.accentSoft,
     },
-    bottomTabIcon: {
-      color: iosPalette.muted,
-      fontSize: 14,
-      fontWeight: "900",
+    bottomTabIconWrap: {
+      width: 24,
+      height: 24,
+      alignItems: "center",
+      justifyContent: "center",
     },
-    bottomTabIconActive: {
-      color: iosPalette.accent,
+    tabIconGrid: {
+      width: 20,
+      height: 20,
+      flexDirection: "row",
+      flexWrap: "wrap",
+      gap: 4,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    tabIconTile: {
+      width: 7,
+      height: 7,
+      borderRadius: 2,
+    },
+    tabIconCircle: {
+      width: 22,
+      height: 22,
+      borderRadius: 11,
+      borderWidth: 2,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    tabIconGlyph: {
+      fontSize: 13,
+      lineHeight: 16,
+      fontWeight: "900",
+      textAlign: "center",
+    },
+    tabIconCheck: {
+      fontSize: 14,
+      lineHeight: 17,
+    },
+    tabIconCalendar: {
+      width: 22,
+      height: 22,
+      borderRadius: 6,
+      borderWidth: 2,
+      overflow: "hidden",
+      backgroundColor: iosPalette.surface,
+    },
+    tabIconCalendarTop: {
+      height: 5,
+      width: "100%",
+    },
+    tabIconCalendarDots: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      gap: 3,
+      paddingHorizontal: 4,
+      paddingTop: 4,
+    },
+    tabIconDot: {
+      width: 4,
+      height: 4,
+      borderRadius: 2,
+      opacity: 0.85,
+    },
+    tabIconCoin: {
+      width: 22,
+      height: 22,
+      borderRadius: 11,
+      borderWidth: 2,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    tabIconBars: {
+      width: 22,
+      height: 22,
+      flexDirection: "row",
+      alignItems: "flex-end",
+      justifyContent: "center",
+      gap: 3,
+    },
+    tabIconBar: {
+      width: 4,
+      borderRadius: 2,
+    },
+    tabIconApproval: {
+      width: 22,
+      height: 22,
+      borderRadius: 7,
+      borderWidth: 2,
+      alignItems: "center",
+      justifyContent: "center",
     },
     bottomTabLabel: {
       color: iosPalette.muted,
@@ -5391,6 +5834,54 @@ const styles = {
       padding: 15,
       backgroundColor: iosPalette.surface,
       ...shadowSoft,
+    },
+    scheduleGroupCard: {
+      marginBottom: 12,
+      borderRadius: 18,
+      padding: 15,
+      backgroundColor: iosPalette.surface,
+      borderWidth: 1,
+      borderColor: iosPalette.line,
+      ...shadowSoft,
+    },
+    scheduleGroupHeader: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: 10,
+    },
+    scheduleGroupTitleWrap: {
+      flex: 1,
+      minWidth: 0,
+    },
+    scheduleGroupTitle: {
+      color: iosPalette.text,
+      fontSize: 16,
+      fontWeight: "900",
+    },
+    scheduleGroupMeta: {
+      marginTop: 4,
+      color: iosPalette.muted,
+      fontSize: 12,
+      fontWeight: "800",
+    },
+    scheduleGroupBadge: {
+      minHeight: 31,
+      justifyContent: "center",
+      borderRadius: 12,
+      paddingHorizontal: 11,
+      backgroundColor: iosPalette.accentSoft,
+    },
+    scheduleGroupBadgeText: {
+      color: iosPalette.accent,
+      fontSize: 12,
+      fontWeight: "900",
+    },
+    scheduleGroupSummary: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      gap: 8,
+      marginTop: 13,
     },
     deliveryCardPressArea: {
       gap: 12,
@@ -5454,6 +5945,38 @@ const styles = {
       color: iosPalette.text,
       fontSize: 14,
       fontWeight: "800",
+    },
+    orderMetaList: {
+      gap: 8,
+      marginTop: 13,
+    },
+    orderMetaRow: {
+      width: "100%",
+      minHeight: 44,
+      flexDirection: "row",
+      alignItems: "flex-start",
+      justifyContent: "space-between",
+      gap: 12,
+      borderRadius: 12,
+      paddingVertical: 10,
+      paddingHorizontal: 11,
+      backgroundColor: iosPalette.grouped,
+    },
+    orderMetaLabel: {
+      width: 84,
+      flexShrink: 0,
+      color: iosPalette.muted,
+      fontSize: 12,
+      fontWeight: "800",
+      lineHeight: 18,
+    },
+    orderMetaValue: {
+      flex: 1,
+      color: iosPalette.text,
+      fontSize: 14,
+      fontWeight: "800",
+      lineHeight: 20,
+      textAlign: "right",
     },
     cardActions: {
       flexDirection: "row",

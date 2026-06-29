@@ -12,6 +12,7 @@ const mockPrisma = vi.hoisted(() => ({
   },
   order: {
     findFirst: vi.fn(),
+    findMany: vi.fn(),
     update: vi.fn(),
   },
   delivery: {
@@ -32,6 +33,10 @@ const mockPrisma = vi.hoisted(() => ({
     findFirst: vi.fn(),
     update: vi.fn(),
     deleteMany: vi.fn(),
+  },
+  appSetting: {
+    findUnique: vi.fn().mockResolvedValue(null),
+    upsert: vi.fn().mockResolvedValue({}),
   },
   $transaction: vi.fn(),
 }));
@@ -60,6 +65,7 @@ describe("Customers API Routes", () => {
     vi.clearAllMocks();
     mockPrisma.mobileUser.findUnique.mockResolvedValue(null);
     mockPrisma.delivery.findMany.mockResolvedValue([]);
+    mockPrisma.appSetting.findUnique.mockResolvedValue(null);
     app = createApp();
   });
 
@@ -414,6 +420,53 @@ describe("Customers API Routes", () => {
 
       expect(res.status).toBe(500);
       expect(res.body).toHaveProperty("error", "DB error");
+    });
+
+    it("should return 409 when ifMatchStatus does not match current order status", async () => {
+      const existingOrder = {
+        id: "o1",
+        customerId: "c1",
+        data: { status: "已排产", orderNo: "PO-001" },
+      };
+      mockPrisma.order.findFirst.mockResolvedValue(existingOrder);
+
+      const res = await request(app)
+        .patch("/api/customers/c1/orders/o1/status")
+        .send({ status: "已完成", ifMatchStatus: "未完成" });
+
+      expect(res.status).toBe(409);
+      expect(res.body).toHaveProperty("error", "订单状态已变更，请刷新后重试");
+      expect(mockPrisma.order.update).not.toHaveBeenCalled();
+    });
+
+    it("should pass when ifMatchStatus matches current order status", async () => {
+      const existingOrder = {
+        id: "o1",
+        customerId: "c1",
+        data: { status: "已排产", orderNo: "PO-001" },
+      };
+      const updatedOrder = {
+        id: "o1",
+        customerId: "c1",
+        data: {
+          status: "已完成",
+          orderNo: "PO-001",
+          completionPhoto: { dataUrl: "data:image/jpeg;base64,test" },
+        },
+      };
+      mockPrisma.order.findFirst.mockResolvedValue(existingOrder);
+      mockPrisma.order.update.mockResolvedValue(updatedOrder);
+
+      const res = await request(app)
+        .patch("/api/customers/c1/orders/o1/status")
+        .send({
+          status: "已完成",
+          ifMatchStatus: "已排产",
+          completionPhoto: { dataUrl: "data:image/jpeg;base64,test" },
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.row).toHaveProperty("status", "已完成");
     });
   });
 

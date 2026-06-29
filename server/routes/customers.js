@@ -1,7 +1,8 @@
 import { Router } from "express";
 import { randomUUID } from "crypto";
 import { prisma } from "../db.js";
-import { findUserByMobileToken, normalizeRole } from "./users.js";
+import { findUserByMobileToken, normalizeMobileDisplaySettings, normalizeRole } from "./users.js";
+import { bumpDataVersion } from "../syncVersion.js";
 
 const router = Router();
 const VALID_TABLES = new Set([
@@ -40,6 +41,7 @@ function normalizeCustomColumns(customColumns = {}) {
     ...defaultCustomColumns(),
     ...(customColumns || {}),
     columnOrder: customColumns?.columnOrder || {},
+    mobileDisplaySettings: normalizeMobileDisplaySettings(customColumns?.mobileDisplaySettings),
   };
 }
 
@@ -94,6 +96,22 @@ function normalize(row) {
   };
 }
 
+function statementDeliveryIds(statement = {}) {
+  if (Array.isArray(statement.deliveryIds)) return statement.deliveryIds.map(String);
+  return String(statement.deliveryIds || "")
+    .split(/[、,\s]+/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+function statementReferencesDelivery(statement = {}, deliveryId = "") {
+  return statementDeliveryIds(statement).includes(String(deliveryId));
+}
+
+function isFinalDelivery(delivery = {}) {
+  return delivery._finalDelivery === true;
+}
+
 function normalizeOrderStatus(status = "") {
   const value = String(status || "").trim();
   if (value === "已发货") return "已送货";
@@ -104,7 +122,7 @@ function normalizeFinalDeliveryStatus(status = "") {
   const value = String(status || "").trim();
   if (value === "部分签收" || value === "部分送货") return "部分签收";
   if (value === "已送" || value === "已送货" || value === "已发货" || value.includes("签收"))
-    return "已送";
+    return "已签收";
   if (
     value === "作废" ||
     value.includes("作废") ||
@@ -121,7 +139,142 @@ function isMobileVisibleDelivery(delivery = {}) {
 }
 
 function isDeliverySigned(delivery = {}) {
-  return normalizeFinalDeliveryStatus(delivery.status) === "已送" || Boolean(delivery.signedAt);
+  return normalizeFinalDeliveryStatus(delivery.status) === "已签收" || Boolean(delivery.signedAt);
+}
+
+function isLockedDelivery(delivery = {}) {
+  return (
+    isFinalDelivery(delivery) &&
+    (isDeliverySigned(delivery) || Boolean(delivery.statementNo || delivery.reconciledAt))
+  );
+}
+
+function getDeleteBlockers(customer = {}, tableKey, ids = []) {
+  const selectedIds = new Set(ids.map(String));
+  const deliveries = customer.deliveries || [];
+  const statements = customer.statements || [];
+  const payments = customer.payments || [];
+  const blockers = [];
+
+  if (tableKey === "orders") {
+    const hasLinkedDelivery = deliveries.some((delivery) =>
+      selectedIds.has(String(delivery._linkedOrderId || "")),
+    );
+    if (hasLinkedDelivery) blockers.push("订单已生成送货单，不能直接删除");
+  }
+
+  if (tableKey === "deliveries") {
+    const selectedDeliveries = deliveries.filter((delivery) =>
+      selectedIds.has(String(delivery.id)),
+    );
+    const hasLockedDelivery = selectedDeliveries.some(
+      (delivery) =>
+        isLockedDelivery(delivery) ||
+        statements.some((statement) => statementReferencesDelivery(statement, delivery.id)),
+    );
+    if (hasLockedDelivery) blockers.push("送货单已签收或已进入对账，不能直接删除");
+  }
+
+  if (tableKey === "statements") {
+    const selectedStatements = statements.filter((statement) =>
+      selectedIds.has(String(statement.id)),
+    );
+    const selectedStatementNos = new Set(
+      selectedStatements
+        .map((statement) => String(statement.statementNo || "").trim())
+        .filter(Boolean),
+    );
+    const hasPayment = payments.some((payment) =>
+      selectedStatementNos.has(String(payment.statementNo || "").trim()),
+    );
+    if (hasPayment) blockers.push("对账单已有收款记录，不能直接删除");
+
+    const hasLinkedDelivery = selectedStatements.some(
+      (statement) =>
+        statementDeliveryIds(statement).length ||
+        deliveries.some(
+          (delivery) =>
+            selectedStatementNos.has(String(delivery.statementNo || "").trim()) ||
+            statementReferencesDelivery(statement, delivery.id),
+        ),
+    );
+    if (hasLinkedDelivery) blockers.push("对账单已关联送货单，不能直接删除");
+  }
+
+  return blockers;
+}
+
+function assertRowsCanBeDeleted(customer, tableKey, ids = []) {
+  const blockers = getDeleteBlockers(customer, tableKey, ids);
+  if (!blockers.length) return;
+  const err = new Error(blockers.join("\n"));
+  err.statusCode = 409;
+  throw err;
+}
+
+function getPaymentOverages(statements = [], payments = []) {
+  const statementAmounts = new Map();
+  for (const statement of statements || []) {
+    const statementNo = String(statement.statementNo || "").trim();
+    if (!statementNo) continue;
+    statementAmounts.set(statementNo, parseNumericValue(statement.amount));
+  }
+
+  const paidByStatementNo = new Map();
+  for (const payment of payments || []) {
+    const statementNo = String(payment.statementNo || "").trim();
+    if (!statementNo || !statementAmounts.has(statementNo)) continue;
+    paidByStatementNo.set(
+      statementNo,
+      (paidByStatementNo.get(statementNo) || 0) + parseNumericValue(payment.amount),
+    );
+  }
+
+  return Array.from(paidByStatementNo.entries())
+    .map(([statementNo, paidAmount]) => {
+      const amount = statementAmounts.get(statementNo) || 0;
+      if (paidAmount <= amount + 0.0000001) return null;
+      return { statementNo, amount, paidAmount, overAmount: paidAmount - amount };
+    })
+    .filter(Boolean);
+}
+
+function assertPaymentsWithinStatementAmounts(customer = {}, payments = []) {
+  const overages = getPaymentOverages(customer.statements || [], payments);
+  if (!overages.length) return;
+  const err = new Error(
+    `收款金额不能超过对账金额：${overages
+      .slice(0, 5)
+      .map((item) => item.statementNo)
+      .join("、")}`,
+  );
+  err.statusCode = 409;
+  throw err;
+}
+
+function assertDeliveryRowsCanBeSaved(customer = {}, deliveries = []) {
+  const ordersById = new Set((customer.orders || []).map((order) => String(order.id)));
+  const previousById = new Map(
+    (customer.deliveries || []).map((delivery) => [delivery.id, delivery]),
+  );
+
+  for (const delivery of deliveries || []) {
+    if (!isFinalDelivery(delivery)) continue;
+    const linkedOrderId = String(delivery._linkedOrderId || "");
+    const hasValidLinkedOrder = linkedOrderId && ordersById.has(linkedOrderId);
+    if (hasValidLinkedOrder) continue;
+
+    const previous = previousById.get(delivery.id);
+    const previousLinkedOrderId = String(previous?._linkedOrderId || "");
+    const wasLegacyUnlinkedFinal =
+      previous?._finalDelivery === true &&
+      (!previousLinkedOrderId || !ordersById.has(previousLinkedOrderId));
+    if (wasLegacyUnlinkedFinal) continue;
+
+    const err = new Error("正式送货单必须关联有效订单");
+    err.statusCode = 409;
+    throw err;
+  }
 }
 
 function deliverySignItemId(delivery = {}) {
@@ -316,7 +469,14 @@ function sanitizeCostEntryForEmployee(entry = {}) {
 
 function filterCustomerForMobileUser(customer, user) {
   const role = normalizeRole(user?.role);
-  if (!user || role === "admin") return customer;
+  if (!user) return customer;
+  if (role === "admin") {
+    return {
+      ...customer,
+      statements: [],
+      payments: [],
+    };
+  }
   if (role === "pending") {
     return {
       ...customer,
@@ -460,20 +620,20 @@ router.post("/replace-all", async (req, res) => {
           ["statements", statements],
           ["payments", payments],
         ]) {
+          if (!tableRows.length) continue;
           const delegate = TABLE_DELEGATES[table];
-          for (let i = 0; i < tableRows.length; i++) {
-            await tx[delegate].create({
-              data: {
-                id: tableRows[i].id,
-                customerId: info.id,
-                sortOrder: i,
-                data: tableRows[i],
-              },
-            });
-          }
+          await tx[delegate].createMany({
+            data: tableRows.map((row, i) => ({
+              id: row.id,
+              customerId: info.id,
+              sortOrder: i,
+              data: row,
+            })),
+          });
         }
       }
     });
+    bumpDataVersion();
     res.json({ ok: true, customers });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -509,6 +669,7 @@ router.post("/", async (req, res) => {
         customColumns: normalizeCustomColumns(customColumns),
       },
     });
+    bumpDataVersion();
     res.json({
       id,
       name,
@@ -561,6 +722,7 @@ router.put("/:id", async (req, res) => {
         customColumns: normalizeCustomColumns(customColumns),
       },
     });
+    bumpDataVersion();
     res.json(normalize(customer));
   } catch (err) {
     if (err.code === "P2025") return res.status(404).json({ error: "Not found" });
@@ -572,6 +734,7 @@ router.put("/:id", async (req, res) => {
 router.delete("/:id", async (req, res) => {
   try {
     await prisma.customer.delete({ where: { id: req.params.id } });
+    bumpDataVersion();
     res.json({ ok: true });
   } catch (err) {
     if (err.code === "P2025") return res.status(404).json({ error: "Not found" });
@@ -617,6 +780,12 @@ router.patch("/:id/orders/:orderId/status", async (req, res) => {
       },
     });
     if (!order) return res.status(404).json({ error: "Order not found" });
+
+    const ifMatchStatus = String(req.body?.ifMatchStatus || "").trim();
+    if (ifMatchStatus && normalizeOrderStatus(order.data?.status) !== ifMatchStatus) {
+      return res.status(409).json({ error: "订单状态已变更，请刷新后重试" });
+    }
+
     if (mobileUser && mobileRole === "employee") {
       if (nextStatus !== "已完成") return res.status(403).json({ error: "员工只能完成已排产订单" });
       if (normalizeOrderStatus(order.data?.status) !== "已排产") {
@@ -641,6 +810,7 @@ router.patch("/:id/orders/:orderId/status", async (req, res) => {
       where: { id: orderId },
       data: { data },
     });
+    bumpDataVersion();
     res.json({ ok: true, row: updated.data });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -714,6 +884,7 @@ router.post("/:id/cost-entries", async (req, res) => {
         data: row,
       },
     });
+    bumpDataVersion();
     res.json({ ok: true, row: created.data });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -753,6 +924,7 @@ router.patch("/:id/cost-entries/:entryId/approval", async (req, res) => {
       where: { id: entryId },
       data: { data },
     });
+    bumpDataVersion();
     res.json({ ok: true, row: updated.data });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -834,7 +1006,7 @@ router.patch("/:id/deliveries/:deliveryId/sign", async (req, res) => {
         .map((row) => row._linkedOrderId)
         .filter(Boolean),
     );
-    if (changedOrderIds.size && prisma.order.findMany && prisma.order.update) {
+    if (changedOrderIds.size) {
       const [orders, nextDeliveryRows] = await Promise.all([
         prisma.order.findMany({ where: { customerId: id } }),
         prisma.delivery.findMany({ where: { customerId: id } }),
@@ -856,7 +1028,7 @@ router.patch("/:id/deliveries/:deliveryId/sign", async (req, res) => {
               .filter(
                 (row) =>
                   row._finalDelivery !== false &&
-                  normalizeFinalDeliveryStatus(row.status) === "已送",
+                  normalizeFinalDeliveryStatus(row.status) === "已签收",
               )
               .filter((row) => deliveryQuantitySource(row) === sourceField)
               .reduce((sum, row) => sum + parseNumericValue(row.deliveryQuantity), 0);
@@ -881,6 +1053,7 @@ router.patch("/:id/deliveries/:deliveryId/sign", async (req, res) => {
           }),
       );
     }
+    bumpDataVersion();
     res.json({
       ok: true,
       row: updatedRows.find((row) => row.id === deliveryId)?.data || updatedRows[0]?.data,
@@ -900,6 +1073,24 @@ router.put("/:id/:tableKey", async (req, res) => {
     const delegate = TABLE_DELEGATES[tableKey];
     let savedRows = [];
     await prisma.$transaction(async (tx) => {
+      const current = await tx.customer.findUnique({
+        where: { id },
+        include: {
+          products: { orderBy: { sortOrder: "asc" } },
+          orders: { orderBy: { sortOrder: "asc" } },
+          deliveries: { orderBy: { sortOrder: "asc" } },
+          materialCosts: { orderBy: { sortOrder: "asc" } },
+          costEntries: { orderBy: { sortOrder: "asc" } },
+          statements: { orderBy: { sortOrder: "asc" } },
+          payments: { orderBy: { sortOrder: "asc" } },
+        },
+      });
+      if (!current) {
+        const err = new Error("Customer not found");
+        err.statusCode = 404;
+        throw err;
+      }
+      const currentCustomer = normalize(current);
       const existingRows = await tx[delegate].findMany({
         where: { customerId: { not: id } },
         select: { id: true },
@@ -907,6 +1098,17 @@ router.put("/:id/:tableKey", async (req, res) => {
       const usedIds = new Set(existingRows.map((row) => row.id));
       savedRows = uniqueRows(rows || [], tableKey, usedIds);
       const savedIds = savedRows.map((row) => row.id);
+      const savedIdSet = new Set(savedIds.map(String));
+      const removedIds = (currentCustomer[tableKey] || [])
+        .map((row) => String(row.id || ""))
+        .filter((rowId) => rowId && !savedIdSet.has(rowId));
+      assertRowsCanBeDeleted(currentCustomer, tableKey, removedIds);
+      if (tableKey === "payments") {
+        assertPaymentsWithinStatementAmounts(currentCustomer, savedRows);
+      }
+      if (tableKey === "deliveries") {
+        assertDeliveryRowsCanBeSaved(currentCustomer, savedRows);
+      }
 
       if (savedIds.length) {
         await tx[delegate].deleteMany({
@@ -936,9 +1138,10 @@ router.put("/:id/:tableKey", async (req, res) => {
         });
       }
     });
+    bumpDataVersion();
     res.json({ ok: true, rows: savedRows });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(err.statusCode || 500).json({ error: err.message });
   }
 });
 
@@ -949,15 +1152,36 @@ router.delete("/:id/:tableKey/rows", async (req, res) => {
   const { ids } = req.body;
   try {
     const delegate = TABLE_DELEGATES[tableKey];
-    await prisma[delegate].deleteMany({
-      where: {
-        customerId: id,
-        id: { in: ids },
-      },
+    await prisma.$transaction(async (tx) => {
+      const current = await tx.customer.findUnique({
+        where: { id },
+        include: {
+          products: { orderBy: { sortOrder: "asc" } },
+          orders: { orderBy: { sortOrder: "asc" } },
+          deliveries: { orderBy: { sortOrder: "asc" } },
+          materialCosts: { orderBy: { sortOrder: "asc" } },
+          costEntries: { orderBy: { sortOrder: "asc" } },
+          statements: { orderBy: { sortOrder: "asc" } },
+          payments: { orderBy: { sortOrder: "asc" } },
+        },
+      });
+      if (!current) {
+        const err = new Error("Customer not found");
+        err.statusCode = 404;
+        throw err;
+      }
+      assertRowsCanBeDeleted(normalize(current), tableKey, ids || []);
+      await tx[delegate].deleteMany({
+        where: {
+          customerId: id,
+          id: { in: ids },
+        },
+      });
     });
+    bumpDataVersion();
     res.json({ ok: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(err.statusCode || 500).json({ error: err.message });
   }
 });
 
