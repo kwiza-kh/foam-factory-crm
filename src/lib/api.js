@@ -2,6 +2,17 @@
 
 /** @type {string} */
 const BASE = "/api";
+let authToken = "";
+
+function parseErrorMessage(text, fallback) {
+  if (!text) return fallback;
+  try {
+    const data = JSON.parse(text);
+    return data?.error || data?.message || text;
+  } catch {
+    return text;
+  }
+}
 
 /**
  * @param {string} method
@@ -10,19 +21,39 @@ const BASE = "/api";
  * @returns {Promise<any>}
  */
 async function req(method, path, body) {
+  const headers = {
+    ...(authToken ? { "X-Mobile-User-Token": authToken } : {}),
+    ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+  };
   const res = await fetch(`${BASE}${path}`, {
     method,
-    headers: body !== undefined ? { "Content-Type": "application/json" } : {},
+    headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(text || `HTTP ${res.status}`);
+    throw new Error(parseErrorMessage(text, `HTTP ${res.status}`));
   }
   return res.json();
 }
 
 export const api = {
+  setAuthToken: (token = "") => {
+    authToken = String(token || "").trim();
+  },
+
+  getAuthToken: () => authToken,
+
+  getSyncVersion: () => req("GET", "/sync-version"),
+
+  /** @param {{ phone: string; password: string }} credentials */
+  login: (credentials) => req("POST", "/users/login", credentials),
+
+  /** @param {{ name: string; phone: string; password: string }} profile */
+  register: (profile) => req("POST", "/users/register", profile),
+
+  getCurrentUser: () => req("GET", "/users/me"),
+
   /**
    * @param {{ page?: number; limit?: number; search?: string }} [params]
    * @returns {Promise<{ data: import('./types').Customer[]; pagination: { page: number; limit: number; total: number; totalPages: number; hasMore: boolean } }>}
@@ -65,4 +96,27 @@ export const api = {
 
   /** @param {{ cardFields: string[]; detailFields: string[] }} settings */
   updateMobileDisplaySettings: (settings) => req("PUT", "/users/mobile-display-settings", settings),
+
+  // Attendance
+  getAttendanceLeaves: () => req("GET", "/attendance/leaves"),
+
+  /** @param {'approved' | 'rejected'} status */
+  updateLeaveStatus: (id, status) => req("PATCH", `/attendance/leaves/${id}`, { status }),
+
+  /** @param {string} [month] */
+  getAttendanceOverview: (month) => {
+    const qs = month ? `?month=${month}` : "";
+    return req("GET", `/attendance/admin/overview${qs}`);
+  },
+
+  getAttendanceRules: () => req("GET", "/attendance/rules"),
+
+  /** @param {{ workStart: string; lunchStart: string; lunchEnd: string; workEnd: string; lunchBreakMin: number; workDaysPerMonth: number; overtimeMultiplier: number; lateToleMin: number }} rules */
+  updateAttendanceRules: (rules) => req("PUT", "/attendance/rules", rules),
+
+  getAttendanceSalaries: () => req("GET", "/attendance/salaries"),
+
+  /** @param {string} userId @param {number} monthlySalary */
+  updateAttendanceSalary: (userId, monthlySalary) =>
+    req("PUT", `/attendance/salaries/${userId}`, { monthlySalary }),
 };

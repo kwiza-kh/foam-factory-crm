@@ -7,6 +7,7 @@ const orderDefaultColumns = [
     width: 130,
     type: "select",
     options: statusOptions,
+    editable: false,
   },
   {
     field: "completionTime",

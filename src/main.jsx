@@ -1,5 +1,6 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import App from "./App.jsx";
 import "./styles.css";
 
@@ -26,10 +27,16 @@ class ErrorBoundary extends React.Component {
   }
 }
 
-createRoot(document.getElementById("root")).render(
+const rootElement = document.getElementById("root");
+const root = rootElement.__foamCrmRoot || createRoot(rootElement);
+rootElement.__foamCrmRoot = root;
+
+root.render(
   <React.StrictMode>
     <ErrorBoundary>
-      <App />
+      <TooltipProvider>
+        <App />
+      </TooltipProvider>
     </ErrorBoundary>
   </React.StrictMode>,
 );

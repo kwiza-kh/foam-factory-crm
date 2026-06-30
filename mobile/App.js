@@ -70,6 +70,7 @@ const mobileNavigationTabs = [
   { key: "cost", label: "成本", icon: "cost" },
   { key: "dashboard", label: "看板", icon: "dashboard", adminOnly: true },
   { key: "approval", label: "审批", icon: "approval", adminOnly: true },
+  { key: "attendance", label: "考勤", icon: "attendance" },
 ];
 const internalOrderFields = new Set(["id", completionPhotoField]);
 const baseMobileOrderFields = [
@@ -659,6 +660,72 @@ function buildScheduleOrderGroups(orders = []) {
   }));
 }
 
+function todayDate() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+const defaultAttendanceRules = {
+  workStart: "09:00",
+  lunchStart: "12:00",
+  lunchEnd: "13:00",
+  workEnd: "18:00",
+  lunchBreakMin: 60,
+  workDaysPerMonth: 22,
+  overtimeMultiplier: 1.5,
+  lateToleMin: 10,
+};
+
+function timeToMinutes(value, fallback = 0) {
+  const [hours, minutes] = String(value || "")
+    .split(":")
+    .map((part) => Number(part));
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return fallback;
+  return hours * 60 + minutes;
+}
+
+function minutesBetween(start, end) {
+  return Math.max(0, timeToMinutes(end) - timeToMinutes(start));
+}
+
+function normalizeAttendanceRules(rules = {}) {
+  const merged = { ...defaultAttendanceRules, ...(rules || {}) };
+  const lunchBreakMin =
+    minutesBetween(merged.lunchStart, merged.lunchEnd) || Number(merged.lunchBreakMin) || 0;
+  return {
+    ...merged,
+    lunchBreakMin,
+  };
+}
+
+function buildAttendanceScheduleSegments(rules = {}) {
+  const normalized = normalizeAttendanceRules(rules);
+  return [
+    {
+      key: "morning",
+      label: "上午上班",
+      time: `${normalized.workStart} - ${normalized.lunchStart}`,
+      minutes: minutesBetween(normalized.workStart, normalized.lunchStart),
+    },
+    {
+      key: "lunch",
+      label: "中午午休",
+      time: `${normalized.lunchStart} - ${normalized.lunchEnd}`,
+      minutes: minutesBetween(normalized.lunchStart, normalized.lunchEnd),
+    },
+    {
+      key: "afternoon",
+      label: "下午上班",
+      time: `${normalized.lunchEnd} - ${normalized.workEnd}`,
+      minutes: minutesBetween(normalized.lunchEnd, normalized.workEnd),
+    },
+  ];
+}
+
+function formatScheduleHours(minutes) {
+  const safeMinutes = Math.max(0, Number(minutes) || 0);
+  return `${(safeMinutes / 60).toFixed(safeMinutes % 60 === 0 ? 0 : 1)}h`;
+}
+
 function MobileApp() {
   const [apiBaseUrl, setApiBaseUrl] = useState(defaultApiBaseUrl);
   const [apiDraft, setApiDraft] = useState(defaultApiBaseUrl);
@@ -669,6 +736,10 @@ function MobileApp() {
   const [registerPassword, setRegisterPassword] = useState("");
   const [registerConfirmPassword, setRegisterConfirmPassword] = useState("");
   const [registering, setRegistering] = useState(false);
+  const [showRegister, setShowRegister] = useState(false);
+  const [loginPhone, setLoginPhone] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loggingIn, setLoggingIn] = useState(false);
   const [customers, setCustomers] = useState([]);
   const [selectedCustomerId, setSelectedCustomerId] = useState("all");
   const [activeView, setActiveView] = useState("workbench");
@@ -683,6 +754,17 @@ function MobileApp() {
   const [completionOperator, setCompletionOperator] = useState("");
   const [completionNote, setCompletionNote] = useState("");
   const [completionPhoto, setCompletionPhoto] = useState(null);
+  const [attendanceRecord, setAttendanceRecord] = useState(null);
+  const [attendanceStats, setAttendanceStats] = useState(null);
+  const [attendanceLeaves, setAttendanceLeaves] = useState([]);
+  const [attendanceRules, setAttendanceRules] = useState(defaultAttendanceRules);
+  const [attendanceLoading, setAttendanceLoading] = useState(false);
+  const [leaveType, setLeaveType] = useState("事假");
+  const [leaveStartDate, setLeaveStartDate] = useState("");
+  const [leaveEndDate, setLeaveEndDate] = useState("");
+  const [leaveReason, setLeaveReason] = useState("");
+  const [leavingSubmitting, setLeavingSubmitting] = useState(false);
+  const [liveElapsed, setLiveElapsed] = useState("");
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmNewPassword, setConfirmNewPassword] = useState("");
@@ -1083,6 +1165,28 @@ function MobileApp() {
     mobileNavigationTabs.find((tab) => tab.key === activeView)?.label ||
     "工作台";
 
+  // Live elapsed timer while checked in but not yet checked out
+  useEffect(() => {
+    if (!attendanceRecord?.checkIn || attendanceRecord?.checkOut) {
+      setLiveElapsed("");
+      return;
+    }
+    const tick = () => {
+      const diff = Date.now() - new Date(attendanceRecord.checkIn).getTime();
+      const h = Math.floor(diff / 3600000);
+      const m = Math.floor((diff % 3600000) / 60000);
+      const s = Math.floor((diff % 60000) / 1000);
+      setLiveElapsed(
+        h > 0
+          ? `${h}小时 ${String(m).padStart(2, "0")}分 ${String(s).padStart(2, "0")}秒`
+          : `${m}分 ${String(s).padStart(2, "0")}秒`
+      );
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [attendanceRecord?.checkIn, attendanceRecord?.checkOut]);
+
   const refresh = useCallback(() => {
     setRefreshing(true);
     loadCustomers({ silent: true });
@@ -1193,6 +1297,50 @@ function MobileApp() {
     }
   }, [apiDraft, registerConfirmPassword, registerName, registerPassword, registerPhone]);
 
+  const loginMobileUser = useCallback(async () => {
+    const phone = loginPhone.trim();
+    const password = loginPassword;
+    const nextApiUrl = apiDraft.trim().replace(/\/$/, "");
+    if (!nextApiUrl) {
+      Alert.alert("请填写后端地址", "格式例如：http://电脑IP:3001/api");
+      return;
+    }
+    if (!phone || !password) {
+      Alert.alert("请填写登录信息", "手机号和密码都需要填写。");
+      return;
+    }
+
+    setLoggingIn(true);
+    setError("");
+    try {
+      const response = await fetch(`${nextApiUrl}/users/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone, password }),
+      });
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({}));
+        throw new Error(result.error || `登录失败 (${response.status})`);
+      }
+      const result = await response.json();
+      if (!result.user?.token) throw new Error("登录失败，服务端没有返回账号信息");
+      await AsyncStorage.multiSet([
+        [mobileApiStorageKey, nextApiUrl],
+        [mobileUserStorageKey, JSON.stringify(result.user)],
+      ]);
+      setApiBaseUrl(nextApiUrl);
+      setApiDraft(nextApiUrl);
+      setCurrentUser(result.user);
+      setLoginPhone("");
+      setLoginPassword("");
+      setLoading(true);
+    } catch (err) {
+      Alert.alert("登录失败", err.message || "无法连接服务器");
+    } finally {
+      setLoggingIn(false);
+    }
+  }, [apiDraft, loginPassword, loginPhone]);
+
   const logoutMobileUser = useCallback(async () => {
     await AsyncStorage.removeItem(mobileUserStorageKey);
     setCurrentUser(null);
@@ -1204,6 +1352,7 @@ function MobileApp() {
     setSelectedOrder(null);
     setCompletionOrder(null);
     setActiveView("workbench");
+    setShowRegister(false);
   }, []);
 
   const updateCurrentUser = useCallback(async (user) => {
@@ -1286,6 +1435,114 @@ function MobileApp() {
     },
     [apiDraft],
   );
+
+  const loadAttendanceToday = useCallback(async () => {
+    setAttendanceLoading(true);
+    try {
+      const res = await request("/attendance/today");
+      setAttendanceRecord(res.record);
+    } catch (err) {
+      console.warn("loadAttendanceToday:", err.message);
+    } finally {
+      setAttendanceLoading(false);
+    }
+  }, [request]);
+
+  const checkIn = useCallback(async () => {
+    setAttendanceLoading(true);
+    try {
+      const res = await request("/attendance/check-in", { method: "POST" });
+      if (res.ok) setAttendanceRecord(res.record);
+    } catch (err) {
+      Alert.alert("签到失败", err.message);
+    } finally {
+      setAttendanceLoading(false);
+    }
+  }, [request]);
+
+  const checkOut = useCallback(async () => {
+    setAttendanceLoading(true);
+    try {
+      const res = await request("/attendance/check-out", { method: "POST" });
+      if (res.ok) setAttendanceRecord(res.record);
+    } catch (err) {
+      Alert.alert("签退失败", err.message);
+    } finally {
+      setAttendanceLoading(false);
+    }
+  }, [request]);
+
+  const loadAttendanceStats = useCallback(async (month) => {
+    try {
+      const res = await request(`/attendance/stats?month=${month || ""}`);
+      setAttendanceStats(res);
+    } catch (err) {
+      console.warn("loadAttendanceStats:", err.message);
+    }
+  }, [request]);
+
+  const loadAttendanceRules = useCallback(async () => {
+    try {
+      const res = await request("/attendance/rules");
+      if (res.rules) setAttendanceRules(normalizeAttendanceRules(res.rules));
+    } catch (err) {
+      console.warn("loadAttendanceRules:", err.message);
+    }
+  }, [request]);
+
+  const loadLeaves = useCallback(async () => {
+    try {
+      const res = await request("/attendance/leaves");
+      setAttendanceLeaves(res.leaves || []);
+    } catch (err) {
+      console.warn("loadLeaves:", err.message);
+    }
+  }, [request]);
+
+  useEffect(() => {
+    if (activeView === "attendance" && currentUser?.token) {
+      loadAttendanceToday();
+      loadAttendanceRules();
+      loadLeaves();
+      loadAttendanceStats("");
+    }
+  }, [
+    activeView,
+    currentUser?.token,
+    loadAttendanceToday,
+    loadAttendanceRules,
+    loadLeaves,
+    loadAttendanceStats,
+  ]);
+
+  const submitLeave = useCallback(async () => {
+    if (!leaveStartDate || !leaveEndDate) {
+      Alert.alert("请填写日期", "请选择请假的起止日期。");
+      return;
+    }
+    setLeavingSubmitting(true);
+    try {
+      await request("/attendance/leaves", {
+        method: "POST",
+        body: JSON.stringify({
+          type: leaveType,
+          startDate: leaveStartDate,
+          endDate: leaveEndDate,
+          reason: leaveReason,
+        }),
+      });
+      Alert.alert("提交成功", "请假申请已提交，等待管理员审批。");
+      setLeaveStartDate("");
+      setLeaveEndDate("");
+      setLeaveReason("");
+      setLeaveType("事假");
+      loadLeaves();
+    } catch (err) {
+      Alert.alert("提交失败", err.message);
+    } finally {
+      setLeavingSubmitting(false);
+    }
+  }, [leaveStartDate, leaveEndDate, leaveReason, leaveType, request, loadLeaves]);
 
   const updateLocalOrder = useCallback((customerId, row) => {
     setCustomers((current) =>
@@ -1932,20 +2189,36 @@ function MobileApp() {
   }
 
   if (!currentUser) {
+    if (showRegister) {
+      return (
+        <RegisterScreen
+          apiDraft={apiDraft}
+          name={registerName}
+          phone={registerPhone}
+          password={registerPassword}
+          confirmPassword={registerConfirmPassword}
+          saving={registering}
+          onChangeApi={setApiDraft}
+          onChangeName={setRegisterName}
+          onChangePhone={setRegisterPhone}
+          onChangePassword={setRegisterPassword}
+          onChangeConfirmPassword={setRegisterConfirmPassword}
+          onSubmit={registerMobileUser}
+          onSwitchToLogin={() => setShowRegister(false)}
+        />
+      );
+    }
     return (
-      <RegisterScreen
+      <LoginScreen
         apiDraft={apiDraft}
-        name={registerName}
-        phone={registerPhone}
-        password={registerPassword}
-        confirmPassword={registerConfirmPassword}
-        saving={registering}
+        phone={loginPhone}
+        password={loginPassword}
+        saving={loggingIn}
         onChangeApi={setApiDraft}
-        onChangeName={setRegisterName}
-        onChangePhone={setRegisterPhone}
-        onChangePassword={setRegisterPassword}
-        onChangeConfirmPassword={setRegisterConfirmPassword}
-        onSubmit={registerMobileUser}
+        onChangePhone={setLoginPhone}
+        onChangePassword={setLoginPassword}
+        onSubmit={loginMobileUser}
+        onSwitchToRegister={() => setShowRegister(true)}
       />
     );
   }
@@ -2267,6 +2540,318 @@ function MobileApp() {
     );
   }
 
+  if (activeView === "attendance") {
+    const normalizedAttendanceRules = normalizeAttendanceRules(attendanceRules);
+    const attendanceSegments = buildAttendanceScheduleSegments(normalizedAttendanceRules);
+    const dailyWorkMinutes = attendanceSegments
+      .filter((segment) => segment.key !== "lunch")
+      .reduce((sum, segment) => sum + segment.minutes, 0);
+
+    return appChrome(
+      <ScrollView
+        contentContainerStyle={styles.listContent}
+        refreshControl={
+          <RefreshControl
+            refreshing={attendanceLoading}
+            onRefresh={() => {
+              loadAttendanceToday();
+              loadAttendanceRules();
+              loadLeaves();
+              loadAttendanceStats("");
+            }}
+            tintColor={iosPalette.accent}
+          />
+        }
+        keyboardShouldPersistTaps="handled"
+        onLayout={() => {
+          loadAttendanceToday();
+          loadAttendanceRules();
+          loadLeaves();
+          loadAttendanceStats("");
+        }}
+      >
+        {/* Today's Status Card — enhanced */}
+        <View style={styles.attendanceCard}>
+          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" }}>
+            <Text style={styles.attendanceCardTitle}>今日考勤</Text>
+            <Text style={styles.attendanceDate}>{todayDate()}</Text>
+          </View>
+
+          {/* Live Duration Banner */}
+          {attendanceRecord?.checkIn && !attendanceRecord?.checkOut && liveElapsed ? (
+            <View style={styles.attendanceLiveBanner}>
+              <View style={styles.attendanceLiveDot} />
+              <Text style={styles.attendanceLiveLabel}>在岗时长</Text>
+              <Text style={styles.attendanceLiveTime}>{liveElapsed}</Text>
+            </View>
+          ) : attendanceRecord?.checkIn && attendanceRecord?.checkOut ? (
+            <View style={[styles.attendanceLiveBanner, styles.attendanceLiveBannerDone]}>
+              <Text style={styles.attendanceLiveLabelDone}>✓ 已完成签到签退</Text>
+            </View>
+          ) : (
+            <View style={styles.attendanceNotChecked}>
+              <Text style={styles.attendanceNotCheckedText}>今日尚未签到</Text>
+            </View>
+          )}
+
+          {/* Status Chips */}
+          {attendanceRecord?.checkIn ? (
+            <View style={styles.attendanceStatusRow}>
+              <View style={styles.attendanceChip}>
+                <Text style={styles.attendanceChipIcon}>✓</Text>
+                <View>
+                  <Text style={styles.attendanceChipLabel}>签到</Text>
+                  <Text style={styles.attendanceChipTime}>
+                    {new Date(attendanceRecord.checkIn).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}
+                  </Text>
+                </View>
+              </View>
+              {attendanceRecord?.checkOut ? (
+                <View style={styles.attendanceChip}>
+                  <Text style={styles.attendanceChipIcon}>✓</Text>
+                  <View>
+                    <Text style={styles.attendanceChipLabel}>签退</Text>
+                    <Text style={styles.attendanceChipTime}>
+                      {new Date(attendanceRecord.checkOut).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}
+                    </Text>
+                  </View>
+                </View>
+              ) : (
+                <View style={styles.attendanceChipMuted}>
+                  <Text style={styles.attendanceChipIconMuted}>○</Text>
+                  <View>
+                    <Text style={styles.attendanceChipLabelMuted}>签退</Text>
+                    <Text style={styles.attendanceChipTimeMuted}>待签退</Text>
+                  </View>
+                </View>
+              )}
+            </View>
+          ) : null}
+
+          {/* Large Check In / Check Out Buttons */}
+          <View style={styles.attendanceActions}>
+            <Pressable
+              style={({ pressed }) => [
+                styles.attendanceBtnLarge,
+                attendanceRecord?.checkIn ? styles.attendanceBtnLargeDone : styles.attendanceBtnLargeIn,
+                pressed && !attendanceRecord?.checkIn && { transform: [{ scale: 0.97 }] },
+              ]}
+              onPress={checkIn}
+              disabled={!!attendanceRecord?.checkIn || attendanceLoading}
+            >
+              {attendanceLoading && !attendanceRecord?.checkIn ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <>
+                  <Text style={styles.attendanceBtnLargeIcon}>{attendanceRecord?.checkIn ? "✓" : "⏱"}</Text>
+                  <Text style={styles.attendanceBtnLargeText}>
+                    {attendanceRecord?.checkIn ? "已签到" : "上班打卡"}
+                  </Text>
+                  {!attendanceRecord?.checkIn && (
+                    <Text style={styles.attendanceBtnLargeSub}>点击记录到岗时间</Text>
+                  )}
+                </>
+              )}
+            </Pressable>
+            <Pressable
+              style={({ pressed }) => [
+                styles.attendanceBtnLarge,
+                attendanceRecord?.checkOut
+                  ? styles.attendanceBtnLargeDone
+                  : !attendanceRecord?.checkIn
+                  ? styles.attendanceBtnLargeDisabled
+                  : styles.attendanceBtnLargeOut,
+                pressed && attendanceRecord?.checkIn && !attendanceRecord?.checkOut && { transform: [{ scale: 0.97 }] },
+              ]}
+              onPress={checkOut}
+              disabled={!attendanceRecord?.checkIn || !!attendanceRecord?.checkOut || attendanceLoading}
+            >
+              {attendanceLoading && attendanceRecord?.checkIn && !attendanceRecord?.checkOut ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <>
+                  <Text style={styles.attendanceBtnLargeIcon}>{attendanceRecord?.checkOut ? "✓" : "🏠"}</Text>
+                  <Text style={styles.attendanceBtnLargeText}>
+                    {attendanceRecord?.checkOut ? "已签退" : !attendanceRecord?.checkIn ? "未签到" : "下班打卡"}
+                  </Text>
+                  {attendanceRecord?.checkIn && !attendanceRecord?.checkOut && (
+                    <Text style={styles.attendanceBtnLargeSub}>点击记录离岗时间</Text>
+                  )}
+                </>
+              )}
+            </Pressable>
+          </View>
+        </View>
+
+        <View style={styles.attendanceScheduleCard}>
+          <View style={styles.attendanceScheduleHeader}>
+            <View>
+              <Text style={styles.attendanceScheduleKicker}>今日班次</Text>
+              <Text style={styles.attendanceScheduleTitle}>
+                {normalizedAttendanceRules.workStart} - {normalizedAttendanceRules.workEnd}
+              </Text>
+            </View>
+            <View style={styles.attendanceScheduleTotal}>
+              <Text style={styles.attendanceScheduleTotalValue}>
+                {formatScheduleHours(dailyWorkMinutes)}
+              </Text>
+              <Text style={styles.attendanceScheduleTotalLabel}>日净工时</Text>
+            </View>
+          </View>
+
+          <View style={styles.attendanceScheduleTimeline}>
+            {attendanceSegments.map((segment) => (
+              <View key={segment.key} style={styles.attendanceScheduleSegment}>
+                <View style={[styles.attendanceScheduleDot, styles[`attendanceScheduleDot_${segment.key}`]]} />
+                <View style={styles.attendanceScheduleSegmentText}>
+                  <Text style={styles.attendanceScheduleSegmentLabel}>{segment.label}</Text>
+                  <Text style={styles.attendanceScheduleSegmentTime}>{segment.time}</Text>
+                </View>
+                <Text style={styles.attendanceScheduleSegmentHours}>
+                  {formatScheduleHours(segment.minutes)}
+                </Text>
+              </View>
+            ))}
+          </View>
+
+          <View style={styles.attendanceScheduleFooter}>
+            <Text style={styles.attendanceScheduleFooterText}>
+              迟到容忍 {normalizedAttendanceRules.lateToleMin} 分钟
+            </Text>
+            <Text style={styles.attendanceScheduleFooterText}>
+              午休 {normalizedAttendanceRules.lunchStart} - {normalizedAttendanceRules.lunchEnd}
+            </Text>
+          </View>
+        </View>
+
+        {/* Monthly Stats */}
+        {attendanceStats ? (
+          <View style={styles.attendanceCard}>
+            <Text style={styles.attendanceCardTitle}>
+              本月统计 · {attendanceStats.month}
+            </Text>
+            <View style={styles.attendanceStatsGrid}>
+              <View style={styles.attendanceStatItem}>
+                <Text style={styles.attendanceStatValue}>{attendanceStats.workDays}</Text>
+                <Text style={styles.attendanceStatLabel}>出勤天数</Text>
+              </View>
+              <View style={styles.attendanceStatItem}>
+                <Text style={styles.attendanceStatValue}>{attendanceStats.totalHours}</Text>
+                <Text style={styles.attendanceStatLabel}>工时(h)</Text>
+              </View>
+            </View>
+          </View>
+        ) : null}
+
+        {/* Leave Section */}
+        <View style={styles.attendanceCard}>
+          <Text style={styles.attendanceCardTitle}>请假申请</Text>
+
+          {/* Leave Form */}
+          <View style={styles.leaveForm}>
+            <View style={styles.leaveField}>
+              <Text style={styles.authLabel}>请假类型</Text>
+              <View style={styles.leaveTypeRow}>
+                {["事假", "病假", "年假", "其他"].map((t) => (
+                  <Pressable
+                    key={t}
+                    style={[styles.leaveTypeChip, leaveType === t && styles.leaveTypeChipActive]}
+                    onPress={() => setLeaveType(t)}
+                  >
+                    <Text style={[styles.leaveTypeChipText, leaveType === t && styles.leaveTypeChipTextActive]}>{t}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+            <View style={styles.leaveFieldRow}>
+              <View style={[styles.leaveField, { flex: 1 }]}>
+                <Text style={styles.authLabel}>开始日期</Text>
+                <TextInput
+                  style={styles.authInput}
+                  value={leaveStartDate}
+                  onChangeText={setLeaveStartDate}
+                  placeholder="YYYY-MM-DD"
+                  placeholderTextColor="#546E8A"
+                />
+              </View>
+              <View style={[styles.leaveField, { flex: 1 }]}>
+                <Text style={styles.authLabel}>结束日期</Text>
+                <TextInput
+                  style={styles.authInput}
+                  value={leaveEndDate}
+                  onChangeText={setLeaveEndDate}
+                  placeholder="YYYY-MM-DD"
+                  placeholderTextColor="#546E8A"
+                />
+              </View>
+            </View>
+            <View style={styles.leaveField}>
+              <Text style={styles.authLabel}>请假原因</Text>
+              <TextInput
+                style={[styles.authInput, { minHeight: 80 }]}
+                value={leaveReason}
+                onChangeText={setLeaveReason}
+                placeholder="请简单说明请假原因"
+                placeholderTextColor="#546E8A"
+                multiline
+                textAlignVertical="top"
+              />
+            </View>
+            <Pressable
+              style={({ pressed }) => [
+                styles.authButton,
+                styles.authButtonRegister,
+                leavingSubmitting && styles.authButtonDisabled,
+                pressed && styles.authButtonPressed,
+              ]}
+              onPress={submitLeave}
+              disabled={leavingSubmitting}
+            >
+              {leavingSubmitting ? (
+                <ActivityIndicator color="#FFFFFF" size="small" />
+              ) : (
+                <Text style={styles.authButtonText}>提交请假</Text>
+              )}
+            </Pressable>
+          </View>
+        </View>
+
+        {/* Leave History */}
+        {attendanceLeaves.length > 0 ? (
+          <View style={styles.attendanceCard}>
+            <Text style={styles.attendanceCardTitle}>请假记录</Text>
+            {attendanceLeaves.map((leave) => (
+              <View key={leave.id} style={styles.leaveRow}>
+                <View style={styles.leaveRowLeft}>
+                  <Text style={styles.leaveRowType}>{leave.type}</Text>
+                  <Text style={styles.leaveRowDates}>
+                    {leave.startDate} ~ {leave.endDate}
+                  </Text>
+                  {leave.reason ? (
+                    <Text style={styles.leaveRowReason}>{leave.reason}</Text>
+                  ) : null}
+                </View>
+                <View style={[
+                  styles.leaveStatusBadge,
+                  leave.status === "approved" && styles.leaveStatusApproved,
+                  leave.status === "rejected" && styles.leaveStatusRejected,
+                ]}>
+                  <Text style={[
+                    styles.leaveStatusText,
+                    leave.status === "approved" && styles.leaveStatusTextApproved,
+                    leave.status === "rejected" && styles.leaveStatusTextRejected,
+                  ]}>
+                    {leave.status === "approved" ? "已批准" : leave.status === "rejected" ? "已拒绝" : "待审批"}
+                  </Text>
+                </View>
+              </View>
+            ))}
+          </View>
+        ) : null}
+      </ScrollView>,
+    );
+  }
+
   return appChrome(
     <FlatList
       data={orderListItems}
@@ -2339,6 +2924,115 @@ export default function App() {
   );
 }
 
+function LoginScreen({
+  apiDraft,
+  phone,
+  password,
+  saving,
+  onChangeApi,
+  onChangePhone,
+  onChangePassword,
+  onSubmit,
+  onSwitchToRegister,
+}) {
+  return (
+    <SafeAreaView style={styles.authSafeArea}>
+      <StatusBar style="light" />
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        style={styles.authWrap}
+      >
+        <ScrollView
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={styles.authScroll}
+          contentInsetAdjustmentBehavior="automatic"
+        >
+          {/* Hero */}
+          <View style={styles.authHero}>
+            <View style={styles.authIconRing}>
+              <Text style={styles.authIconText}>F</Text>
+            </View>
+            <Text style={styles.authKicker}>FOAM FACTORY CRM</Text>
+            <Text style={styles.authTitle}>登录</Text>
+            <Text style={styles.authHint}>
+              使用手机号与密码登录员工账号
+            </Text>
+          </View>
+
+          {/* Card */}
+          <View style={styles.authCard}>
+            <View style={styles.authField}>
+              <Text style={styles.authLabel}>后端 API 地址</Text>
+              <TextInput
+                style={styles.authInput}
+                value={apiDraft}
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="url"
+                onChangeText={onChangeApi}
+                placeholder="http://电脑IP:3001/api"
+                placeholderTextColor="#546E8A"
+              />
+            </View>
+
+            <View style={styles.authField}>
+              <Text style={styles.authLabel}>手机号</Text>
+              <TextInput
+                style={styles.authInput}
+                value={phone}
+                onChangeText={onChangePhone}
+                keyboardType="phone-pad"
+                textContentType="telephoneNumber"
+                placeholder="请输入手机号"
+                placeholderTextColor="#546E8A"
+                returnKeyType="next"
+              />
+            </View>
+
+            <View style={styles.authField}>
+              <Text style={styles.authLabel}>密码</Text>
+              <TextInput
+                style={styles.authInput}
+                value={password}
+                onChangeText={onChangePassword}
+                secureTextEntry
+                textContentType="password"
+                placeholder="请输入密码"
+                placeholderTextColor="#546E8A"
+                returnKeyType="done"
+                onSubmitEditing={onSubmit}
+              />
+            </View>
+
+            <Pressable
+              style={({ pressed }) => [
+                styles.authButton,
+                saving && styles.authButtonDisabled,
+                pressed && styles.authButtonPressed,
+              ]}
+              onPress={onSubmit}
+              disabled={saving}
+            >
+              {saving ? (
+                <ActivityIndicator color="#FFFFFF" size="small" />
+              ) : (
+                <Text style={styles.authButtonText}>登录</Text>
+              )}
+            </Pressable>
+          </View>
+
+          {/* Toggle */}
+          <Pressable style={styles.authToggle} onPress={onSwitchToRegister}>
+            <Text style={styles.authToggleText}>
+              还没有账号？<Text style={styles.authToggleLink}>注册新账号</Text>
+            </Text>
+          </Pressable>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
+  );
+}
+
 function RegisterScreen({
   apiDraft,
   name,
@@ -2352,108 +3046,135 @@ function RegisterScreen({
   onChangePassword,
   onChangeConfirmPassword,
   onSubmit,
+  onSwitchToLogin,
 }) {
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <StatusBar style="dark" />
+    <SafeAreaView style={styles.authSafeArea}>
+      <StatusBar style="light" />
       <KeyboardAvoidingView
         behavior={Platform.OS === "ios" ? "padding" : undefined}
-        style={styles.registerWrap}
+        style={styles.authWrap}
       >
         <ScrollView
           keyboardShouldPersistTaps="handled"
-          contentContainerStyle={styles.registerScroll}
+          contentContainerStyle={styles.authScroll}
+          contentInsetAdjustmentBehavior="automatic"
         >
-          <View style={styles.registerHero}>
-            <Text style={styles.registerKicker}>FOAM FACTORY CRM</Text>
-            <Text style={styles.registerTitle}>创建手机账号</Text>
-            <Text style={styles.registerHint}>
+          {/* Hero */}
+          <View style={styles.authHero}>
+            <View style={styles.authIconRing}>
+              <Text style={styles.authIconText}>F</Text>
+            </View>
+            <Text style={styles.authKicker}>FOAM FACTORY CRM</Text>
+            <Text style={styles.authTitle}>创建手机账号</Text>
+            <Text style={styles.authHint}>
               提交后账号为普通用户，管理员分配角色前不会显示任何订单数据。
             </Text>
           </View>
 
-          <View style={styles.registerCard}>
-            <View style={styles.registerField}>
-              <Text style={styles.registerLabel}>后端 API 地址</Text>
+          {/* Card */}
+          <View style={styles.authCard}>
+            <View style={styles.authField}>
+              <Text style={styles.authLabel}>后端 API 地址</Text>
               <TextInput
-                style={styles.registerInput}
+                style={styles.authInput}
                 value={apiDraft}
                 autoCapitalize="none"
                 autoCorrect={false}
                 keyboardType="url"
                 onChangeText={onChangeApi}
                 placeholder="http://电脑IP:3001/api"
-                placeholderTextColor={iosPalette.placeholder}
+                placeholderTextColor="#546E8A"
               />
             </View>
 
-            <View style={styles.registerField}>
-              <Text style={styles.registerLabel}>手机号</Text>
+            <View style={styles.authField}>
+              <Text style={styles.authLabel}>手机号</Text>
               <TextInput
-                style={styles.registerInput}
+                style={styles.authInput}
                 value={phone}
                 onChangeText={onChangePhone}
                 keyboardType="phone-pad"
                 textContentType="telephoneNumber"
                 placeholder="请输入手机号"
-                placeholderTextColor={iosPalette.placeholder}
+                placeholderTextColor="#546E8A"
+                returnKeyType="next"
               />
             </View>
 
-            <View style={styles.registerField}>
-              <Text style={styles.registerLabel}>姓名</Text>
+            <View style={styles.authField}>
+              <Text style={styles.authLabel}>姓名</Text>
               <TextInput
-                style={styles.registerInput}
+                style={styles.authInput}
                 value={name}
                 onChangeText={onChangeName}
                 textContentType="name"
                 placeholder="请输入真实姓名"
-                placeholderTextColor={iosPalette.placeholder}
+                placeholderTextColor="#546E8A"
+                returnKeyType="next"
               />
             </View>
 
-            <View style={styles.registerField}>
-              <Text style={styles.registerLabel}>密码</Text>
+            <View style={styles.authField}>
+              <Text style={styles.authLabel}>密码</Text>
               <TextInput
-                style={styles.registerInput}
+                style={styles.authInput}
                 value={password}
                 onChangeText={onChangePassword}
                 secureTextEntry
                 textContentType="newPassword"
                 placeholder="至少 6 位"
-                placeholderTextColor={iosPalette.placeholder}
+                placeholderTextColor="#546E8A"
+                returnKeyType="next"
               />
             </View>
 
-            <View style={styles.registerField}>
-              <Text style={styles.registerLabel}>重复输入密码</Text>
+            <View style={styles.authField}>
+              <Text style={styles.authLabel}>重复输入密码</Text>
               <TextInput
-                style={styles.registerInput}
+                style={styles.authInput}
                 value={confirmPassword}
                 onChangeText={onChangeConfirmPassword}
                 secureTextEntry
                 textContentType="newPassword"
                 placeholder="再次输入密码"
-                placeholderTextColor={iosPalette.placeholder}
+                placeholderTextColor="#546E8A"
+                returnKeyType="done"
+                onSubmitEditing={onSubmit}
               />
             </View>
 
-            <View style={styles.registerNotice}>
-              <Text style={styles.registerNoticeTitle}>注册后需要管理员审核</Text>
-              <Text style={styles.registerNoticeText}>
-                管理员在电脑端“系统设置 →
-                手机账号角色”中把账号改为员工或管理员后，手机端才会显示数据。
+            <View style={styles.authNotice}>
+              <Text style={styles.authNoticeTitle}>注册后需要管理员审核</Text>
+              <Text style={styles.authNoticeText}>
+                管理员在电脑端"系统设置 → 手机账号角色"中把账号改为员工或管理员后，手机端才会显示数据。
               </Text>
             </View>
 
             <Pressable
-              style={[styles.registerButton, saving && styles.doneButtonDisabled]}
+              style={({ pressed }) => [
+                styles.authButton,
+                styles.authButtonRegister,
+                saving && styles.authButtonDisabled,
+                pressed && styles.authButtonPressed,
+              ]}
               onPress={onSubmit}
               disabled={saving}
             >
-              <Text style={styles.doneButtonText}>{saving ? "提交中" : "注册账号"}</Text>
+              {saving ? (
+                <ActivityIndicator color="#FFFFFF" size="small" />
+              ) : (
+                <Text style={styles.authButtonText}>注册账号</Text>
+              )}
             </Pressable>
           </View>
+
+          {/* Toggle */}
+          <Pressable style={styles.authToggle} onPress={onSwitchToLogin}>
+            <Text style={styles.authToggleText}>
+              已有账号？<Text style={styles.authToggleLink}>立即登录</Text>
+            </Text>
+          </Pressable>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -4895,6 +5616,562 @@ const legacyStyles = StyleSheet.create({
     justifyContent: "flex-end",
     gap: 8,
     marginTop: 16,
+  },
+  /* ── Auth screens (Apple-level dark theme) ── */
+  authSafeArea: {
+    flex: 1,
+    backgroundColor: "#080D14",
+  },
+  authWrap: {
+    flex: 1,
+  },
+  authScroll: {
+    flexGrow: 1,
+    justifyContent: "center",
+    padding: 24,
+    gap: 24,
+  },
+  authHero: {
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: 4,
+    paddingTop: 8,
+    paddingBottom: 4,
+  },
+  authIconRing: {
+    width: 64,
+    height: 64,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 20,
+    backgroundColor: "#007AFF",
+    boxShadow: "0 8px 32px rgba(0, 122, 255, 0.28)",
+  },
+  authIconText: {
+    color: "#FFFFFF",
+    fontSize: 28,
+    fontWeight: "900",
+    fontFamily: Platform.OS === "ios" ? "SF Pro Display" : undefined,
+  },
+  authKicker: {
+    color: "#007AFF",
+    fontSize: 12,
+    fontWeight: "800",
+    letterSpacing: 1.5,
+    textTransform: "uppercase",
+    fontFamily: Platform.OS === "ios" ? "SF Pro Text" : undefined,
+  },
+  authTitle: {
+    color: "#F5F7FA",
+    fontSize: 34,
+    fontWeight: "800",
+    letterSpacing: -0.5,
+    fontFamily: Platform.OS === "ios" ? "SF Pro Display" : undefined,
+  },
+  authHint: {
+    color: "#8E97A6",
+    fontSize: 15,
+    lineHeight: 22,
+    textAlign: "center",
+    paddingHorizontal: 12,
+  },
+  authCard: {
+    gap: 16,
+    borderRadius: 20,
+    padding: 22,
+    backgroundColor: "#0E1521",
+    borderWidth: 1,
+    borderColor: "#1C2940",
+    boxShadow: "0 2px 24px rgba(0, 0, 0, 0.40)",
+  },
+  authField: {
+    gap: 7,
+  },
+  authLabel: {
+    color: "#B0BEC5",
+    fontSize: 13,
+    fontWeight: "700",
+    letterSpacing: 0.2,
+    textTransform: "uppercase",
+    fontFamily: Platform.OS === "ios" ? "SF Pro Text" : undefined,
+  },
+  authInput: {
+    minHeight: 50,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#1F2D45",
+    paddingHorizontal: 16,
+    color: "#F5F7FA",
+    backgroundColor: "#060B14",
+    fontSize: 16,
+    fontFamily: Platform.OS === "ios" ? "SF Pro Text" : undefined,
+  },
+  authNotice: {
+    gap: 4,
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: "#1A3152",
+    backgroundColor: "#080F1E",
+  },
+  authNoticeTitle: {
+    color: "#8BB8FF",
+    fontSize: 13,
+    fontWeight: "800",
+  },
+  authNoticeText: {
+    color: "#8E97A6",
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  authButton: {
+    minHeight: 52,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 14,
+    marginTop: 4,
+    backgroundColor: "#007AFF",
+    boxShadow: "0 4px 16px rgba(0, 122, 255, 0.32)",
+  },
+  authButtonRegister: {
+    backgroundColor: "#34C759",
+    boxShadow: "0 4px 16px rgba(52, 199, 89, 0.32)",
+  },
+  authButtonPressed: {
+    opacity: 0.85,
+    transform: [{ scale: 0.98 }],
+  },
+  authButtonDisabled: {
+    opacity: 0.5,
+  },
+  authButtonText: {
+    color: "#FFFFFF",
+    fontSize: 17,
+    fontWeight: "700",
+    letterSpacing: 0.2,
+    fontFamily: Platform.OS === "ios" ? "SF Pro Text" : undefined,
+  },
+  authToggle: {
+    alignItems: "center",
+    paddingVertical: 12,
+  },
+  authToggleText: {
+    color: "#8E97A6",
+    fontSize: 14,
+    fontFamily: Platform.OS === "ios" ? "SF Pro Text" : undefined,
+  },
+  authToggleLink: {
+    color: "#007AFF",
+    fontWeight: "700",
+  },
+  /* ── Attendance ── */
+  attendanceCard: {
+    gap: 14,
+    borderRadius: 16,
+    padding: 18,
+    marginBottom: 14,
+    backgroundColor: "#0D1829",
+    borderWidth: 1,
+    borderColor: "#284466",
+  },
+  attendanceCardTitle: {
+    color: "#F5F7FA",
+    fontSize: 16,
+    fontWeight: "800",
+  },
+  attendanceDate: {
+    color: "#9EB3C8",
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  attendanceScheduleCard: {
+    gap: 14,
+    borderRadius: 18,
+    padding: 16,
+    marginBottom: 14,
+    backgroundColor: "#FFFFFF",
+    ...shadowSoft,
+  },
+  attendanceScheduleHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  attendanceScheduleKicker: {
+    color: iosPalette.muted,
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  attendanceScheduleTitle: {
+    marginTop: 4,
+    color: iosPalette.text,
+    fontSize: 22,
+    fontWeight: "900",
+    fontVariant: ["tabular-nums"],
+  },
+  attendanceScheduleTotal: {
+    minWidth: 84,
+    alignItems: "flex-end",
+  },
+  attendanceScheduleTotalValue: {
+    color: iosPalette.accent,
+    fontSize: 24,
+    fontWeight: "900",
+    fontVariant: ["tabular-nums"],
+  },
+  attendanceScheduleTotalLabel: {
+    color: iosPalette.muted,
+    fontSize: 11,
+    fontWeight: "800",
+  },
+  attendanceScheduleTimeline: {
+    gap: 9,
+  },
+  attendanceScheduleSegment: {
+    minHeight: 58,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    borderRadius: 14,
+    padding: 12,
+    backgroundColor: iosPalette.grouped,
+  },
+  attendanceScheduleDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: iosPalette.accent,
+  },
+  attendanceScheduleDot_morning: {
+    backgroundColor: iosPalette.accent,
+  },
+  attendanceScheduleDot_lunch: {
+    backgroundColor: iosPalette.warning,
+  },
+  attendanceScheduleDot_afternoon: {
+    backgroundColor: iosPalette.success,
+  },
+  attendanceScheduleSegmentText: {
+    flex: 1,
+    minWidth: 0,
+  },
+  attendanceScheduleSegmentLabel: {
+    color: iosPalette.text,
+    fontSize: 14,
+    fontWeight: "900",
+  },
+  attendanceScheduleSegmentTime: {
+    marginTop: 3,
+    color: iosPalette.muted,
+    fontSize: 13,
+    fontWeight: "800",
+    fontVariant: ["tabular-nums"],
+  },
+  attendanceScheduleSegmentHours: {
+    color: iosPalette.textSoft,
+    fontSize: 13,
+    fontWeight: "900",
+    fontVariant: ["tabular-nums"],
+  },
+  attendanceScheduleFooter: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  attendanceScheduleFooterText: {
+    overflow: "hidden",
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    color: iosPalette.textSoft,
+    backgroundColor: iosPalette.accentSoft,
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  attendanceStatusRow: {
+    flexDirection: "row",
+    gap: 12,
+    marginTop: 4,
+  },
+  attendanceChip: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    borderRadius: 12,
+    padding: 14,
+    backgroundColor: "#0A2E1A",
+    borderWidth: 1,
+    borderColor: "#1A5C38",
+  },
+  attendanceChipIcon: {
+    color: "#34C759",
+    fontSize: 22,
+    fontWeight: "900",
+  },
+  attendanceChipLabel: {
+    color: "#8BB8A0",
+    fontSize: 11,
+    fontWeight: "700",
+    textTransform: "uppercase",
+  },
+  attendanceChipTime: {
+    color: "#D4F5E0",
+    fontSize: 18,
+    fontWeight: "800",
+    marginTop: 2,
+  },
+  attendanceChipMuted: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    borderRadius: 12,
+    padding: 14,
+    backgroundColor: "#151D2A",
+    borderWidth: 1,
+    borderColor: "#25364A",
+  },
+  attendanceChipIconMuted: {
+    color: "#546E8A",
+    fontSize: 22,
+    fontWeight: "900",
+  },
+  attendanceChipLabelMuted: {
+    color: "#546E8A",
+    fontSize: 11,
+    fontWeight: "700",
+    textTransform: "uppercase",
+  },
+  attendanceChipTimeMuted: {
+    color: "#647890",
+    fontSize: 18,
+    fontWeight: "800",
+    marginTop: 2,
+  },
+  attendanceNotChecked: {
+    alignItems: "center",
+    paddingVertical: 20,
+  },
+  attendanceNotCheckedText: {
+    color: "#647890",
+    fontSize: 15,
+    fontWeight: "600",
+  },
+  attendanceActions: {
+    flexDirection: "row",
+    gap: 12,
+    marginTop: 6,
+  },
+  attendanceBtn: {
+    flex: 1,
+    minHeight: 48,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 14,
+  },
+  attendanceBtnIn: {
+    backgroundColor: "#007AFF",
+  },
+  attendanceBtnOut: {
+    backgroundColor: "#34C759",
+  },
+  attendanceBtnDone: {
+    opacity: 0.4,
+  },
+  attendanceBtnText: {
+    color: "#FFFFFF",
+    fontSize: 16,
+    fontWeight: "800",
+  },
+  attendanceStatsGrid: {
+    flexDirection: "row",
+    gap: 12,
+  },
+  attendanceStatItem: {
+    flex: 1,
+    alignItems: "center",
+    gap: 4,
+    borderRadius: 12,
+    padding: 14,
+    backgroundColor: "#081223",
+    borderWidth: 1,
+    borderColor: "#243755",
+  },
+  attendanceStatValue: {
+    color: "#F5F7FA",
+    fontSize: 26,
+    fontWeight: "900",
+  },
+  attendanceStatLabel: {
+    color: "#8E97A6",
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  attendanceLiveBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: "#041A0F",
+    borderWidth: 1,
+    borderColor: "#1A5C38",
+  },
+  attendanceLiveBannerDone: {
+    backgroundColor: "#0A1A12",
+    borderColor: "#1A3E28",
+    justifyContent: "center",
+  },
+  attendanceLiveDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "#34C759",
+  },
+  attendanceLiveLabel: {
+    color: "#8BB8A0",
+    fontSize: 12,
+    fontWeight: "700",
+    flex: 1,
+  },
+  attendanceLiveTime: {
+    color: "#34C759",
+    fontSize: 16,
+    fontWeight: "900",
+    fontVariant: ["tabular-nums"],
+  },
+  attendanceLiveLabelDone: {
+    color: "#34C759",
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  attendanceBtnLarge: {
+    flex: 1,
+    minHeight: 100,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 18,
+    gap: 4,
+    paddingVertical: 14,
+  },
+  attendanceBtnLargeIn: {
+    backgroundColor: "#007AFF",
+  },
+  attendanceBtnLargeOut: {
+    backgroundColor: "#30B060",
+  },
+  attendanceBtnLargeDone: {
+    backgroundColor: "#1A2A3A",
+    borderWidth: 1,
+    borderColor: "#25364A",
+  },
+  attendanceBtnLargeDisabled: {
+    backgroundColor: "#111822",
+    borderWidth: 1,
+    borderColor: "#1E2A38",
+  },
+  attendanceBtnLargeIcon: {
+    fontSize: 28,
+  },
+  attendanceBtnLargeText: {
+    color: "#FFFFFF",
+    fontSize: 17,
+    fontWeight: "800",
+  },
+  attendanceBtnLargeSub: {
+    color: "rgba(255,255,255,0.55)",
+    fontSize: 11,
+    fontWeight: "600",
+    marginTop: 2,
+  },
+  leaveForm: {
+    gap: 14,
+  },
+  leaveField: {
+    gap: 6,
+  },
+  leaveFieldRow: {
+    flexDirection: "row",
+    gap: 12,
+  },
+  leaveTypeRow: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  leaveTypeChip: {
+    minHeight: 34,
+    justifyContent: "center",
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    backgroundColor: "#081223",
+    borderWidth: 1,
+    borderColor: "#2F456A",
+  },
+  leaveTypeChipActive: {
+    borderColor: "#34C759",
+    backgroundColor: "#0A2E1A",
+  },
+  leaveTypeChipText: {
+    color: "#8E97A6",
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  leaveTypeChipTextActive: {
+    color: "#34C759",
+  },
+  leaveRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    borderRadius: 12,
+    padding: 12,
+    backgroundColor: "#081223",
+    borderWidth: 1,
+    borderColor: "#243755",
+    marginTop: 8,
+  },
+  leaveRowLeft: {
+    flex: 1,
+    gap: 3,
+  },
+  leaveRowType: {
+    color: "#F5F7FA",
+    fontSize: 14,
+    fontWeight: "800",
+  },
+  leaveRowDates: {
+    color: "#8E97A6",
+    fontSize: 12,
+  },
+  leaveRowReason: {
+    color: "#647890",
+    fontSize: 12,
+    marginTop: 2,
+  },
+  leaveStatusBadge: {
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    backgroundColor: "#1A2538",
+  },
+  leaveStatusApproved: {
+    backgroundColor: "#0A2E1A",
+  },
+  leaveStatusRejected: {
+    backgroundColor: "#3A1A1A",
+  },
+  leaveStatusText: {
+    color: "#8E97A6",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  leaveStatusTextApproved: {
+    color: "#34C759",
+  },
+  leaveStatusTextRejected: {
+    color: "#FF3B30",
   },
 });
 

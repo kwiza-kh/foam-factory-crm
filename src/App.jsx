@@ -14,6 +14,30 @@ import { OrderImportButton } from "./components/OrderImportButton.jsx";
 import { exportTableToExcel } from "./lib/exporter.js";
 import { exportBackup, importBackup } from "./lib/backup.js";
 import { DeliveryPrintModal } from "./components/DeliveryPrintModal.jsx";
+import LoginScreen from "./components/LoginScreen.jsx";
+import BusinessZoneHub from "./components/BusinessZoneHub.jsx";
+import PendingAccessScreen from "./components/PendingAccessScreen.jsx";
+import EmployeeWorkspacePlaceholder from "./components/EmployeeWorkspacePlaceholder.jsx";
+import { ColumnHeader } from "./components/ColumnHeader.jsx";
+import { RowNumberHeader } from "./components/RowNumberHeader.jsx";
+import { ColumnValueFilter } from "./components/ColumnValueFilter.jsx";
+import { InfoPill } from "./components/InfoPill.jsx";
+import { Field } from "./components/Field.jsx";
+import { CustomerStatisticsPanel } from "./components/CustomerStatisticsPanel.jsx";
+import { DashboardView } from "./components/DashboardView.jsx";
+import { KanbanBoard } from "./components/KanbanBoard.jsx";
+import { MobileDisplayFieldPicker } from "./components/MobileDisplayFieldPicker.jsx";
+import { ProductionScheduleModal } from "./components/modals/ProductionScheduleModal.jsx";
+import { CustomerModal } from "./components/modals/CustomerModal.jsx";
+import { ColumnModal } from "./components/modals/ColumnModal.jsx";
+import { SettingsModal } from "./components/modals/SettingsModal.jsx";
+import { MobileDisplaySettingsModal } from "./components/modals/MobileDisplaySettingsModal.jsx";
+import { Button } from "@/components/ui/button";
+import { Card, CardHeader, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { statusClass } from "./lib/app-utils.jsx";
+import { normalizeDesktopRole, isDesktopBusinessUser, desktopRoleLabel } from "./lib/auth.js";
 import {
   createTranslator,
   formatCurrencyForLanguage,
@@ -64,7 +88,9 @@ import {
   X,
   Download,
   AlertTriangle,
+  ArrowLeft,
   Archive,
+  Building2,
   Printer,
   Copy,
   ClipboardPaste,
@@ -72,8 +98,14 @@ import {
   ArrowDown,
   ArrowRight,
   ArrowUp,
+  Factory,
+  KeyRound,
+  LogOut,
   RotateCcw,
   Pencil,
+  ShieldCheck,
+  UserRound,
+  Users,
 } from "lucide-react";
 import {
   statusOptions,
@@ -81,7 +113,6 @@ import {
   isOpenOrder,
   normalizeOrderStatus,
   statusTransitions,
-  getNextStatuses,
   deliveryStatusOptions,
   customerLevelOptions,
   materialOptions,
@@ -133,22 +164,24 @@ ModuleRegistry.registerModules([
 ]);
 
 const gridTheme = themeQuartz.withParams({
-  accentColor: "#42e8ff",
-  backgroundColor: "#0b101b",
-  borderColor: "rgba(130, 229, 255, 0.18)",
+  accentColor: "#14B8A6",
+  backgroundColor: "#0F1723",
+  borderColor: "#33485F",
   browserColorScheme: "dark",
-  chromeBackgroundColor: "#101827",
-  columnBorder: true,
-  foregroundColor: "#d9f4ff",
-  headerBackgroundColor: "#121d30",
-  headerFontWeight: 700,
-  oddRowBackgroundColor: "rgba(255, 255, 255, 0.025)",
-  rowBorder: true,
+  chromeBackgroundColor: "#162236",
+  columnBorder: false,
+  foregroundColor: "#F8FAFC",
+  headerBackgroundColor: "#1D2B42",
+  headerFontWeight: 600,
+  oddRowBackgroundColor: "rgba(56, 189, 248, 0.035)",
+  rowBorder: false,
   spacing: 8,
 });
 
 const defaultTranslator = createTranslator("zh");
 const I18nContext = createContext({ language: "zh", t: defaultTranslator });
+const desktopSessionStorageKey = "foam-crm-desktop-session";
+const desktopZoneStorageKey = "foam-crm-desktop-zone";
 const defaultMobileDisplaySettings = {
   cardFields: ["_customerName", "orderNo", "status", "product", "quantity", "dueDate"],
   detailFields: [
@@ -171,13 +204,30 @@ const defaultMobileDisplaySettings = {
   ],
 };
 
-function useI18n() {
+export function useI18n() {
   return useContext(I18nContext);
+}
+
+function readStoredDesktopSession() {
+  try {
+    return JSON.parse(localStorage.getItem(desktopSessionStorageKey) || "null");
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredDesktopSession(user) {
+  if (!user?.token) {
+    localStorage.removeItem(desktopSessionStorageKey);
+    return;
+  }
+  localStorage.setItem(desktopSessionStorageKey, JSON.stringify(user));
 }
 
 const MAX_UNDO_STEPS = 50;
 const UNGROUPED_CUSTOMER_GROUP = "未分组";
 const CUSTOMER_DRAG_HOLD_MS = 420;
+const SYNC_POLL_INTERVAL_MS = 3000;
 
 function normalizeCustomerGroupList(groups = []) {
   const seen = new Set();
@@ -655,6 +705,57 @@ function getCustomerTableColumns(customer, tableKey) {
   ];
 }
 
+function viewSourceTableKey(viewKey) {
+  return tableConfigs[viewKey]?.sourceTableKey || viewKey;
+}
+
+function isDerivedTableView(viewKey) {
+  return Boolean(tableConfigs[viewKey]?.sourceTableKey);
+}
+
+function getViewHiddenColumnSet(customer, viewKey) {
+  return new Set(customer?.customColumns?.viewHiddenColumns?.[viewKey] || []);
+}
+
+function getCustomerViewColumns(customer, viewKey) {
+  const config = tableConfigs[viewKey];
+  if (!config) return [];
+  const sourceTableKey = viewSourceTableKey(viewKey);
+  const defaultFields = new Set(config.defaultColumns.map((column) => column.field));
+  const hiddenFields = getViewHiddenColumnSet(customer, viewKey);
+  const sourceCustomColumns = (customer?.customColumns?.[sourceTableKey] || []).filter(
+    (column) => !defaultFields.has(column.field),
+  );
+  const viewCustomColumns =
+    sourceTableKey === viewKey
+      ? []
+      : (customer?.customColumns?.[viewKey] || []).filter(
+          (column) => !defaultFields.has(column.field),
+        );
+
+  const seen = new Set();
+  return [...config.defaultColumns, ...sourceCustomColumns, ...viewCustomColumns].filter(
+    (column) => {
+      if (!column?.field || hiddenFields.has(column.field) || seen.has(column.field)) return false;
+      seen.add(column.field);
+      return true;
+    },
+  );
+}
+
+function getCustomerFormulaColumns(customer, tableKey) {
+  const relatedViewColumns = Object.keys(tableConfigs)
+    .filter((viewKey) => tableConfigs[viewKey]?.sourceTableKey === tableKey)
+    .flatMap((viewKey) => customer?.customColumns?.[viewKey] || []);
+  const columns = [...getCustomerTableColumns(customer, tableKey), ...relatedViewColumns];
+  const seen = new Set();
+  return columns.filter((column) => {
+    if (!column?.field || seen.has(column.field)) return false;
+    seen.add(column.field);
+    return true;
+  });
+}
+
 function normalizeFieldList(value, fallback = []) {
   if (!Array.isArray(value)) return fallback;
   return Array.from(new Set(value.map((field) => String(field || "").trim()).filter(Boolean)));
@@ -666,6 +767,10 @@ function normalizeMobileDisplaySettings(value = {}) {
     cardFields: normalizeFieldList(data.cardFields, defaultMobileDisplaySettings.cardFields),
     detailFields: normalizeFieldList(data.detailFields, defaultMobileDisplaySettings.detailFields),
   };
+}
+
+function getCustomerMobileDisplaySettings(customer, fallback = defaultMobileDisplaySettings) {
+  return normalizeMobileDisplaySettings(customer?.customColumns?.mobileDisplaySettings || fallback);
 }
 
 function buildMobileOrderFieldOptions(customers = []) {
@@ -698,6 +803,10 @@ function buildMobileOrderFieldOptions(customers = []) {
   return Array.from(fields.values());
 }
 
+function buildCustomerMobileOrderFieldOptions(customer) {
+  return buildMobileOrderFieldOptions(customer ? [customer] : []);
+}
+
 function applyCustomerTableFormulas(
   customer,
   tableKey,
@@ -707,7 +816,7 @@ function applyCustomerTableFormulas(
 ) {
   return applyTableFormulas(
     rows,
-    getCustomerTableColumns({ ...(customer || {}), customColumns }, tableKey),
+    getCustomerFormulaColumns({ ...(customer || {}), customColumns }, tableKey),
     rowIds,
   );
 }
@@ -751,6 +860,14 @@ function isSignedDelivery(delivery) {
   );
 }
 
+function isReconciledDelivery(delivery) {
+  return Boolean(delivery?.statementNo || delivery?.reconciledAt);
+}
+
+function isLockedDelivery(delivery) {
+  return isSignedDelivery(delivery) || isReconciledDelivery(delivery);
+}
+
 function appendAuditLog(log = "", message = "") {
   const line = `[${new Date().toLocaleString()}] ${message}`;
   return [String(log || "").trim(), line].filter(Boolean).join("\n");
@@ -761,14 +878,12 @@ function protectSignedDeliveries(previousRows = [], nextRows = []) {
   let blocked = false;
   const rows = nextRows.map((row) => {
     const previous = previousById.get(row.id);
-    if (!previous || !isSignedDelivery(previous)) return row;
+    if (!previous || !isLockedDelivery(previous)) return row;
     const allowed = {
-      status: row.status,
-      signedNote: row.signedNote,
       __selected: row.__selected,
     };
     if (JSON.stringify({ ...previous, ...allowed }) !== JSON.stringify(row)) blocked = true;
-    return { ...row, ...allowed };
+    return { ...previous, ...allowed };
   });
   return { rows, blocked };
 }
@@ -1186,6 +1301,8 @@ function ensureDeliveryColumns(customColumns = {}, orderColumns = []) {
     width: column.width || 140,
     flex: column.flex,
     minWidth: column.minWidth,
+    wrapHeaderText: true,
+    autoHeaderHeight: true,
     type: column.type,
     options: column.options,
   }));
@@ -1276,6 +1393,160 @@ function buildStatementFromSignedDeliveries(customer = {}) {
     createdAt: new Date().toISOString(),
     note: "",
   };
+}
+
+function statementDeliveryIds(statement = {}) {
+  if (Array.isArray(statement.deliveryIds)) return statement.deliveryIds.map(String);
+  return String(statement.deliveryIds || "")
+    .split(/[、,\s]+/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+function statementReferencesDelivery(statement = {}, deliveryId = "") {
+  return statementDeliveryIds(statement).includes(String(deliveryId));
+}
+
+function listPreview(values = [], limit = 5) {
+  const uniqueValues = Array.from(new Set(values.map(String).filter(Boolean)));
+  const visible = uniqueValues.slice(0, limit).join("、");
+  const more = uniqueValues.length > limit ? ` 等 ${uniqueValues.length} 条` : "";
+  return `${visible}${more}`;
+}
+
+function getDeliveryLabel(delivery = {}) {
+  return (
+    delivery.deliveryNo || delivery.orderNo || delivery.product || delivery.id || "未编号送货单"
+  );
+}
+
+function getStatementLabel(statement = {}) {
+  return statement.statementNo || statement.id || "未编号对账单";
+}
+
+function getDeleteBlockers(customer = {}, tableKey, ids = []) {
+  const selectedIds = new Set(ids.map(String));
+  const deliveries = customer.deliveries || [];
+  const statements = customer.statements || [];
+  const payments = customer.payments || [];
+  const blockers = [];
+
+  if (tableKey === "orders") {
+    const linkedOrderIds = new Set(
+      deliveries
+        .map((delivery) => String(delivery[linkedOrderIdField] || ""))
+        .filter((orderId) => selectedIds.has(orderId)),
+    );
+    if (linkedOrderIds.size) {
+      const labels = (customer.orders || [])
+        .filter((order) => linkedOrderIds.has(String(order.id)))
+        .map((order) => getOrderLabel(order));
+      blockers.push(`订单已生成送货单，不能直接删除：${listPreview(labels)}`);
+    }
+  }
+
+  if (tableKey === "deliveries") {
+    const selectedDeliveries = deliveries.filter((delivery) =>
+      selectedIds.has(String(delivery.id)),
+    );
+    const lockedDeliveries = selectedDeliveries.filter(
+      (delivery) =>
+        isLockedDelivery(delivery) ||
+        statements.some((statement) => statementReferencesDelivery(statement, delivery.id)),
+    );
+    if (lockedDeliveries.length) {
+      blockers.push(
+        `送货单已签收或已进入对账，不能直接删除：${listPreview(lockedDeliveries.map(getDeliveryLabel))}`,
+      );
+    }
+  }
+
+  if (tableKey === "statements") {
+    const selectedStatements = statements.filter((statement) =>
+      selectedIds.has(String(statement.id)),
+    );
+    const selectedStatementNos = new Set(
+      selectedStatements
+        .map((statement) => String(statement.statementNo || "").trim())
+        .filter(Boolean),
+    );
+    const paidStatements = selectedStatements.filter((statement) =>
+      payments.some(
+        (payment) =>
+          String(payment.statementNo || "").trim() === String(statement.statementNo || "").trim(),
+      ),
+    );
+    if (paidStatements.length) {
+      blockers.push(
+        `对账单已有收款记录，不能直接删除：${listPreview(paidStatements.map(getStatementLabel))}`,
+      );
+    }
+
+    const linkedStatements = selectedStatements.filter(
+      (statement) =>
+        statementDeliveryIds(statement).length ||
+        deliveries.some(
+          (delivery) =>
+            selectedStatementNos.has(String(delivery.statementNo || "").trim()) ||
+            statementReferencesDelivery(statement, delivery.id),
+        ),
+    );
+    if (linkedStatements.length) {
+      blockers.push(
+        `对账单已关联送货单，不能直接删除：${listPreview(linkedStatements.map(getStatementLabel))}`,
+      );
+    }
+  }
+
+  return blockers;
+}
+
+function formatDeleteBlockers(blockers = []) {
+  return ["不能删除选中的数据，因为会影响已生成的业务单据：", ...blockers].join("\n");
+}
+
+function getPaymentOverages(statements = [], payments = []) {
+  const statementAmounts = new Map();
+  for (const statement of statements || []) {
+    const statementNo = String(statement.statementNo || "").trim();
+    if (!statementNo) continue;
+    statementAmounts.set(statementNo, parseNumericValue(statement.amount));
+  }
+
+  const paidByStatementNo = new Map();
+  for (const payment of payments || []) {
+    const statementNo = String(payment.statementNo || "").trim();
+    if (!statementNo || !statementAmounts.has(statementNo)) continue;
+    paidByStatementNo.set(
+      statementNo,
+      (paidByStatementNo.get(statementNo) || 0) + parseNumericValue(payment.amount),
+    );
+  }
+
+  return Array.from(paidByStatementNo.entries())
+    .map(([statementNo, paidAmount]) => {
+      const amount = statementAmounts.get(statementNo) || 0;
+      if (paidAmount <= amount + 0.0000001) return null;
+      return {
+        statementNo,
+        amount,
+        paidAmount,
+        overAmount: paidAmount - amount,
+      };
+    })
+    .filter(Boolean);
+}
+
+function formatPaymentOverages(overages = []) {
+  const lines = overages
+    .slice(0, 8)
+    .map(
+      (item) =>
+        `${item.statementNo}：对账 ${normalizeCalculatedNumber(item.amount)} / 收款 ${normalizeCalculatedNumber(item.paidAmount)}，超出 ${normalizeCalculatedNumber(item.overAmount)}`,
+    );
+  const more =
+    overages.length > lines.length ? `\n另有 ${overages.length - lines.length} 条未展示` : "";
+  return `收款金额不能超过对账金额：\n${lines.join("\n")}${more}`;
 }
 
 function applyPaymentsToStatements(statements = [], payments = []) {
@@ -1588,6 +1859,120 @@ function AppDialog({ dialog, onResolve }) {
 }
 
 function App() {
+  const [authLoading, setAuthLoading] = useState(true);
+  const [currentUser, setCurrentUser] = useState(null);
+  const [activeZone, setActiveZone] = useState(
+    () => localStorage.getItem(desktopZoneStorageKey) || "",
+  );
+
+  const persistSession = useCallback((user) => {
+    api.setAuthToken(user?.token || "");
+    writeStoredDesktopSession(user);
+    setCurrentUser(user || null);
+  }, []);
+
+  useEffect(() => {
+    let stopped = false;
+    const restoreSession = async () => {
+      const savedUser = readStoredDesktopSession();
+      if (!savedUser?.token) {
+        api.setAuthToken("");
+        setAuthLoading(false);
+        return;
+      }
+
+      api.setAuthToken(savedUser.token);
+      try {
+        const result = await api.getCurrentUser();
+        if (stopped) return;
+        persistSession(result.user);
+      } catch {
+        if (stopped) return;
+        api.setAuthToken("");
+        writeStoredDesktopSession(null);
+        localStorage.removeItem(desktopZoneStorageKey);
+        setCurrentUser(null);
+        setActiveZone("");
+      } finally {
+        if (!stopped) setAuthLoading(false);
+      }
+    };
+
+    restoreSession();
+    return () => {
+      stopped = true;
+    };
+  }, [persistSession]);
+
+  const login = useCallback(
+    async (credentials) => {
+      const result = await api.login(credentials);
+      if (!result?.user?.token) throw new Error("登录响应缺少会话信息");
+      persistSession(result.user);
+      localStorage.removeItem(desktopZoneStorageKey);
+      setActiveZone("");
+      return result.user;
+    },
+    [persistSession],
+  );
+
+  const register = useCallback(
+    async (profile) => {
+      const result = await api.register(profile);
+      if (!result?.user?.token) throw new Error("注册响应缺少会话信息");
+      persistSession(result.user);
+      localStorage.removeItem(desktopZoneStorageKey);
+      setActiveZone("");
+      return result.user;
+    },
+    [persistSession],
+  );
+
+  const logout = useCallback(() => {
+    api.setAuthToken("");
+    writeStoredDesktopSession(null);
+    localStorage.removeItem(desktopZoneStorageKey);
+    setCurrentUser(null);
+    setActiveZone("");
+  }, []);
+
+  const selectZone = useCallback((zone) => {
+    setActiveZone(zone);
+    localStorage.setItem(desktopZoneStorageKey, zone);
+  }, []);
+
+  if (!currentUser) {
+    return <LoginScreen loading={authLoading} onLogin={login} onRegister={register} />;
+  }
+
+  if (!isDesktopBusinessUser(currentUser.role)) {
+    return <PendingAccessScreen currentUser={currentUser} onLogout={logout} />;
+  }
+
+  if (activeZone === "customers") {
+    return (
+      <CustomerWorkspace
+        currentUser={currentUser}
+        onBackToZones={() => selectZone("")}
+        onLogout={logout}
+      />
+    );
+  }
+
+  if (activeZone === "employees") {
+    return (
+      <EmployeeWorkspacePlaceholder
+        currentUser={currentUser}
+        onBackToZones={() => selectZone("")}
+        onLogout={logout}
+      />
+    );
+  }
+
+  return <BusinessZoneHub currentUser={currentUser} onLogout={logout} onSelectZone={selectZone} />;
+}
+
+function CustomerWorkspace({ currentUser = null, onBackToZones, onLogout }) {
   const [systemSettings, setSystemSettings] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem("foam-crm-settings") || "{}");
@@ -1617,6 +2002,7 @@ function App() {
   const [printDelivery, setPrintDelivery] = useState(null);
   const [productionScheduleOrders, setProductionScheduleOrders] = useState([]);
   const [showSettings, setShowSettings] = useState(false);
+  const [showMobileDisplaySettings, setShowMobileDisplaySettings] = useState(false);
   const [collapsedGroups, setCollapsedGroups] = useState(new Set());
   const customersRef = useRef(customers);
   const selectedCustomerIdRef = useRef(selectedCustomerId);
@@ -1627,6 +2013,7 @@ function App() {
   const rowSaveQueueRef = useRef(new Map());
   const rowSaveRevisionRef = useRef(new Map());
   const fullDataSyncRevisionRef = useRef(0);
+  const syncVersionRef = useRef(0);
   const customerDragTimerRef = useRef(null);
   const customerDragSourceRef = useRef(null);
   const initialCustomerDrag = useMemo(
@@ -1832,20 +2219,76 @@ function App() {
     }
   }, []);
 
-  useEffect(() => {
-    api
-      .getCustomers({ limit: 200 })
-      .then((res) => {
-        const list = res.data || res;
+  const loadCustomers = useCallback(
+    async ({ silent = false } = {}) => {
+      if (!silent) setLoading(true);
+      try {
+        const [customerRes, versionRes] = await Promise.all([
+          api.getCustomers({ limit: 200 }),
+          api.getSyncVersion().catch(() => null),
+        ]);
+        const list = customerRes.data || customerRes;
         const normalizedData = normalizeCustomerOrderStatuses(list);
+        customersRef.current = normalizedData;
         setCustomers(normalizedData);
-        if (normalizedData.length) setSelectedCustomerId(normalizedData[0].id);
-      })
-      .catch((err) => dialogs.alert(`加载失败：${err.message}`, { title: "加载失败" }))
-      .finally(() => setLoading(false));
+        setSelectedCustomerId((current) =>
+          normalizedData.some((customer) => customer.id === current)
+            ? current
+            : normalizedData[0]?.id || null,
+        );
+        const nextVersion = Number(versionRes?.version || 0);
+        if (nextVersion) syncVersionRef.current = nextVersion;
+      } catch (err) {
+        if (silent) {
+          console.warn("Background customer sync failed:", err);
+        } else {
+          await dialogs.alert(`加载失败：${err.message}`, { title: "加载失败" });
+        }
+      } finally {
+        if (!silent) setLoading(false);
+      }
+    },
+    [dialogs.alert],
+  );
+
+  useEffect(() => {
+    loadCustomers();
     loadMobileUsers();
     loadMobileDisplaySettings();
-  }, [dialogs.alert, loadMobileDisplaySettings, loadMobileUsers]);
+  }, [loadCustomers, loadMobileDisplaySettings, loadMobileUsers]);
+
+  useEffect(() => {
+    if (loading) return undefined;
+
+    let stopped = false;
+    const pollSyncVersion = async () => {
+      if (stopped || document.visibilityState === "hidden" || rowSaveQueueRef.current.size) return;
+      try {
+        const res = await api.getSyncVersion();
+        const nextVersion = Number(res?.version || 0);
+        if (!nextVersion) return;
+        if (!syncVersionRef.current) {
+          syncVersionRef.current = nextVersion;
+          return;
+        }
+        if (nextVersion > syncVersionRef.current) {
+          await loadCustomers({ silent: true });
+          await loadMobileUsers();
+          await loadMobileDisplaySettings();
+        }
+      } catch (err) {
+        console.warn("Sync version check failed:", err);
+      }
+    };
+
+    const intervalId = window.setInterval(pollSyncVersion, SYNC_POLL_INTERVAL_MS);
+    window.addEventListener("focus", pollSyncVersion);
+    return () => {
+      stopped = true;
+      window.clearInterval(intervalId);
+      window.removeEventListener("focus", pollSyncVersion);
+    };
+  }, [loadCustomers, loadMobileDisplaySettings, loadMobileUsers, loading]);
 
   const selectedCustomer = useMemo(
     () => customers.find((customer) => customer.id === selectedCustomerId),
@@ -1941,10 +2384,28 @@ function App() {
 
   const saveMobileDisplaySettings = useCallback(
     async (settings) => {
+      const currentCustomer =
+        customersRef.current.find((customer) => customer.id === selectedCustomerId) ||
+        selectedCustomer;
+      if (!currentCustomer) return;
+
       try {
         const normalized = normalizeMobileDisplaySettings(settings);
-        const res = await api.updateMobileDisplaySettings(normalized);
-        setMobileDisplaySettings(normalizeMobileDisplaySettings(res.data || normalized));
+        const nextCustomColumns = {
+          ...(currentCustomer.customColumns || {}),
+          mobileDisplaySettings: normalized,
+        };
+        updateSelectedCustomer((customer) => ({
+          ...customer,
+          customColumns: nextCustomColumns,
+        }));
+        const res = await api.updateCustomer(currentCustomer.id, {
+          ...currentCustomer,
+          customColumns: nextCustomColumns,
+        });
+        if (res?.customColumns) {
+          updateSelectedCustomer((customer) => ({ ...customer, customColumns: res.customColumns }));
+        }
       } catch (err) {
         await dialogs.alert(t("保存失败：{message}", { message: err.message }), {
           title: "保存失败",
@@ -1952,7 +2413,7 @@ function App() {
         throw err;
       }
     },
-    [dialogs, t],
+    [dialogs, selectedCustomer, selectedCustomerId, t],
   );
 
   const handleAddCustomerGroup = useCallback(async () => {
@@ -2247,7 +2708,7 @@ function App() {
       const protectedRows = protectSignedDeliveries(currentCustomer?.deliveries || [], safeRows);
       safeRows = protectedRows.rows;
       if (protectedRows.blocked) {
-        await dialogs.alert("已签收的送货单已锁定。如需修改，请先作废原送货单并重新开单。", {
+        await dialogs.alert("已签收或已对账的送货单已锁定，不能直接修改。", {
           title: "送货单已锁定",
         });
       }
@@ -2256,6 +2717,14 @@ function App() {
       safeRows = applyMaterialPriceHistory(currentCustomer?.materialCosts || [], safeRows);
     }
     if (tableKey === "payments") {
+      const paymentOverages = getPaymentOverages(currentCustomer?.statements || [], safeRows);
+      if (paymentOverages.length) {
+        await dialogs.alert(formatPaymentOverages(paymentOverages), {
+          title: "收款金额超出对账金额",
+          tone: "danger",
+        });
+        return;
+      }
       const nextStatements = applyPaymentsToStatements(currentCustomer?.statements || [], safeRows);
       const statementsChanged = nextStatements.some(
         (row, index) => row !== (currentCustomer?.statements || [])[index],
@@ -2422,10 +2891,19 @@ function App() {
   };
 
   const deleteRows = async (tableKey, ids) => {
-    pushUndoSnapshot();
     const currentCustomer =
       customersRef.current.find((customer) => customer.id === selectedCustomerId) ||
       selectedCustomer;
+    const deleteBlockers = getDeleteBlockers(currentCustomer, tableKey, ids);
+    if (deleteBlockers.length) {
+      await dialogs.alert(formatDeleteBlockers(deleteBlockers), {
+        title: "不能删除",
+        tone: "danger",
+      });
+      return;
+    }
+
+    pushUndoSnapshot();
     let nextRows = ensureUniqueRowIds(
       (currentCustomer?.[tableKey] || []).filter((r) => !ids.includes(r.id)),
       tableKey,
@@ -2479,6 +2957,48 @@ function App() {
       return;
     }
 
+    if (tableKey === "payments") {
+      const currentStatements = currentCustomer?.statements || [];
+      const nextStatements = applyPaymentsToStatements(currentStatements, nextRows);
+      const statementsChanged = nextStatements.some(
+        (row, index) => row !== currentStatements[index],
+      );
+
+      updateSelectedCustomer((c) => ({
+        ...c,
+        payments: nextRows,
+        ...(statementsChanged ? { statements: nextStatements } : {}),
+      }));
+
+      const paymentRevision = nextRowSaveRevision(selectedCustomerId, "payments");
+      const statementRevision = statementsChanged
+        ? nextRowSaveRevision(selectedCustomerId, "statements")
+        : null;
+      try {
+        const [paymentResult, statementResult] = await Promise.all([
+          saveRowsQueued(selectedCustomerId, "payments", nextRows),
+          statementsChanged
+            ? saveRowsQueued(selectedCustomerId, "statements", nextStatements)
+            : Promise.resolve(null),
+        ]);
+        if (
+          paymentResult?.rows &&
+          isLatestRowSaveRevision(selectedCustomerId, "payments", paymentRevision)
+        ) {
+          updateSelectedCustomer((c) => ({ ...c, payments: paymentResult.rows }));
+        }
+        if (
+          statementResult?.rows &&
+          isLatestRowSaveRevision(selectedCustomerId, "statements", statementRevision)
+        ) {
+          updateSelectedCustomer((c) => ({ ...c, statements: statementResult.rows }));
+        }
+      } catch (err) {
+        await dialogs.alert(`删除失败：${err.message}`, { title: "删除失败" });
+      }
+      return;
+    }
+
     updateSelectedCustomer((c) => ({
       ...c,
       [tableKey]: nextRows,
@@ -2499,6 +3019,7 @@ function App() {
     const currentCustomer =
       customersRef.current.find((customer) => customer.id === selectedCustomerId) ||
       selectedCustomer;
+    const dataTableKey = viewSourceTableKey(tableKey);
     const normalizedColumn = {
       ...column,
       type: normalizeFormulaInput(column.formula) ? "number" : column.type,
@@ -2510,18 +3031,18 @@ function App() {
     };
     const nextRows = applyCustomerTableFormulas(
       { ...currentCustomer, customColumns: newCustomColumns },
-      tableKey,
-      currentCustomer[tableKey] || [],
+      dataTableKey,
+      currentCustomer[dataTableKey] || [],
       newCustomColumns,
     );
     updateSelectedCustomer((c) => ({
       ...c,
-      [tableKey]: nextRows,
+      [dataTableKey]: nextRows,
       customColumns: newCustomColumns,
     }));
     const revision =
-      nextRows !== (currentCustomer[tableKey] || [])
-        ? nextRowSaveRevision(selectedCustomerId, tableKey)
+      nextRows !== (currentCustomer[dataTableKey] || [])
+        ? nextRowSaveRevision(selectedCustomerId, dataTableKey)
         : null;
     try {
       const [, rowsResult] = await Promise.all([
@@ -2529,10 +3050,12 @@ function App() {
           ...currentCustomer,
           customColumns: newCustomColumns,
         }),
-        revision ? saveRowsQueued(selectedCustomerId, tableKey, nextRows) : Promise.resolve(null),
+        revision
+          ? saveRowsQueued(selectedCustomerId, dataTableKey, nextRows)
+          : Promise.resolve(null),
       ]);
-      if (rowsResult?.rows && isLatestRowSaveRevision(selectedCustomerId, tableKey, revision)) {
-        updateSelectedCustomer((c) => ({ ...c, [tableKey]: rowsResult.rows }));
+      if (rowsResult?.rows && isLatestRowSaveRevision(selectedCustomerId, dataTableKey, revision)) {
+        updateSelectedCustomer((c) => ({ ...c, [dataTableKey]: rowsResult.rows }));
       }
     } catch (err) {
       await dialogs.alert(`保存失败：${err.message}`, { title: "保存失败" });
@@ -2543,6 +3066,7 @@ function App() {
     const currentCustomer =
       customersRef.current.find((customer) => customer.id === selectedCustomerId) ||
       selectedCustomer;
+    const dataTableKey = viewSourceTableKey(tableKey);
     const existingColumns = currentCustomer.customColumns?.[tableKey] || [];
     if (!existingColumns.some((column) => column.field === field)) return;
 
@@ -2562,27 +3086,27 @@ function App() {
     };
     const nextRows = applyCustomerTableFormulas(
       { ...currentCustomer, customColumns: newCustomColumns },
-      tableKey,
-      currentCustomer[tableKey] || [],
+      dataTableKey,
+      currentCustomer[dataTableKey] || [],
       newCustomColumns,
     );
 
     updateSelectedCustomer((c) => ({
       ...c,
-      [tableKey]: nextRows,
+      [dataTableKey]: nextRows,
       customColumns: newCustomColumns,
     }));
-    const revision = nextRowSaveRevision(selectedCustomerId, tableKey);
+    const revision = nextRowSaveRevision(selectedCustomerId, dataTableKey);
     try {
       const [, rowsResult] = await Promise.all([
         api.updateCustomer(selectedCustomerId, {
           ...currentCustomer,
           customColumns: newCustomColumns,
         }),
-        saveRowsQueued(selectedCustomerId, tableKey, nextRows),
+        saveRowsQueued(selectedCustomerId, dataTableKey, nextRows),
       ]);
-      if (rowsResult?.rows && isLatestRowSaveRevision(selectedCustomerId, tableKey, revision)) {
-        updateSelectedCustomer((c) => ({ ...c, [tableKey]: rowsResult.rows }));
+      if (rowsResult?.rows && isLatestRowSaveRevision(selectedCustomerId, dataTableKey, revision)) {
+        updateSelectedCustomer((c) => ({ ...c, [dataTableKey]: rowsResult.rows }));
       }
     } catch (err) {
       await dialogs.alert(`保存失败：${err.message}`, { title: "保存失败" });
@@ -2597,20 +3121,42 @@ function App() {
     const currentCustomer =
       customersRef.current.find((customer) => customer.id === selectedCustomerId) ||
       selectedCustomer;
-    const cleanedRows = (currentCustomer[tableKey] || []).map((row) => {
+    const dataTableKey = viewSourceTableKey(tableKey);
+    const derivedView = isDerivedTableView(tableKey);
+    const viewCustomColumns = currentCustomer.customColumns?.[tableKey] || [];
+    const viewCustomFieldSet = new Set(viewCustomColumns.map((column) => column.field));
+    const defaultFieldSet = new Set(
+      (tableConfigs[tableKey]?.defaultColumns || []).map((column) => column.field),
+    );
+    const fieldsToDelete = derivedView
+      ? new Set([...fieldsToRemove].filter((field) => viewCustomFieldSet.has(field)))
+      : fieldsToRemove;
+    const fieldsToHide = derivedView
+      ? [...fieldsToRemove].filter(
+          (field) => !viewCustomFieldSet.has(field) && !defaultFieldSet.has(field),
+        )
+      : [];
+
+    const cleanedRows = (currentCustomer[dataTableKey] || []).map((row) => {
       let next = row;
-      for (const field of fieldsToRemove) {
+      for (const field of fieldsToDelete) {
         if (!(field in next)) continue;
         if (next === row) next = { ...row };
         delete next[field];
       }
       return next;
     });
+    const currentHiddenFields = new Set(
+      currentCustomer.customColumns?.viewHiddenColumns?.[tableKey] || [],
+    );
+    for (const field of fieldsToHide) currentHiddenFields.add(field);
     const newCustomColumns = {
       ...currentCustomer.customColumns,
-      [tableKey]: (currentCustomer.customColumns?.[tableKey] || []).filter(
-        (c) => !fieldsToRemove.has(c.field),
-      ),
+      [tableKey]: viewCustomColumns.filter((c) => !fieldsToDelete.has(c.field)),
+      viewHiddenColumns: {
+        ...(currentCustomer.customColumns?.viewHiddenColumns || {}),
+        ...(derivedView ? { [tableKey]: Array.from(currentHiddenFields) } : {}),
+      },
       columnOrder: {
         ...(currentCustomer.customColumns?.columnOrder || {}),
         [tableKey]: (currentCustomer.customColumns?.columnOrder?.[tableKey] || []).filter(
@@ -2621,33 +3167,36 @@ function App() {
     let safeRows = ensureUniqueRowIds(
       applyCustomerTableFormulas(
         { ...currentCustomer, customColumns: newCustomColumns },
-        tableKey,
+        dataTableKey,
         cleanedRows,
         newCustomColumns,
       ),
-      tableKey,
+      dataTableKey,
       customersRef.current,
       selectedCustomerId,
     );
-    if (tableKey === "deliveries") {
+    if (dataTableKey === "deliveries") {
       safeRows = normalizeDeliveryRows(safeRows);
     }
     updateSelectedCustomer((c) => ({
       ...c,
-      [tableKey]: safeRows,
+      [dataTableKey]: safeRows,
       customColumns: newCustomColumns,
     }));
-    const revision = nextRowSaveRevision(selectedCustomerId, tableKey);
+    const rowsChanged = fieldsToDelete.size > 0;
+    const revision = rowsChanged ? nextRowSaveRevision(selectedCustomerId, dataTableKey) : null;
     try {
       const [, rowsResult] = await Promise.all([
         api.updateCustomer(selectedCustomerId, {
           ...currentCustomer,
           customColumns: newCustomColumns,
         }),
-        saveRowsQueued(selectedCustomerId, tableKey, safeRows),
+        rowsChanged
+          ? saveRowsQueued(selectedCustomerId, dataTableKey, safeRows)
+          : Promise.resolve(null),
       ]);
-      if (rowsResult?.rows && isLatestRowSaveRevision(selectedCustomerId, tableKey, revision)) {
-        updateSelectedCustomer((c) => ({ ...c, [tableKey]: rowsResult.rows }));
+      if (rowsResult?.rows && isLatestRowSaveRevision(selectedCustomerId, dataTableKey, revision)) {
+        updateSelectedCustomer((c) => ({ ...c, [dataTableKey]: rowsResult.rows }));
       }
     } catch (err) {
       await dialogs.alert(`保存失败：${err.message}`, { title: "保存失败" });
@@ -2656,6 +3205,34 @@ function App() {
 
   const removeCustomColumn = async (tableKey, field) => {
     await removeCustomColumns(tableKey, [field]);
+  };
+
+  const showViewColumns = async (viewKey, fields) => {
+    const fieldsToShow = new Set(fields);
+    if (!fieldsToShow.size) return;
+
+    pushUndoSnapshot();
+    const currentCustomer =
+      customersRef.current.find((customer) => customer.id === selectedCustomerId) ||
+      selectedCustomer;
+    const currentHiddenFields = currentCustomer.customColumns?.viewHiddenColumns?.[viewKey] || [];
+    const nextHiddenFields = currentHiddenFields.filter((field) => !fieldsToShow.has(field));
+    const newCustomColumns = {
+      ...currentCustomer.customColumns,
+      viewHiddenColumns: {
+        ...(currentCustomer.customColumns?.viewHiddenColumns || {}),
+        [viewKey]: nextHiddenFields,
+      },
+    };
+    updateSelectedCustomer((c) => ({ ...c, customColumns: newCustomColumns }));
+    try {
+      await api.updateCustomer(selectedCustomerId, {
+        ...currentCustomer,
+        customColumns: newCustomColumns,
+      });
+    } catch (err) {
+      await dialogs.alert(`保存失败：${err.message}`, { title: "保存失败" });
+    }
   };
 
   const handleCreateStatement = async () => {
@@ -2770,6 +3347,7 @@ function App() {
         costEntries: [],
         statements: [],
         payments: [],
+        mobileDisplaySettings: normalizeMobileDisplaySettings(mobileDisplaySettings),
       },
       products: [],
       orders: [],
@@ -2943,6 +3521,77 @@ function App() {
     }
   };
 
+  const cancelProductionSchedule = async (orderIds) => {
+    if (!selectedCustomer || !orderIds?.length) return false;
+
+    const currentCustomer =
+      customersRef.current.find((customer) => customer.id === selectedCustomerId) ||
+      selectedCustomer;
+    const orderIdSet = new Set(orderIds);
+    const selectedOrders = (currentCustomer.orders || []).filter((order) =>
+      orderIdSet.has(order.id),
+    );
+    const scheduledOrders = selectedOrders.filter(
+      (order) => normalizeOrderStatus(order.status) === "已排产",
+    );
+
+    if (!scheduledOrders.length) {
+      await dialogs.alert("没有找到可取消排产的订单行。", { title: "取消排产" });
+      return false;
+    }
+
+    if (
+      !(await dialogs.confirm(
+        t("确认取消选中的 {count} 条排产？订单状态将恢复为未完成。", {
+          count: scheduledOrders.length,
+        }),
+        { title: "取消排产" },
+      ))
+    ) {
+      return false;
+    }
+
+    const scheduledOrderIds = new Set(scheduledOrders.map((order) => order.id));
+    const rawRows = (currentCustomer.orders || []).map((order) =>
+      scheduledOrderIds.has(order.id)
+        ? {
+            ...order,
+            status: "未完成",
+            [productionScheduleDateField]: "",
+            [productionScheduleQuantityField]: "",
+            [productionLineField]: "",
+            [productionNoteField]: "",
+          }
+        : order,
+    );
+    const nextRows = ensureUniqueRowIds(
+      applyCustomerTableFormulas(
+        currentCustomer,
+        "orders",
+        rawRows,
+        currentCustomer.customColumns,
+        scheduledOrderIds,
+      ),
+      "orders",
+      customersRef.current,
+      selectedCustomerId,
+    );
+
+    pushUndoSnapshot();
+    updateSelectedCustomer((c) => ({ ...c, orders: nextRows }));
+    const revision = nextRowSaveRevision(selectedCustomerId, "orders");
+    try {
+      const result = await saveRowsQueued(selectedCustomerId, "orders", nextRows);
+      if (result?.rows && isLatestRowSaveRevision(selectedCustomerId, "orders", revision)) {
+        updateSelectedCustomer((c) => ({ ...c, orders: result.rows }));
+      }
+      return true;
+    } catch (err) {
+      await dialogs.alert(`取消排产失败：${err.message}`, { title: "取消排产" });
+      return false;
+    }
+  };
+
   const handleCreateDeliveryFromOrders = async (orderIds) => {
     if (!selectedCustomer || !orderIds?.length) return false;
 
@@ -3071,6 +3720,21 @@ function App() {
 
     if (!selectedDrafts.length) {
       await dialogs.alert("没有找到可生成的送货单草稿。", { title: "生成送货单" });
+      return false;
+    }
+
+    const ordersById = new Map((currentCustomer.orders || []).map((order) => [order.id, order]));
+    const unlinkedDrafts = selectedDrafts.filter(
+      (delivery) => !delivery[linkedOrderIdField] || !ordersById.has(delivery[linkedOrderIdField]),
+    );
+    if (unlinkedDrafts.length) {
+      await dialogs.alert(
+        `送货单必须关联订单后才能生成正式单：${listPreview(unlinkedDrafts.map(getDeliveryLabel))}`,
+        {
+          title: "生成送货单",
+          tone: "danger",
+        },
+      );
       return false;
     }
 
@@ -3352,7 +4016,9 @@ function App() {
   const activeConfig = tableConfigs[activeTable];
   const activeSourceTable = activeConfig.sourceTableKey || activeTable;
   const isHistoryOrders = activeTable === "historyOrders";
-  const activeCustomColumns = selectedCustomer?.customColumns?.[activeSourceTable] || [];
+  const activeViewColumns = selectedCustomer
+    ? getCustomerViewColumns(selectedCustomer, activeTable)
+    : [];
   const canCreateActiveRows = !isHistoryOrders && !activeConfig.disableRowCreate;
   const exportCustomer = (() => {
     if (isHistoryOrders) {
@@ -3399,75 +4065,77 @@ function App() {
             </div>
           </div>
 
-          <div className="global-search-wrap">
-            <label className="search-box global-search">
+          <div className="sidebar-tools">
+            <div className="global-search-wrap">
+              <label className="search-box global-search">
+                <Search size={16} />
+                <input
+                  value={globalSearchQuery}
+                  onChange={(e) => {
+                    setGlobalSearchQuery(e.target.value);
+                    setShowGlobalSearchResults(true);
+                  }}
+                  onFocus={() => setShowGlobalSearchResults(true)}
+                  onBlur={() => setTimeout(() => setShowGlobalSearchResults(false), 200)}
+                  placeholder={t("搜索订单号 / 产品 / 送货单…")}
+                />
+              </label>
+              {showGlobalSearchResults && globalSearchResults.length > 0 && (
+                <div className="global-search-results">
+                  {globalSearchResults.map((r, i) => (
+                    <button
+                      key={i}
+                      className="search-result-item"
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => navigateToSearchResult(r)}
+                    >
+                      <span className="search-result-type">
+                        {r.type === "customer" ? "👤" : r.type === "order" ? "📋" : "🚚"}
+                      </span>
+                      <span className="search-result-label">{r.label}</span>
+                      <span className="search-result-meta">
+                        {r.customerName}
+                        {r.detail ? ` · ${r.detail}` : ""}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <Button
+              size="sm"
+              onClick={() => {
+                setEditingCustomer(null);
+                setShowCustomerModal(true);
+              }}
+            >
+              <UserRoundPlus size={16} data-icon="inline-start" />
+              {t("新增客户")}
+            </Button>
+
+            <label className="search-box">
               <Search size={16} />
               <input
-                value={globalSearchQuery}
-                onChange={(e) => {
-                  setGlobalSearchQuery(e.target.value);
-                  setShowGlobalSearchResults(true);
-                }}
-                onFocus={() => setShowGlobalSearchResults(true)}
-                onBlur={() => setTimeout(() => setShowGlobalSearchResults(false), 200)}
-                placeholder={t("搜索订单号 / 产品 / 送货单…")}
+                value={searchText}
+                onChange={(event) => setSearchText(event.target.value)}
+                placeholder={t("搜索客户 / 联系人")}
               />
             </label>
-            {showGlobalSearchResults && globalSearchResults.length > 0 && (
-              <div className="global-search-results">
-                {globalSearchResults.map((r, i) => (
-                  <button
-                    key={i}
-                    className="search-result-item"
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => navigateToSearchResult(r)}
-                  >
-                    <span className="search-result-type">
-                      {r.type === "customer" ? "👤" : r.type === "order" ? "📋" : "🚚"}
-                    </span>
-                    <span className="search-result-label">{r.label}</span>
-                    <span className="search-result-meta">
-                      {r.customerName}
-                      {r.detail ? ` · ${r.detail}` : ""}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
 
-          <button
-            className="primary-action"
-            type="button"
-            onClick={() => {
-              setEditingCustomer(null);
-              setShowCustomerModal(true);
-            }}
-          >
-            <UserRoundPlus size={18} />
-            {t("新增客户")}
-          </button>
-
-          <label className="search-box">
-            <Search size={16} />
-            <input
-              value={searchText}
-              onChange={(event) => setSearchText(event.target.value)}
-              placeholder={t("搜索客户 / 联系人")}
-            />
-          </label>
-
-          <div className="customer-list-tools">
-            <button
-              className="ghost-button customer-group-add"
-              type="button"
-              title={t("新增客户分组")}
-              onClick={handleAddCustomerGroup}
-            >
-              <Plus size={14} />
-              {t("新增分组")}
-            </button>
+            <div className="customer-list-tools">
+              <Button
+                variant="ghost"
+                size="sm"
+                title={t("新增客户分组")}
+                onClick={handleAddCustomerGroup}
+                className="customer-group-add"
+              >
+                <Plus size={14} data-icon="inline-start" />
+                {t("新增分组")}
+              </Button>
+            </div>
           </div>
 
           <div className="customer-list" aria-label={t("客户列表")}>
@@ -3480,10 +4148,16 @@ function App() {
                   key={level}
                   data-customer-group-level={level}
                 >
-                  <button
+                  <div
                     className="customer-group-header"
-                    type="button"
+                    role="button"
+                    tabIndex={0}
                     onClick={() => toggleGroup(level)}
+                    onKeyDown={(event) => {
+                      if (event.key !== "Enter" && event.key !== " ") return;
+                      event.preventDefault();
+                      toggleGroup(level);
+                    }}
                     title={collapsed ? t("展开") : t("折叠")}
                   >
                     <span className={`group-arrow ${collapsed ? "" : "is-open"}`}>▸</span>
@@ -3515,7 +4189,7 @@ function App() {
                         </button>
                       </span>
                     )}
-                  </button>
+                  </div>
                   {!collapsed &&
                     groupMembers.map((customer) => (
                       <div
@@ -3629,9 +4303,30 @@ function App() {
               <h2>{selectedCustomer?.name || t("运营仪表盘")}</h2>
             </div>
             <div className="topbar-actions">
-              <button
-                className="icon-button"
-                type="button"
+              {currentUser && (
+                <span className="session-chip customer-session-chip">
+                  <UserRound size={15} />
+                  {currentUser.name || currentUser.phone} · {desktopRoleLabel(currentUser.role)}
+                </span>
+              )}
+              {onBackToZones && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  title="返回业务专区"
+                  onClick={onBackToZones}
+                >
+                  <ArrowLeft size={18} />
+                </Button>
+              )}
+              {onLogout && (
+                <Button variant="ghost" size="icon" title="退出登录" onClick={onLogout}>
+                  <LogOut size={18} />
+                </Button>
+              )}
+              <Button
+                variant="ghost"
+                size="icon"
                 title={t("编辑客户档案")}
                 onClick={() => {
                   setEditingCustomer(selectedCustomer);
@@ -3640,17 +4335,21 @@ function App() {
                 disabled={!selectedCustomer}
               >
                 <SquarePen size={18} />
-              </button>
+              </Button>
             </div>
           </header>
 
           <section className="metrics-grid" aria-label={t("业务指标")}>
             {metrics.map((metric) => (
-              <article className="metric-card" key={metric.label}>
-                <span>{metric.label}</span>
-                <strong>{metric.value}</strong>
-                <small>{metric.detail}</small>
-              </article>
+              <Card className="metric-card" key={metric.label}>
+                <CardHeader className="!p-3 !pb-1">
+                  <span className="text-xs text-muted-foreground">{metric.label}</span>
+                </CardHeader>
+                <CardContent className="!p-3 !pt-0">
+                  <strong className="text-2xl font-semibold">{metric.value}</strong>
+                  <small className="text-xs text-muted-foreground block mt-1">{metric.detail}</small>
+                </CardContent>
+              </Card>
             ))}
           </section>
 
@@ -3659,14 +4358,20 @@ function App() {
             {selectedCustomer ? (
               <>
                 {alertMap[selectedCustomer.id] && (
-                  <section
-                    className={`alert-banner alert-banner--${alertMap[selectedCustomer.id]}`}
+                  <div
+                    className={`alert-banner flex items-center gap-2 px-4 py-3 rounded-lg text-sm ${
+                      alertMap[selectedCustomer.id] === "danger"
+                        ? "bg-destructive/10 text-destructive border border-destructive/20"
+                        : "bg-muted text-foreground border border-border"
+                    }`}
                   >
                     <AlertTriangle size={15} />
-                    {alertMap[selectedCustomer.id] === "danger"
-                      ? t("该客户有订单已逾期，请尽快跟进。")
-                      : t("该客户有订单 3 天内到期，请注意安排。")}
-                  </section>
+                    <span>
+                      {alertMap[selectedCustomer.id] === "danger"
+                        ? t("该客户有订单已逾期，请尽快跟进。")
+                        : t("该客户有订单 3 天内到期，请注意安排。")}
+                    </span>
+                  </div>
                 )}
 
                 <section className="customer-panel">
@@ -3680,37 +4385,34 @@ function App() {
 
                 <section className="table-section">
                   <div className="table-toolbar">
-                    <div className="tabs" role="tablist" aria-label={t("业务模块")}>
-                      {Object.entries(tableConfigs).map(([key, config]) => {
-                        const Icon = config.icon;
-                        return (
-                          <button
-                            key={key}
-                            className={`tab-button ${activeTable === key ? "is-active" : ""}`}
-                            type="button"
-                            onClick={() => {
-                              if (selectedCustomer)
-                                lastTableByCustomerRef.current[selectedCustomer.id] = key;
-                              setActiveTable(key);
-                              setViewMode("grid");
-                            }}
-                          >
-                            <Icon size={17} />
-                            {t(config.label)}
-                          </button>
-                        );
-                      })}
-                    </div>
+                    <Tabs value={activeTable} onValueChange={(key) => {
+                      if (selectedCustomer)
+                        lastTableByCustomerRef.current[selectedCustomer.id] = key;
+                      setActiveTable(key);
+                      setViewMode("grid");
+                    }}>
+                      <TabsList>
+                        {Object.entries(tableConfigs).map(([key, config]) => {
+                          const Icon = config.icon;
+                          return (
+                            <TabsTrigger key={key} value={key}>
+                              <Icon size={17} />
+                              {t(config.label)}
+                            </TabsTrigger>
+                          );
+                        })}
+                      </TabsList>
+                    </Tabs>
                     {activeTable === "orders" && selectedCustomer && (
-                      <button
-                        className={`tab-button ${viewMode === "kanban" ? "is-active" : ""}`}
-                        type="button"
+                      <Button
+                        variant={viewMode === "kanban" ? "default" : "outline"}
+                        size="sm"
                         onClick={() => setViewMode((v) => (v === "kanban" ? "grid" : "kanban"))}
                         title={t("看板视图")}
                       >
-                        <KanbanSquare size={16} />
+                        <KanbanSquare size={16} data-icon="inline-start" />
                         {t("看板")}
-                      </button>
+                      </Button>
                     )}
                     <div className="toolbar-actions">
                       <label className="filter-box">
@@ -3731,58 +4433,66 @@ function App() {
                         />
                       )}
                       {selectedCustomer && activeTable === "orders" && (
-                        <button
-                          className="secondary-button"
-                          type="button"
+                        <Button
+                          variant="secondary"
+                          size="sm"
                           title={t("生成对账单")}
                           onClick={handleCreateStatement}
                         >
                           {t("对账单")}
-                        </button>
+                        </Button>
+                      )}
+                      {selectedCustomer && activeTable === "productionSchedule" && (
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          title={t("设置手机端排产订单显示字段")}
+                          onClick={() => setShowMobileDisplaySettings(true)}
+                        >
+                          <Settings2 size={16} data-icon="inline-start" />
+                          {t("手机字段")}
+                        </Button>
                       )}
                       {selectedCustomer && (
-                        <button
-                          className="secondary-button"
-                          type="button"
+                        <Button
+                          variant="secondary"
+                          size="sm"
                           title={t("导出当前表格为 Excel")}
                           onClick={() =>
-                            exportTableToExcel(exportCustomer, activeTable, [
-                              ...activeConfig.defaultColumns.map((column) => ({
+                            exportTableToExcel(
+                              exportCustomer,
+                              activeTable,
+                              activeViewColumns.map((column) => ({
                                 ...column,
                                 headerName: t(column.headerName),
                               })),
-                              ...activeCustomColumns.map((column) => ({
-                                ...column,
-                                headerName: t(column.headerName),
-                              })),
-                            ])
+                            )
                           }
                         >
-                          <Download size={15} />
+                          <Download size={15} data-icon="inline-start" />
                           {t("导出 Excel")}
-                        </button>
+                        </Button>
                       )}
                       {!isHistoryOrders && (
-                        <button
-                          className="secondary-button"
-                          type="button"
+                        <Button
+                          variant="secondary"
+                          size="sm"
                           onClick={() => setShowColumnModal(true)}
                           disabled={!selectedCustomer}
                         >
-                          <Settings2 size={17} />
+                          <Settings2 size={17} data-icon="inline-start" />
                           {t("自定义表头")}
-                        </button>
+                        </Button>
                       )}
                       {canCreateActiveRows && (
-                        <button
-                          className="primary-action compact"
-                          type="button"
+                        <Button
+                          size="sm"
                           onClick={() => addRow(activeSourceTable)}
                           disabled={!selectedCustomer}
                         >
-                          <Plus size={17} />
+                          <Plus size={17} data-icon="inline-start" />
                           {t("新增{rowLabel}", { rowLabel: t(activeConfig.rowLabel) })}
-                        </button>
+                        </Button>
                       )}
                     </div>
                   </div>
@@ -3818,6 +4528,9 @@ function App() {
                         activeTable === "orders" || activeTable === "productionSchedule"
                           ? handleScheduleOrders
                           : null
+                      }
+                      onUnscheduleOrders={
+                        activeTable === "productionSchedule" ? cancelProductionSchedule : null
                       }
                       onCreateDeliveryFromOrders={
                         activeTable === "orders" ? handleCreateDeliveryFromOrders : null
@@ -3863,12 +4576,14 @@ function App() {
 
         {showColumnModal && selectedCustomer && (
           <ColumnModal
-            tableKey={activeSourceTable}
+            tableKey={activeTable}
+            sourceTableKey={activeSourceTable}
             customer={selectedCustomer}
             onClose={() => setShowColumnModal(false)}
             onAddColumn={addCustomColumn}
             onUpdateColumn={updateCustomColumn}
             onRemoveColumn={removeCustomColumn}
+            onShowColumns={showViewColumns}
           />
         )}
 
@@ -3894,16 +4609,26 @@ function App() {
         {showSettings && (
           <SettingsModal
             settings={systemSettings}
-            mobileUsers={mobileUsers}
-            mobileDisplaySettings={mobileDisplaySettings}
-            mobileOrderFieldOptions={mobileOrderFieldOptions}
-            onChangeMobileUserRole={updateMobileUserRole}
-            onRefreshMobileUsers={loadMobileUsers}
             onClose={() => setShowSettings(false)}
-            onSave={async (s, nextMobileDisplaySettings) => {
-              await saveMobileDisplaySettings(nextMobileDisplaySettings);
+            onSave={async (s) => {
               persistSystemSettings({ ...systemSettings, ...s });
               setShowSettings(false);
+            }}
+          />
+        )}
+
+        {showMobileDisplaySettings && selectedCustomer && (
+          <MobileDisplaySettingsModal
+            customerName={selectedCustomer.name}
+            mobileDisplaySettings={getCustomerMobileDisplaySettings(
+              selectedCustomer,
+              mobileDisplaySettings,
+            )}
+            mobileOrderFieldOptions={buildCustomerMobileOrderFieldOptions(selectedCustomer)}
+            onClose={() => setShowMobileDisplaySettings(false)}
+            onSave={async (nextMobileDisplaySettings) => {
+              await saveMobileDisplaySettings(nextMobileDisplaySettings);
+              setShowMobileDisplaySettings(false);
             }}
           />
         )}
@@ -3923,6 +4648,7 @@ function BusinessGrid({
   onDeleteRows,
   onPrintRow = null,
   onScheduleOrders = null,
+  onUnscheduleOrders = null,
   onCreateDeliveryFromOrders = null,
   onFinalizeDeliveryDrafts = null,
   onColumnOrderChange,
@@ -3973,8 +4699,12 @@ function BusinessGrid({
     }
     return sourceRows;
   }, [sourceRows, viewKey]);
-  const customColumns = customer.customColumns?.[tableKey] || [];
-  const savedOrder = customer.customColumns?.columnOrder?.[tableKey];
+  const viewColumns = useMemo(() => getCustomerViewColumns(customer, viewKey), [customer, viewKey]);
+  const viewDefaultFieldSet = useMemo(
+    () => new Set(config.defaultColumns.map((column) => column.field)),
+    [config.defaultColumns],
+  );
+  const savedOrder = customer.customColumns?.columnOrder?.[viewKey];
   const filteredRows = useMemo(() => {
     const activeFilters = Object.entries(columnFilters);
     if (!activeFilters.length) return rows;
@@ -4046,15 +4776,23 @@ function BusinessGrid({
     typeof onCreateDeliveryFromOrders === "function";
   const canScheduleOrders =
     tableKey === "orders" &&
-    (viewKey === "orders" || viewKey === "productionSchedule") &&
+    viewKey === "orders" &&
     !readOnly &&
     typeof onScheduleOrders === "function";
+  const canUnscheduleOrders =
+    tableKey === "orders" &&
+    viewKey === "productionSchedule" &&
+    !readOnly &&
+    typeof onUnscheduleOrders === "function";
+  const canDeleteRows =
+    !readOnly && viewKey !== "productionSchedule" && typeof onDeleteRows === "function";
   const canFinalizeDeliveryDrafts =
     tableKey === "deliveries" &&
     viewKey === "deliveries" &&
     !readOnly &&
     typeof onFinalizeDeliveryDrafts === "function";
   const canCreateRows = !readOnly && !config.disableRowCreate;
+  const derivedView = isDerivedTableView(viewKey);
 
   const toggleDeliveryGroup = useCallback((key) => {
     setExpandedDeliveryGroups((current) => {
@@ -4081,28 +4819,6 @@ function BusinessGrid({
       if (!changed) return;
       onBeforeDataChange?.();
       onRowsChange(tableKey, updatedRows, { formulaRowIds: changedRowIds });
-    },
-    [onBeforeDataChange, onRowsChange, sourceRows, tableKey],
-  );
-
-  const advanceOrderStatus = useCallback(
-    (rowId, nextStatus, rowData) => {
-      if (!getNextStatuses(normalizeOrderStatus(rowData?.status)).includes(nextStatus)) return;
-      onBeforeDataChange?.();
-      const updatedRows = sourceRows.map((row) =>
-        row.id === rowId
-          ? {
-              ...row,
-              status: nextStatus,
-              statusChangedAt: new Date().toISOString(),
-              statusChangeLog: appendAuditLog(
-                row.statusChangeLog,
-                `进度：${row.status || "未完成"} -> ${nextStatus}`,
-              ),
-            }
-          : row,
-      );
-      onRowsChange(tableKey, updatedRows, { formulaRowIds: [rowId] });
     },
     [onBeforeDataChange, onRowsChange, sourceRows, tableKey],
   );
@@ -4150,13 +4866,7 @@ function BusinessGrid({
       ),
     };
 
-    const defaultFields = new Set(config.defaultColumns.map((column) => column.field));
-    const allCols = [
-      ...config.defaultColumns.map((column) => toGridColumn(column, t, true)),
-      ...customColumns
-        .filter((column) => !defaultFields.has(column.field))
-        .map((column) => toGridColumn(column, t, true)),
-    ];
+    const allCols = viewColumns.map((column) => toGridColumn(column, t, true));
 
     if (savedOrder?.length) {
       allCols.sort((a, b) => {
@@ -4178,39 +4888,14 @@ function BusinessGrid({
     const visibleCols = orderedCols.map((column) => {
       const nextColumn = readOnly ? { ...column, editable: false } : column;
 
-      // Orders 视图：进度列增加快捷流转按钮
+      // Orders 视图：进度由排产、完工、送货、对账等业务动作维护。
       if (viewKey === "orders" && column.field === "status" && !readOnly) {
         return {
           ...nextColumn,
+          editable: false,
           cellRenderer: (params) => {
             const value = normalizeOrderStatus(params.value);
-            const nextStatuses = getNextStatuses(value);
-            if (!nextStatuses.length) {
-              return <span className={`status-chip ${statusClass(value)}`}>{t(value)}</span>;
-            }
-            return (
-              <div style={{ display: "flex", alignItems: "center", gap: 4, height: "100%" }}>
-                <span className={`status-chip ${statusClass(value)}`} style={{ flexShrink: 0 }}>
-                  {t(value)}
-                </span>
-                <span className="status-actions">
-                  {nextStatuses.map((ns) => (
-                    <button
-                      key={ns}
-                      className="status-next-btn"
-                      type="button"
-                      title={t("流转到：{status}", { status: t(ns) })}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        advanceOrderStatus(params.data.id, ns, params.data);
-                      }}
-                    >
-                      → {t(ns)}
-                    </button>
-                  ))}
-                </span>
-              </div>
-            );
+            return <span className={`status-chip ${statusClass(value)}`}>{t(value)}</span>;
           },
         };
       }
@@ -4347,7 +5032,6 @@ function BusinessGrid({
       : [rowNumberColumn, ...visibleCols];
   }, [
     config.defaultColumns,
-    customColumns,
     onPrintRow,
     readOnly,
     savedOrder,
@@ -4355,8 +5039,8 @@ function BusinessGrid({
     t,
     toggleDeliveryGroup,
     updateDeliveryGroupStatus,
+    viewColumns,
     viewKey,
-    advanceOrderStatus,
   ]);
 
   const selectableColumnFields = useMemo(
@@ -4373,20 +5057,12 @@ function BusinessGrid({
     return selectableColumnFields.filter((_, index) => index >= minCol && index <= maxCol);
   }, [selectableColumnFields, selectionRange]);
 
-  const customColumnFieldSet = useMemo(
-    () => new Set(customColumns.map((column) => column.field)),
-    [customColumns],
-  );
-
   const removableSelectedColumnFields = useMemo(
-    () => selectedColumnFields.filter((field) => customColumnFieldSet.has(field)),
-    [customColumnFieldSet, selectedColumnFields],
+    () => selectedColumnFields.filter((field) => !viewDefaultFieldSet.has(field)),
+    [selectedColumnFields, viewDefaultFieldSet],
   );
 
-  const tableColumns = useMemo(
-    () => [...config.defaultColumns, ...customColumns],
-    [config.defaultColumns, customColumns],
-  );
+  const tableColumns = viewColumns;
   const formulaColumnFields = useMemo(
     () =>
       tableColumns
@@ -4435,6 +5111,8 @@ function BusinessGrid({
       filter: false,
       resizable: true,
       minWidth: 90,
+      wrapHeaderText: true,
+      autoHeaderHeight: true,
       singleClickEdit: false,
     }),
     [readOnly],
@@ -4968,13 +5646,13 @@ function BusinessGrid({
         .getColumnState()
         .filter((c) => c.colId !== "__actions")
         .map((c) => c.colId);
-      onColumnOrderChange(tableKey, order);
+      onColumnOrderChange(viewKey, order);
     },
-    [onColumnOrderChange, tableKey],
+    [onColumnOrderChange, viewKey],
   );
 
   const handleBatchDelete = async () => {
-    if (!selectedIds.length) return;
+    if (!canDeleteRows || !selectedIds.length) return;
     if (
       !(await dialogs.confirm(
         t("确认删除选中的 {count} 行？此操作不可恢复。", { count: selectedIds.length }),
@@ -5011,6 +5689,16 @@ function BusinessGrid({
     setSelectionRange(null);
   };
 
+  const handleUnscheduleSelectedRows = async () => {
+    if (!canUnscheduleOrders || !selectedIds.length) return;
+    const unscheduled = await onUnscheduleOrders(selectedIds);
+    if (!unscheduled) return;
+
+    setSelectedIds([]);
+    gridRef.current?.api?.deselectAll();
+    setSelectionRange(null);
+  };
+
   const handleFinalizeSelectedDeliveryDrafts = async () => {
     if (!canFinalizeDeliveryDrafts || !selectedIds.length) return;
     const finalized = await onFinalizeDeliveryDrafts(selectedIds);
@@ -5023,7 +5711,7 @@ function BusinessGrid({
 
   const deleteSelectedArea = useCallback(async () => {
     const selection = selectionRangeRef.current;
-    if (!selection) return;
+    if (!canDeleteRows || !selection) return;
 
     if (selection.mode === "rows") {
       const rowIds = getVisibleRowIdsInRange(selection.startRowIndex, selection.endRowIndex);
@@ -5081,6 +5769,7 @@ function BusinessGrid({
     onBeforeDataChange?.();
     onRowsChange(tableKey, clearedRows, { formulaRowIds: targetRowIds });
   }, [
+    canDeleteRows,
     dialogs.confirm,
     getVisibleRowIdsInRange,
     onBeforeDataChange,
@@ -5561,6 +6250,7 @@ function BusinessGrid({
   }, [getVisibleRowIdsInRange]);
 
   const deleteRowsFromMenu = useCallback(async () => {
+    if (!canDeleteRows) return;
     const rowIds = getSelectedRowIdsForMenu();
     if (!rowIds.length) return;
     if (
@@ -5578,7 +6268,7 @@ function BusinessGrid({
     setSelectedIds([]);
     gridRef.current?.api?.deselectAll();
     setSelectionRange(null);
-  }, [dialogs.confirm, getSelectedRowIdsForMenu, onDeleteRows, tableKey, t]);
+  }, [canDeleteRows, dialogs.confirm, getSelectedRowIdsForMenu, onDeleteRows, tableKey, t]);
 
   const deleteSelectedColumnsFromMenu = useCallback(async () => {
     if (!onRemoveColumns || !removableSelectedColumnFields.length) return;
@@ -5587,12 +6277,16 @@ function BusinessGrid({
       .map((field) => columnHeaderByField.get(field) || field)
       .join("、");
     const lockedCount = selectedColumnFields.length - removableSelectedColumnFields.length;
+    const actionText = derivedView ? t("从当前视图移除") : t("删除");
     const lockedMessage =
-      lockedCount > 0 ? t("\n其中 {count} 个默认表头不会删除。", { count: lockedCount }) : "";
+      lockedCount > 0
+        ? t("\n其中 {count} 个默认表头不会{action}。", { count: lockedCount, action: actionText })
+        : "";
 
     if (
       !(await dialogs.confirm(
-        t("确认删除选中的 {count} 个自定义表头？\n{names}{lockedMessage}", {
+        t("确认{action}选中的 {count} 个自定义表头？\n{names}{lockedMessage}", {
+          action: actionText,
           count: removableSelectedColumnFields.length,
           names: columnNames,
           lockedMessage,
@@ -5609,6 +6303,7 @@ function BusinessGrid({
     setSelectionRange(null);
   }, [
     columnHeaderByField,
+    derivedView,
     dialogs.confirm,
     onRemoveColumns,
     removableSelectedColumnFields,
@@ -5935,14 +6630,14 @@ function BusinessGrid({
           onRowsChange(tableKey, newRows);
         }
       }
-      if (e.key === "Delete" && selectedIds.length > 0) {
+      if (canDeleteRows && e.key === "Delete" && selectedIds.length > 0) {
         e.preventDefault();
         handleBatchDelete();
       }
     };
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [selectedIds, sourceRows, tableKey, onRowsChange, onBeforeDataChange]);
+  }, [canDeleteRows, selectedIds, sourceRows, tableKey, onRowsChange, onBeforeDataChange]);
 
   const getGridRowClass = useCallback(
     (params) => (params.data?.__isDeliveryGroup ? "delivery-group-row" : undefined),
@@ -5986,6 +6681,16 @@ function BusinessGrid({
                 {t("排产")}
               </button>
             )}
+            {canUnscheduleOrders && (
+              <button
+                className="secondary-button compact"
+                type="button"
+                onClick={handleUnscheduleSelectedRows}
+              >
+                <RotateCcw size={14} />
+                {t("取消排产")}
+              </button>
+            )}
             {canCreateDeliveryFromOrders && (
               <button
                 className="secondary-button compact"
@@ -6014,10 +6719,12 @@ function BusinessGrid({
               <Pencil size={14} />
               {t("批量修改")}
             </button>
-            <button className="danger-button compact" type="button" onClick={handleBatchDelete}>
-              <Trash2 size={14} />
-              {t("批量删除")}
-            </button>
+            {canDeleteRows && (
+              <button className="danger-button compact" type="button" onClick={handleBatchDelete}>
+                <Trash2 size={14} />
+                {t("批量删除")}
+              </button>
+            )}
           </div>
           {showBulkEdit && (
             <div className="bulk-edit-row">
@@ -6065,6 +6772,7 @@ function BusinessGrid({
           rowSelection="multiple"
           suppressRowClickSelection
           animateRows={false}
+          headerHeight={44}
           rowBuffer={4}
           cacheQuickFilter
           suppressColumnMoveAnimation
@@ -6272,8 +6980,10 @@ function BusinessGrid({
                 disabled={!removableSelectedColumnFields.length}
                 title={
                   removableSelectedColumnFields.length
-                    ? t("删除选中的自定义表头")
-                    : t("默认表头不可删除")
+                    ? derivedView
+                      ? t("从当前视图移除选中的自定义表头")
+                      : t("删除选中的自定义表头")
+                    : t("默认表头不可移除")
                 }
                 onClick={() => {
                   deleteSelectedColumnsFromMenu();
@@ -6281,7 +6991,7 @@ function BusinessGrid({
                 }}
               >
                 <Trash2 size={14} />
-                {t("删除选中列（表头）")}
+                {derivedView ? t("从当前视图移除选中列") : t("删除选中列（表头）")}
               </button>
             </>
           ) : (
@@ -6351,19 +7061,21 @@ function BusinessGrid({
                   </form>
                 </>
               )}
-              <button
-                className="is-danger"
-                type="button"
-                role="menuitem"
-                disabled={selectionRange?.mode !== "rows"}
-                onClick={() => {
-                  deleteRowsFromMenu();
-                  setContextMenu(null);
-                }}
-              >
-                <Trash2 size={14} />
-                {t("删除选中行")}
-              </button>
+              {canDeleteRows && (
+                <button
+                  className="is-danger"
+                  type="button"
+                  role="menuitem"
+                  disabled={selectionRange?.mode !== "rows"}
+                  onClick={() => {
+                    deleteRowsFromMenu();
+                    setContextMenu(null);
+                  }}
+                >
+                  <Trash2 size={14} />
+                  {t("删除选中行")}
+                </button>
+              )}
             </>
           )}
         </div>
@@ -6564,1253 +7276,5 @@ function toGridColumn(column, t = defaultTranslator, translateHeader = true) {
   return gridColumn;
 }
 
-function ColumnHeader(props) {
-  const t = props.context?.t || defaultTranslator;
-  const isFiltered = props.context?.activeFilterFields?.has(props.column.getColId());
-  const field = props.column.getColId();
-
-  const openFilter = (event) => {
-    event.stopPropagation();
-    const optionValues = props.column.getColDef?.()?.cellEditorParams?.values;
-    props.context?.openColumnFilter(
-      props.column.getColId(),
-      props.displayName,
-      event.currentTarget.getBoundingClientRect(),
-      Array.isArray(optionValues) ? optionValues : null,
-    );
-  };
-
-  const startColumnSelection = (event) => {
-    props.context?.startColumnSelection?.(field, event);
-  };
-
-  const updateColumnSelection = (event) => {
-    props.context?.updateColumnSelection?.(field, event);
-  };
-
-  const openHeaderContextMenu = (event) => {
-    event.preventDefault();
-    props.context?.openHeaderContextMenu?.(field, event);
-  };
-
-  return (
-    <div
-      className={`column-header ${isFiltered ? "is-filtered" : ""}`}
-      onMouseDown={startColumnSelection}
-      onMouseEnter={updateColumnSelection}
-      onContextMenu={openHeaderContextMenu}
-    >
-      <button
-        className="column-header-label"
-        type="button"
-        onClick={(event) => event.preventDefault()}
-        title={`${props.displayName}${isFiltered ? t("（已筛选）") : ""}`}
-      >
-        {props.displayName}
-      </button>
-      <button
-        className={`column-filter-button ${isFiltered ? "is-active" : ""}`}
-        type="button"
-        onMouseDown={(event) => event.stopPropagation()}
-        onClick={openFilter}
-        title={isFiltered ? t("已筛选，点击修改筛选") : t("筛选")}
-      >
-        ▾
-      </button>
-    </div>
-  );
-}
-
-function RowNumberHeader(props) {
-  const t = props.context?.t || defaultTranslator;
-  const selectAllRows = (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    props.context?.selectAllRows?.();
-  };
-
-  return (
-    <button
-      className="row-number-header-button"
-      type="button"
-      onMouseDown={(event) => event.stopPropagation()}
-      onClick={selectAllRows}
-      title={t("选中所有可见行")}
-    >
-      #
-    </button>
-  );
-}
-
-function ColumnValueFilter({ popup, rows, appliedValues, onApply, onClear, onClose }) {
-  const { t } = useI18n();
-  const values = useMemo(() => {
-    const seen = new Set();
-    const result = [];
-    const addValue = (rawValue) => {
-      const normalizedValue =
-        popup.field === "status" && popup.optionValues?.includes("未完成")
-          ? normalizeOrderStatus(rawValue)
-          : rawValue;
-      const value = filterValue(normalizedValue);
-      if (seen.has(value.key)) return;
-      seen.add(value.key);
-      result.push(value);
-    };
-
-    if (popup.optionValues?.length) {
-      popup.optionValues.forEach(addValue);
-    }
-
-    for (const row of rows) {
-      addValue(row[popup.field]);
-    }
-    return popup.optionValues?.length
-      ? result
-      : result.sort((a, b) => a.label.localeCompare(b.label, "zh-CN", { numeric: true }));
-  }, [popup.field, popup.optionValues, rows]);
-
-  const [draftValues, setDraftValues] = useState(
-    () => new Set(appliedValues ? Array.from(appliedValues) : values.map((value) => value.key)),
-  );
-
-  useEffect(() => {
-    setDraftValues(
-      new Set(appliedValues ? Array.from(appliedValues) : values.map((value) => value.key)),
-    );
-  }, [appliedValues, values]);
-
-  useEffect(() => {
-    const closeOnEscape = (event) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [onClose]);
-
-  const toggleValue = (key, checked) => {
-    setDraftValues((current) => {
-      const next = new Set(current);
-      if (checked) next.add(key);
-      else next.delete(key);
-      return next;
-    });
-  };
-  const getDisplayLabel = (value) =>
-    value.key === "" || popup.field === "status" ? t(value.label) : value.label;
-
-  return (
-    <div className="column-filter-popover" style={{ left: popup.left, top: popup.top }}>
-      <div className="column-filter-title">{popup.headerName}</div>
-      <div className="column-filter-actions">
-        <button
-          type="button"
-          onClick={() => setDraftValues(new Set(values.map((value) => value.key)))}
-        >
-          {t("全选")}
-        </button>
-        <button type="button" onClick={() => setDraftValues(new Set())}>
-          {t("清空")}
-        </button>
-      </div>
-      <div className="column-filter-options">
-        {values.map((value) => (
-          <label className="column-filter-option" key={value.key}>
-            <input
-              type="checkbox"
-              checked={draftValues.has(value.key)}
-              onChange={(event) => toggleValue(value.key, event.target.checked)}
-            />
-            <span title={getDisplayLabel(value)}>{getDisplayLabel(value)}</span>
-          </label>
-        ))}
-      </div>
-      <div className="column-filter-footer">
-        <button type="button" onClick={() => onClear(popup.field)}>
-          {t("重置")}
-        </button>
-        <button type="button" onClick={onClose}>
-          {t("取消")}
-        </button>
-        <button
-          className="is-primary"
-          type="button"
-          onClick={() => onApply(popup.field, draftValues, values)}
-        >
-          {t("确定")}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function filterValue(value) {
-  const raw = value == null || value === "" ? "" : String(formatGridValueForDisplay(value, {}));
-  return {
-    key: raw,
-    label: raw || "(空白)",
-  };
-}
-
-function statusClass(value = "") {
-  if (value === "作废") return "is-void";
-  if (value === "已付款") return "is-paid";
-  if (value === "已开对账单") return "is-reconciled";
-  if (value === "已开送货单") return "is-delivery-opened";
-  if (value === "部分送货" || value === "部分签收") return "is-partial-delivered";
-  if (value === "已送货" || value === "已发货" || value === "已签收") return "is-delivered";
-  if (value === "已完成") return "is-completed";
-  if (value === "已排产") return "is-scheduled";
-  if (value === "未完成") return "is-pending";
-  // legacy fallbacks
-  if (value === "未排产" || value === "未送" || value === "待确认" || value === "待发货")
-    return "is-unfinished";
-  if (value === "已送") return "is-delivered";
-  if (value.includes("异常")) return "is-risk";
-  if (value.includes("配送")) return "is-live";
-  if (value.includes("装车")) return "is-waiting";
-  if (value.includes("完成")) return "is-completed";
-  return "";
-}
-
-function InfoPill({ label, value, wide = false }) {
-  const { t } = useI18n();
-  return (
-    <div className={`info-pill ${wide ? "is-wide" : ""}`}>
-      <span>{label}</span>
-      <strong>{value || t("未填写")}</strong>
-    </div>
-  );
-}
-
-function ProductionScheduleModal({ customer, orders, onClose, onSave }) {
-  const { t } = useI18n();
-  const [form, setForm] = useState({
-    date: today(),
-    quantity: "",
-    line: "",
-    status: "已排产",
-    note: "",
-  });
-  const [saving, setSaving] = useState(false);
-
-  const totalQuantity = useMemo(
-    () =>
-      orders.reduce((sum, order) => {
-        const quantity = parseNumericValue(order[orderRemainingQuantityField] || order.quantity);
-        return sum + quantity;
-      }, 0),
-    [orders],
-  );
-
-  const update = (field, value) => {
-    setForm((current) => ({ ...current, [field]: value }));
-  };
-
-  const submit = async (event) => {
-    event.preventDefault();
-    if (!form.date) return;
-    setSaving(true);
-    try {
-      await onSave(form);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="modal-backdrop" role="presentation">
-      <form className="modal-card production-modal" onSubmit={submit}>
-        <div className="modal-head">
-          <div>
-            <p className="eyebrow">PRODUCTION SCHEDULE</p>
-            <h3>
-              {t("{customer} · 排产 {count} 条订单", {
-                customer: customer.name,
-                count: orders.length,
-              })}
-            </h3>
-          </div>
-          <button className="icon-button" type="button" onClick={onClose} title={t("关闭")}>
-            <X size={18} />
-          </button>
-        </div>
-
-        <div className="production-summary">
-          <span>{t("订单数：{count}", { count: orders.length })}</span>
-          <span>
-            {t("待排数量：{quantity}", { quantity: normalizeCalculatedNumber(totalQuantity) })}
-          </span>
-        </div>
-
-        <div className="form-grid">
-          <Field label={t("排产日期")} required>
-            <input
-              type="date"
-              value={form.date}
-              onChange={(event) => update("date", event.target.value)}
-            />
-          </Field>
-          <Field label={t("本次排产数量")}>
-            <input
-              value={form.quantity}
-              inputMode="decimal"
-              onChange={(event) => update("quantity", event.target.value)}
-              placeholder={t("留空则按各订单数量")}
-            />
-          </Field>
-          <Field label={t("员工姓名")}>
-            <input
-              value={form.line}
-              onChange={(event) => update("line", event.target.value)}
-              placeholder={t("例如：张三、李四")}
-            />
-          </Field>
-          <Field label={t("排产后进度")}>
-            <select value={form.status} onChange={(event) => update("status", event.target.value)}>
-              {productionScheduleStatusOptions.map((option) => (
-                <option key={option} value={option}>
-                  {t(option)}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label={t("排产备注")}>
-            <input
-              value={form.note}
-              onChange={(event) => update("note", event.target.value)}
-              placeholder={t("例如：优先生产、等料")}
-            />
-          </Field>
-        </div>
-
-        <div className="production-order-list">
-          {orders.map((order) => (
-            <div className="production-order-row" key={order.id}>
-              <div>
-                <strong>{order.orderNo || order.product || order.id}</strong>
-                <span>{order.product || t("未填写产品")}</span>
-              </div>
-              <small>
-                {t("数量 {quantity}", {
-                  quantity: normalizeCalculatedNumber(
-                    parseNumericValue(order[orderRemainingQuantityField] || order.quantity),
-                  ),
-                })}
-                {order.dueDate ? t(" · 交期 {date}", { date: order.dueDate }) : ""}
-              </small>
-            </div>
-          ))}
-        </div>
-
-        <div className="modal-actions">
-          <button className="ghost-button" type="button" onClick={onClose} disabled={saving}>
-            {t("取消")}
-          </button>
-          <button className="primary-action compact" type="submit" disabled={saving || !form.date}>
-            <KanbanSquare size={17} />
-            {saving ? t("保存中") : t("确认排产")}
-          </button>
-        </div>
-      </form>
-    </div>
-  );
-}
-
-function CustomerModal({ customer, customerGroups = customerLevelOptions, onClose, onSave }) {
-  const { t } = useI18n();
-  const [form, setForm] = useState(
-    customer || {
-      name: "",
-      contact: "",
-      phone: "",
-      address: "",
-      level: "新客户",
-      paymentTerm: "",
-      taxNo: "",
-      note: "",
-    },
-  );
-
-  const update = (field, value) => setForm((current) => ({ ...current, [field]: value }));
-
-  const submit = (event) => {
-    event.preventDefault();
-    if (!form.name.trim()) return;
-    onSave(form);
-  };
-
-  return (
-    <div className="modal-backdrop" role="presentation">
-      <form className="modal-card" onSubmit={submit}>
-        <div className="modal-head">
-          <div>
-            <p className="eyebrow">CUSTOMER PROFILE</p>
-            <h3>{customer ? t("编辑客户档案") : t("新增客户档案")}</h3>
-          </div>
-          <button className="icon-button" type="button" onClick={onClose} title={t("关闭")}>
-            <X size={18} />
-          </button>
-        </div>
-
-        <div className="form-grid">
-          <Field label={t("客户名称")} required>
-            <input
-              value={form.name}
-              onChange={(event) => update("name", event.target.value)}
-              placeholder={t("例如：某某包装厂")}
-            />
-          </Field>
-          <Field label={t("联系人")}>
-            <input
-              value={form.contact}
-              onChange={(event) => update("contact", event.target.value)}
-            />
-          </Field>
-          <Field label={t("联系电话")}>
-            <input value={form.phone} onChange={(event) => update("phone", event.target.value)} />
-          </Field>
-          <Field label={t("客户等级")}>
-            <select
-              value={form.level || UNGROUPED_CUSTOMER_GROUP}
-              onChange={(event) =>
-                update(
-                  "level",
-                  event.target.value === UNGROUPED_CUSTOMER_GROUP ? "" : event.target.value,
-                )
-              }
-            >
-              {customerGroups.map((level) => (
-                <option key={level} value={level}>
-                  {t(level)}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label={t("账期")}>
-            <input
-              value={form.paymentTerm}
-              onChange={(event) => update("paymentTerm", event.target.value)}
-              placeholder={t("例如：月结30天")}
-            />
-          </Field>
-          <Field label={t("税号")}>
-            <input value={form.taxNo} onChange={(event) => update("taxNo", event.target.value)} />
-          </Field>
-          <Field label={t("送货地址")} wide>
-            <input
-              value={form.address}
-              onChange={(event) => update("address", event.target.value)}
-            />
-          </Field>
-          <Field label={t("备注")} wide>
-            <textarea
-              value={form.note}
-              onChange={(event) => update("note", event.target.value)}
-              rows={4}
-            />
-          </Field>
-        </div>
-
-        <div className="modal-actions">
-          <button className="ghost-button" type="button" onClick={onClose}>
-            {t("取消")}
-          </button>
-          <button className="primary-action compact" type="submit">
-            <Save size={17} />
-            {t("保存客户")}
-          </button>
-        </div>
-      </form>
-    </div>
-  );
-}
-
-function ColumnModal({ tableKey, customer, onClose, onAddColumn, onUpdateColumn, onRemoveColumn }) {
-  const { t } = useI18n();
-  const [headerName, setHeaderName] = useState("");
-  const [type, setType] = useState("text");
-  const [formula, setFormula] = useState("");
-  const [formulaDrafts, setFormulaDrafts] = useState({});
-  const customColumns = customer.customColumns?.[tableKey] || [];
-  const config = tableConfigs[tableKey];
-
-  useEffect(() => {
-    setFormulaDrafts(
-      Object.fromEntries(
-        customColumns.map((column) => [column.field, normalizeFormulaInput(column.formula)]),
-      ),
-    );
-  }, [customColumns]);
-
-  const commitFormula = (column) => {
-    if (!onUpdateColumn) return;
-    const nextFormula = normalizeFormulaInput(formulaDrafts[column.field]);
-    if (nextFormula === normalizeFormulaInput(column.formula)) return;
-    onUpdateColumn(tableKey, column.field, { formula: nextFormula || undefined });
-  };
-
-  const submit = (event) => {
-    event.preventDefault();
-    if (!headerName.trim()) return;
-    const normalizedFormula = normalizeFormulaInput(formula);
-    onAddColumn(tableKey, {
-      field: toFieldKey(headerName),
-      headerName: headerName.trim(),
-      type: normalizedFormula ? "number" : type,
-      width: normalizedFormula || type === "number" ? 120 : 140,
-      formula: normalizedFormula || undefined,
-    });
-    setHeaderName("");
-    setType("text");
-    setFormula("");
-  };
-
-  return (
-    <div className="modal-backdrop" role="presentation">
-      <form className="modal-card small" onSubmit={submit}>
-        <div className="modal-head">
-          <div>
-            <p className="eyebrow">CUSTOM TABLE HEADER</p>
-            <h3>
-              {customer.name} · {t(config.label)}
-            </h3>
-          </div>
-          <button className="icon-button" type="button" onClick={onClose} title={t("关闭")}>
-            <X size={18} />
-          </button>
-        </div>
-
-        <div className="column-manager">
-          <div>
-            <h4>{t("默认表头")}</h4>
-            <div className="tag-wrap">
-              {config.defaultColumns.map((column) => (
-                <span className="column-tag locked" key={column.field}>
-                  {t(column.headerName)}
-                </span>
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <h4>{t("当前客户自定义表头")}</h4>
-            <div className="formula-input-list">
-              {customColumns.length ? (
-                customColumns.map((column) => (
-                  <div className="column-formula-row" key={column.field}>
-                    <div className="column-formula-name">
-                      <span>{column.headerName}</span>
-                      {normalizeFormulaInput(column.formula) ? <small>{t("公式")}</small> : null}
-                    </div>
-                    <input
-                      className="column-formula-input"
-                      value={formulaDrafts[column.field] ?? ""}
-                      onChange={(event) =>
-                        setFormulaDrafts((current) => ({
-                          ...current,
-                          [column.field]: event.target.value,
-                        }))
-                      }
-                      onBlur={() => commitFormula(column)}
-                      onKeyDown={(event) => {
-                        if (event.key !== "Enter") return;
-                        event.preventDefault();
-                        event.currentTarget.blur();
-                      }}
-                      placeholder={t("=采购数量*单价")}
-                      aria-label={`${column.headerName}${t("公式")}`}
-                    />
-                    <button
-                      className="icon-button column-delete-button"
-                      type="button"
-                      onClick={() => onRemoveColumn(tableKey, column.field)}
-                      title={t("删除该自定义表头")}
-                    >
-                      <X size={15} />
-                    </button>
-                  </div>
-                ))
-              ) : (
-                <span className="muted-text">{t("暂无自定义表头")}</span>
-              )}
-            </div>
-          </div>
-
-          <div className="add-column-row">
-            <Field label={t("新表头名称")}>
-              <input
-                value={headerName}
-                onChange={(event) => setHeaderName(event.target.value)}
-                placeholder={t("例如：图纸编号、模具费、司机")}
-              />
-            </Field>
-            <Field label={t("字段类型")}>
-              <select value={type} onChange={(event) => setType(event.target.value)}>
-                <option value="text">{t("文本")}</option>
-                <option value="number">{t("数字")}</option>
-                <option value="date">{t("日期")}</option>
-              </select>
-            </Field>
-            <Field label={t("公式（可选）")} wide>
-              <input
-                value={formula}
-                onChange={(event) => setFormula(event.target.value)}
-                placeholder={t("=采购数量*单价")}
-              />
-            </Field>
-          </div>
-        </div>
-
-        <div className="modal-actions">
-          <button className="ghost-button" type="button" onClick={onClose}>
-            {t("完成")}
-          </button>
-          <button className="primary-action compact" type="submit">
-            <FilePlus2 size={17} />
-            {t("添加表头")}
-          </button>
-        </div>
-      </form>
-    </div>
-  );
-}
-
-function Field({ label, required = false, wide = false, children }) {
-  return (
-    <label className={`field ${wide ? "is-wide" : ""}`}>
-      <span>
-        {label}
-        {required ? <b>*</b> : null}
-      </span>
-      {children}
-    </label>
-  );
-}
-
-function CustomerStatisticsPanel({ customers, onSelectCustomer }) {
-  const { language, t } = useI18n();
-  const rows = useMemo(
-    () =>
-      (customers || [])
-        .map((customer) => ({
-          customer,
-          ...summarizeCustomerOrders(customer),
-        }))
-        .sort(
-          (a, b) => b.orderAmount - a.orderAmount || a.customer.name.localeCompare(b.customer.name),
-        ),
-    [customers],
-  );
-
-  const total = useMemo(
-    () =>
-      rows.reduce(
-        (acc, row) => ({
-          orderAmount: acc.orderAmount + row.orderAmount,
-          unfinishedOrders: acc.unfinishedOrders + row.unfinishedOrders,
-          completedOrders: acc.completedOrders + row.completedOrders,
-          statementAmount: acc.statementAmount + row.statementAmount,
-          paidAmount: acc.paidAmount + row.paidAmount,
-          unpaidAmount: acc.unpaidAmount + row.unpaidAmount,
-        }),
-        {
-          orderAmount: 0,
-          unfinishedOrders: 0,
-          completedOrders: 0,
-          statementAmount: 0,
-          paidAmount: 0,
-          unpaidAmount: 0,
-        },
-      ),
-    [rows],
-  );
-
-  if (!rows.length) return null;
-
-  const openCustomer = (customerId) => {
-    if (customerId) onSelectCustomer(customerId);
-  };
-
-  return (
-    <section className="customer-statistics-panel" aria-label={t("统计专区")}>
-      <div className="statistics-head">
-        <div>
-          <p className="eyebrow">CUSTOMER STATISTICS</p>
-          <h3>{t("统计专区")}</h3>
-        </div>
-        <span>{t("{count} 个客户", { count: rows.length })}</span>
-      </div>
-      <div className="statistics-table-wrap">
-        <table className="statistics-table">
-          <thead>
-            <tr>
-              <th>{t("客户")}</th>
-              <th>{t("订单额")}</th>
-              <th>{t("未完成订单")}</th>
-              <th>{t("已完成订单")}</th>
-              <th>{t("已做对账单金额")}</th>
-              <th>{t("已付金额")}</th>
-              <th>{t("未付金额")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row) => (
-              <tr
-                key={row.customer.id}
-                tabIndex={0}
-                onClick={() => openCustomer(row.customer.id)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    openCustomer(row.customer.id);
-                  }
-                }}
-              >
-                <td className="statistics-customer">{row.customer.name}</td>
-                <td>{formatCurrency(row.orderAmount, language)}</td>
-                <td>{row.unfinishedOrders}</td>
-                <td>{row.completedOrders}</td>
-                <td>{formatCurrency(row.statementAmount, language)}</td>
-                <td>{formatCurrency(row.paidAmount, language)}</td>
-                <td className={row.unpaidAmount > 0 ? "statistics-unpaid" : ""}>
-                  {formatCurrency(row.unpaidAmount, language)}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-          <tfoot>
-            <tr>
-              <td>{t("合计")}</td>
-              <td>{formatCurrency(total.orderAmount, language)}</td>
-              <td>{total.unfinishedOrders}</td>
-              <td>{total.completedOrders}</td>
-              <td>{formatCurrency(total.statementAmount, language)}</td>
-              <td>{formatCurrency(total.paidAmount, language)}</td>
-              <td>{formatCurrency(total.unpaidAmount, language)}</td>
-            </tr>
-          </tfoot>
-        </table>
-      </div>
-    </section>
-  );
-}
-
-function DashboardView({ customers, alertMap, onCreateCustomer, onSelectCustomer }) {
-  const { t } = useI18n();
-  const overdueOrders = useMemo(() => {
-    const todayTs = new Date().setHours(0, 0, 0, 0);
-    const result = [];
-    for (const customer of customers) {
-      for (const order of customer.orders || []) {
-        if (!isOpenOrder(order.status) || !order.dueDate) continue;
-        const dueTs = new Date(order.dueDate).setHours(0, 0, 0, 0);
-        if (dueTs < todayTs) {
-          result.push({
-            ...order,
-            customerName: customer.name,
-            customerId: customer.id,
-            overdue: true,
-          });
-        } else if (dueTs <= todayTs + 3 * 86400000) {
-          result.push({
-            ...order,
-            customerName: customer.name,
-            customerId: customer.id,
-            overdue: false,
-          });
-        }
-      }
-    }
-    result.sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
-    return result.slice(0, 20);
-  }, [customers]);
-
-  const recentOrders = useMemo(() => {
-    return customers
-      .flatMap((c) =>
-        (c.orders || []).map((o) => ({ ...o, customerName: c.name, customerId: c.id })),
-      )
-      .filter((o) => o.date)
-      .sort((a, b) => new Date(b.date) - new Date(a.date))
-      .slice(0, 10);
-  }, [customers]);
-
-  return (
-    <div className="dashboard-view">
-      <div className="dashboard-hero">
-        <div className="dashboard-hero-text">
-          <h2 style={{ fontSize: "clamp(22px, 2.5vw, 32px)", marginBottom: 8, lineHeight: 1.2 }}>
-            {customers.length
-              ? t("{customers} 个客户 · {orders} 个进行中订单", {
-                  customers: customers.length,
-                  orders: customers
-                    .flatMap((c) => c.orders || [])
-                    .filter((o) => isOpenOrder(o.status)).length,
-                })
-              : t("欢迎使用泡沫厂客户管理系统")}
-          </h2>
-          <p style={{ color: "var(--muted)", margin: 0 }}>
-            {t("选择一个客户开始操作，或使用全局搜索快速定位订单/送货单")}
-          </p>
-        </div>
-        <button
-          className="primary-action compact"
-          type="button"
-          onClick={onCreateCustomer}
-          style={{ padding: "0 20px", minHeight: 40 }}
-        >
-          <UserRoundPlus size={18} />
-          {t("新增客户")}
-        </button>
-      </div>
-
-      {overdueOrders.length > 0 && (
-        <section className="dashboard-section">
-          <h4 style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <AlertTriangle size={16} style={{ color: "var(--red)" }} />
-            {t("待跟进订单（逾期 & 即将到期）")}
-          </h4>
-          <div className="dashboard-order-list">
-            {overdueOrders.map((order) => (
-              <button
-                key={order.id}
-                className={`dashboard-order-row ${order.overdue ? "overdue" : "warning"}`}
-                type="button"
-                onClick={() => onSelectCustomer(order.customerId)}
-              >
-                <span className="dashboard-order-customer">{order.customerName}</span>
-                <span className="dashboard-order-no">{order.orderNo || order.product}</span>
-                <span className="dashboard-order-product">{order.product}</span>
-                <span className="dashboard-order-qty">{order.quantity || 0}</span>
-                <span
-                  className="dashboard-order-due"
-                  style={{ color: order.overdue ? "var(--red)" : "var(--amber)" }}
-                >
-                  {order.dueDate}
-                  {order.overdue ? t(" · 已逾期") : t(" · 即将到期")}
-                </span>
-                <span className={`status-chip ${statusClass(order.status)}`}>
-                  {t(normalizeOrderStatus(order.status))}
-                </span>
-              </button>
-            ))}
-          </div>
-        </section>
-      )}
-
-      {recentOrders.length > 0 && (
-        <section className="dashboard-section">
-          <h4>{t("最近订单")}</h4>
-          <div className="dashboard-order-list">
-            {recentOrders.map((order) => (
-              <button
-                key={order.id}
-                className="dashboard-order-row"
-                type="button"
-                onClick={() => onSelectCustomer(order.customerId)}
-              >
-                <span className="dashboard-order-customer">{order.customerName}</span>
-                <span className="dashboard-order-no">{order.orderNo || order.product}</span>
-                <span className="dashboard-order-product">{order.product}</span>
-                <span className="dashboard-order-qty">{order.quantity || 0}</span>
-                <span className="dashboard-order-due">{order.date}</span>
-                <span className={`status-chip ${statusClass(order.status)}`}>
-                  {t(normalizeOrderStatus(order.status))}
-                </span>
-              </button>
-            ))}
-          </div>
-        </section>
-      )}
-
-      {customers.length === 0 && (
-        <div className="dashboard-empty">
-          <Boxes size={48} style={{ color: "var(--muted)", marginBottom: 16 }} />
-          <p style={{ color: "var(--muted)", fontSize: 16 }}>{t("暂无客户数据")}</p>
-          <button
-            className="primary-action compact"
-            type="button"
-            onClick={onCreateCustomer}
-            style={{ marginTop: 12 }}
-          >
-            <UserRoundPlus size={18} />
-            {t("创建第一个客户")}
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function SettingsModal({
-  settings,
-  mobileUsers = [],
-  mobileDisplaySettings = defaultMobileDisplaySettings,
-  mobileOrderFieldOptions = [],
-  onChangeMobileUserRole,
-  onRefreshMobileUsers,
-  onClose,
-  onSave,
-}) {
-  const { t } = useI18n();
-  const [form, setForm] = useState({
-    companyName: settings.companyName || "",
-    companyNameEn: settings.companyNameEn || "",
-    companyAddress: settings.companyAddress || "",
-    companyAddressEn: settings.companyAddressEn || "",
-    companyPhone: settings.companyPhone || "",
-    companyTaxNo: settings.companyTaxNo || settings.taxNo || "",
-    defaultDueDays: settings.defaultDueDays || "7",
-    orderNoPrefix: settings.orderNoPrefix || "",
-    language: normalizeLanguage(settings.language),
-  });
-  const [displayForm, setDisplayForm] = useState(() =>
-    normalizeMobileDisplaySettings(mobileDisplaySettings),
-  );
-  const [saving, setSaving] = useState(false);
-
-  const update = (field, value) => setForm((c) => ({ ...c, [field]: value }));
-  const toggleDisplayField = (group, field) => {
-    setDisplayForm((current) => {
-      const list = current[group] || [];
-      return {
-        ...current,
-        [group]: list.includes(field) ? list.filter((item) => item !== field) : [...list, field],
-      };
-    });
-  };
-
-  const submit = async (e) => {
-    e.preventDefault();
-    setSaving(true);
-    try {
-      await onSave(form, displayForm);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="modal-backdrop" role="presentation">
-      <form className="modal-card" onSubmit={submit}>
-        <div className="modal-head">
-          <div>
-            <p className="eyebrow">SYSTEM SETTINGS</p>
-            <h3>{t("系统设置")}</h3>
-          </div>
-          <button className="icon-button" type="button" onClick={onClose} title={t("关闭")}>
-            <X size={18} />
-          </button>
-        </div>
-
-        <div className="settings-section">
-          <h4>{t("语言")}</h4>
-          <div className="settings-grid">
-            <label className="field">
-              <span>{t("界面语言")}</span>
-              <select value={form.language} onChange={(e) => update("language", e.target.value)}>
-                {languageOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-        </div>
-
-        <div className="settings-section">
-          <h4>{t("公司信息（用于送货单打印）")}</h4>
-          <div className="settings-grid">
-            <label className="field">
-              <span>{t("公司名称")}</span>
-              <input
-                value={form.companyName}
-                onChange={(e) => update("companyName", e.target.value)}
-                placeholder={t("例如：XX泡沫包装有限公司")}
-              />
-            </label>
-            <label className="field">
-              <span>{t("公司名称")} (English)</span>
-              <input
-                value={form.companyNameEn}
-                onChange={(e) => update("companyNameEn", e.target.value)}
-                placeholder="e.g. XX FOAM PACKAGING CO.,LTD"
-              />
-            </label>
-            <label className="field">
-              <span>{t("联系电话")}</span>
-              <input
-                value={form.companyPhone}
-                onChange={(e) => update("companyPhone", e.target.value)}
-                placeholder={t("例如：0757-8888 8888")}
-              />
-            </label>
-            <label className="field" style={{ gridColumn: "1 / -1" }}>
-              <span>{t("公司地址")}</span>
-              <input
-                value={form.companyAddress}
-                onChange={(e) => update("companyAddress", e.target.value)}
-                placeholder={t("例如：佛山市南海区XX工业园")}
-              />
-            </label>
-            <label className="field" style={{ gridColumn: "1 / -1" }}>
-              <span>{t("公司地址")} (English)</span>
-              <input
-                value={form.companyAddressEn}
-                onChange={(e) => update("companyAddressEn", e.target.value)}
-                placeholder="e.g. XX Industrial Park, Nanhai, Foshan"
-              />
-            </label>
-            <label className="field">
-              <span>{t("税号")}</span>
-              <input
-                value={form.companyTaxNo}
-                onChange={(e) => update("companyTaxNo", e.target.value)}
-                placeholder={t("纳税人识别号")}
-              />
-            </label>
-          </div>
-        </div>
-
-        <div className="settings-section">
-          <h4>{t("订单默认设置")}</h4>
-          <div className="settings-grid">
-            <label className="field">
-              <span>{t("默认交期天数（新增订单时交期=今天+N天）")}</span>
-              <input
-                type="number"
-                value={form.defaultDueDays}
-                onChange={(e) => update("defaultDueDays", e.target.value)}
-                min="0"
-                max="365"
-              />
-            </label>
-            <label className="field">
-              <span>{t("订单号前缀（自动生成，留空则不自动生成）")}</span>
-              <input
-                value={form.orderNoPrefix}
-                onChange={(e) => update("orderNoPrefix", e.target.value)}
-                placeholder={t("例如：KH-")}
-              />
-            </label>
-          </div>
-        </div>
-
-        <div className="settings-section">
-          <h4>{t("手机端订单字段显示")}</h4>
-          <p className="settings-empty">{t("员工端只按这里配置的字段显示订单卡片和订单详情。")}</p>
-          <MobileDisplayFieldPicker
-            title={t("订单卡片显示字段")}
-            fields={displayForm.cardFields}
-            options={mobileOrderFieldOptions}
-            onToggle={(field) => toggleDisplayField("cardFields", field)}
-          />
-          <MobileDisplayFieldPicker
-            title={t("订单详情显示字段")}
-            fields={displayForm.detailFields}
-            options={mobileOrderFieldOptions}
-            onToggle={(field) => toggleDisplayField("detailFields", field)}
-          />
-        </div>
-
-        <div className="settings-section">
-          <div className="settings-section-head">
-            <h4>{t("员工账号设置查看")}</h4>
-            <button className="ghost-button compact" type="button" onClick={onRefreshMobileUsers}>
-              <RotateCcw size={14} />
-              {t("刷新")}
-            </button>
-          </div>
-          {mobileUsers.length ? (
-            <div className="mobile-user-list">
-              {mobileUsers.map((user) => (
-                <div className="mobile-user-row" key={user.id}>
-                  <div className="mobile-user-avatar">
-                    {user.avatar ? (
-                      <img src={user.avatar} alt={user.name || t("员工头像")} />
-                    ) : (
-                      <span>{String(user.name || user.phone || "员").slice(0, 1)}</span>
-                    )}
-                  </div>
-                  <div className="mobile-user-info">
-                    <strong>{user.name || t("未填写")}</strong>
-                    <span>{user.phone || "—"}</span>
-                    <small>
-                      {t("注册")}：{formatDateTimeForDisplay(user.createdAt)}
-                    </small>
-                    <small>
-                      {t("更新")}：{formatDateTimeForDisplay(user.updatedAt)}
-                    </small>
-                  </div>
-                  <select
-                    value={
-                      ["pending", "admin", "employee"].includes(user.role) ? user.role : "pending"
-                    }
-                    onChange={(event) => onChangeMobileUserRole(user.id, event.target.value)}
-                  >
-                    <option value="pending">{t("普通用户")}</option>
-                    <option value="employee">{t("员工")}</option>
-                    <option value="admin">{t("管理员")}</option>
-                  </select>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="settings-empty">
-              {t("暂无手机注册账号。员工先在手机端注册后，这里会显示账号。")}
-            </p>
-          )}
-        </div>
-
-        <div className="modal-actions">
-          <button className="ghost-button" type="button" onClick={onClose} disabled={saving}>
-            {t("取消")}
-          </button>
-          <button className="primary-action compact" type="submit" disabled={saving}>
-            <Save size={17} />
-            {saving ? t("保存中") : t("保存设置")}
-          </button>
-        </div>
-      </form>
-    </div>
-  );
-}
-
-function MobileDisplayFieldPicker({ title, fields, options, onToggle }) {
-  const { t } = useI18n();
-  const selected = new Set(fields || []);
-  return (
-    <div className="mobile-display-picker">
-      <div className="mobile-display-picker-head">
-        <strong>{title}</strong>
-        <span>{t("已选择 {count} 项", { count: selected.size })}</span>
-      </div>
-      <div className="mobile-display-field-list">
-        {options.map((option) => {
-          const active = selected.has(option.field);
-          return (
-            <button
-              key={`${title}-${option.field}`}
-              type="button"
-              className={`mobile-display-field-chip ${active ? "active" : ""}`}
-              onClick={() => onToggle(option.field)}
-            >
-              {option.label}
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function KanbanBoard({ customer, onStatusChange, onSelectOrder }) {
-  const { t } = useI18n();
-  const orders = (customer.orders || []).filter((o) => normalizeOrderStatus(o.status) !== "已付款");
-  const columns = statusOptions.filter((s) => s !== "已付款");
-  const ordersByStatus = Object.fromEntries(columns.map((s) => [s, []]));
-  for (const order of orders) {
-    const s = normalizeOrderStatus(order.status);
-    if (ordersByStatus[s]) ordersByStatus[s].push(order);
-  }
-
-  return (
-    <div className="kanban-board">
-      {columns.map((status) => (
-        <div className="kanban-column" key={status}>
-          <div className="kanban-column-header">
-            <span className={`status-chip ${statusClass(status)}`} style={{ fontSize: 12 }}>
-              {t(status)}
-            </span>
-            <span className="count">{ordersByStatus[status]?.length || 0}</span>
-          </div>
-          <div className="kanban-column-body">
-            {ordersByStatus[status]?.map((order) => (
-              <div
-                className="kanban-card"
-                key={order.id}
-                draggable
-                onDragStart={(e) => e.dataTransfer.setData("orderId", order.id)}
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  const orderId = e.dataTransfer.getData("orderId");
-                  if (orderId) onStatusChange(orderId, status);
-                }}
-                onClick={() => onSelectOrder(order.id)}
-              >
-                <strong>{order.orderNo || order.product}</strong>
-                <small>
-                  {order.product || ""} · {order.quantity || 0} {t("件")}
-                </small>
-                <small>{order.dueDate ? t("交期 {date}", { date: order.dueDate }) : ""}</small>
-              </div>
-            ))}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function generateStatement(customer, settings = {}, t = defaultTranslator) {
-  const billableOrders = (customer.orders || []).filter((o) => {
-    const s = normalizeOrderStatus(o.status);
-    return s === "已送货" || s === "已开对账单" || s === "已付款";
-  });
-  if (!billableOrders.length) {
-    alert(
-      t('客户 "{name}" 没有可对账的订单（需要已送货/已开对账单/已付款状态）。', {
-        name: customer.name,
-      }),
-    );
-    return;
-  }
-
-  const total = billableOrders.reduce((sum, o) => sum + Number(o.amount || 0), 0);
-  const companyName = settings.companyName || t("泡沫厂");
-  const totalText = formatCurrencyForLanguage(total, settings.language);
-  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${t("对账单")} - ${customer.name}</title>
-<style>
-  body { font-family: "PingFang SC","Microsoft YaHei",sans-serif; padding:40px; max-width:800px; margin:0 auto; color:#111; font-size:13px; }
-  h1 { text-align:center; font-size:20px; margin-bottom:4px; }
-  .subtitle { text-align:center; color:#666; font-size:12px; margin-bottom:20px; }
-  .info { display:flex; justify-content:space-between; margin-bottom:16px; }
-  .info div { line-height:1.8; }
-  table { width:100%; border-collapse:collapse; margin-bottom:16px; }
-  th { background:#f5f5f5; text-align:left; padding:8px 10px; border-bottom:2px solid #333; font-size:12px; }
-  td { padding:8px 10px; border-bottom:1px solid #ddd; }
-  .num { text-align:right; }
-  .total { text-align:right; font-weight:700; font-size:15px; margin-top:12px; }
-  .footer { margin-top:24px; padding-top:12px; border-top:1px solid #ddd; display:flex; justify-content:space-between; color:#666; font-size:12px; }
-  @media print { body { padding:20px; } }
-</style></head><body>
-<h1>${t("对 账 单")}</h1>
-<p class="subtitle">${companyName}</p>
-<div class="info">
-  <div><strong>${t("客户")}：</strong>${customer.name}<br/><strong>${t("联系人")}：</strong>${customer.contact || "-"}<br/><strong>${t("电话")}：</strong>${customer.phone || "-"}</div>
-  <div><strong>${t("日期")}：</strong>${today()}<br/><strong>${t("账期")}：</strong>${customer.paymentTerm || "-"}<br/><strong>${t("地址")}：</strong>${customer.address || "-"}</div>
-</div>
-<table>
-<thead><tr><th>${t("订单号")}</th><th>${t("日期")}</th><th>${t("产品")}</th><th class="num">${t("数量")}</th><th class="num">${t("金额")}</th><th>${t("状态")}</th></tr></thead>
-<tbody>
-${billableOrders.map((o) => `<tr><td>${o.orderNo || "-"}</td><td>${o.date || "-"}</td><td>${o.product || "-"}</td><td class="num">${o.quantity || 0}</td><td class="num">${Number(o.amount || 0).toFixed(2)}</td><td>${t(normalizeOrderStatus(o.status))}</td></tr>`).join("")}
-</tbody>
-</table>
-<p class="total">${t("合计金额：")} ${totalText}</p>
-<div class="footer">
-  <div>${t("制单人：___________")}</div>
-  <div>${t("客户确认：___________")}</div>
-</div>
-</body></html>`;
-
-  const w = window.open("", "_blank", "width=900,height=700");
-  if (w) {
-    w.document.write(html);
-    w.document.close();
-  }
-}
 
 export default App;

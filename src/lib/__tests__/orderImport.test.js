@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import ExcelJS from 'exceljs';
 import {
   normalizeHeader,
   normalizeDate,
@@ -6,6 +7,7 @@ import {
   matchField,
   detectHeader,
   buildMappings,
+  parseOrderFile,
 } from '../orderImport.js';
 
 // ── normalizeHeader ───────────────────────────────────────────────────
@@ -320,5 +322,41 @@ describe('buildMappings', () => {
     expect(mappings[1].field).toBeUndefined();
     expect(mappings[1].customField).toBeTruthy();
     expect(mappings[2].field).toBe('date');
+  });
+});
+
+describe('parseOrderFile', () => {
+  it('should import xlsx files with empty cells between populated columns', async () => {
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Orders');
+    worksheet.getCell('A1').value = '订单号';
+    worksheet.getCell('C1').value = '产品名称';
+    worksheet.getCell('D1').value = '数量';
+    worksheet.getCell('A2').value = 'PO-001';
+    worksheet.getCell('C2').value = '海绵';
+    worksheet.getCell('D2').value = 12;
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    const file = {
+      name: 'orders.xlsx',
+      arrayBuffer: async () => buffer,
+    };
+
+    const result = await parseOrderFile(file);
+
+    expect(result.columns.map(column => column.field)).toEqual([
+      'orderNo',
+      'import_未命名列2',
+      'product',
+      'quantity',
+    ]);
+    expect(result.rows).toEqual([
+      {
+        orderNo: 'PO-001',
+        import_未命名列2: '',
+        product: '海绵',
+        quantity: 12,
+      },
+    ]);
   });
 });

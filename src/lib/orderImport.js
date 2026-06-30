@@ -107,7 +107,7 @@ async function parseExcel(file) {
     row.eachCell({ includeEmpty: false }, (cell, colNumber) => {
       values[colNumber - 1] = cellText(cell.value);
     });
-    rows.push(values);
+    rows.push(densifyRow(values));
   });
   return rows;
 }
@@ -142,11 +142,16 @@ function detectHeader(rows) {
     }
   }
 
-  const headers = (rows[bestIndex] || []).map((header, index) =>
-    String(header ?? '').trim() || `未命名列${index + 1}`,
+  const headerRow = rows[bestIndex] || [];
+  const headers = Array.from({ length: headerRow.length }, (_, index) =>
+    String(headerRow[index] ?? '').trim() || `未命名列${index + 1}`,
   );
 
   return { headerIndex: bestIndex, headers };
+}
+
+function densifyRow(row = []) {
+  return Array.from({ length: row.length }, (_, index) => row[index] ?? '');
 }
 
 function buildMappings(headers) {

@@ -151,3 +151,31 @@ model AppSetting {
 
   @@map("app_settings")
 }
+
+model AttendanceRecord {
+  id        String   @id @db.VarChar(191)
+  userId    String   @map("user_id") @db.VarChar(191)
+  date      String   @db.VarChar(10)
+  checkIn   DateTime? @map("check_in")
+  checkOut  DateTime? @map("check_out")
+  note      String   @default("") @db.VarChar(255)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([userId, date])
+  @@map("attendance_records")
+}
+
+model LeaveRecord {
+  id        String   @id @db.VarChar(191)
+  userId    String   @map("user_id") @db.VarChar(191)
+  type      String   @db.VarChar(50)
+  startDate String   @map("start_date") @db.VarChar(10)
+  endDate   String   @map("end_date") @db.VarChar(10)
+  reason    String   @default("") @db.VarChar(500)
+  status    String   @default("pending") @db.VarChar(50)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("leave_records")
+}
