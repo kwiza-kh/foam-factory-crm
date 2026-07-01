@@ -1,6 +1,6 @@
 export const defaultAttendanceRules = {
   morningStartOptions: ["07:00", "08:00"],
-  afternoonStartOptions: ["13:00", "14:00"],
+  afternoonStart: "13:00",
   workStart: "07:00",
   lunchStart: "12:00",
   lunchEnd: "13:00",
@@ -41,10 +41,7 @@ export function normalizeAttendanceRules(rules = {}) {
     merged.morningStartOptions,
     defaultAttendanceRules.morningStartOptions,
   );
-  const afternoonStartOptions = normalizeTimeOptions(
-    merged.afternoonStartOptions,
-    defaultAttendanceRules.afternoonStartOptions,
-  );
+  const afternoonStart = String(merged.afternoonStart || defaultAttendanceRules.afternoonStart);
   const lunchBreakMin =
     minutesBetween(merged.lunchStart, merged.lunchEnd) || Number(merged.lunchBreakMin) || 0;
   const payDays = Array.isArray(merged.payDays) && merged.payDays.length
@@ -54,7 +51,7 @@ export function normalizeAttendanceRules(rules = {}) {
   return {
     ...merged,
     morningStartOptions,
-    afternoonStartOptions,
+    afternoonStart,
     workStart: morningStartOptions[0],
     lunchBreakMin,
     workDaysPerMonth: Number(merged.workDaysPerMonth) || defaultAttendanceRules.workDaysPerMonth,
@@ -69,7 +66,7 @@ export function normalizeAttendanceRules(rules = {}) {
 export function dailyWorkMinutes(rules = {}) {
   const normalized = normalizeAttendanceRules(rules);
   const morning = minutesBetween(normalized.morningStartOptions[0], normalized.lunchStart);
-  const afternoon = minutesBetween(normalized.afternoonStartOptions[0], normalized.workEnd);
+  const afternoon = minutesBetween(normalized.afternoonStart, normalized.workEnd);
   const segmented = morning + afternoon;
   if (segmented > 0) return segmented;
   return Math.max(
@@ -83,7 +80,7 @@ export function resolveSegmentStart(actualMinutes, startOptions, toleranceMin) {
   for (const start of sorted) {
     if (actualMinutes <= start + toleranceMin) return start;
   }
-  return actualMinutes;
+  return Math.max(actualMinutes, sorted[sorted.length - 1] + 60);
 }
 
 function recordMinuteOfDay(value) {
@@ -126,7 +123,7 @@ export function calculateAttendanceMinutes(record, rules = {}) {
     : segmentMinutes({
         checkIn: Math.max(checkIn, lunchEnd),
         checkOut,
-        starts: normalized.afternoonStartOptions,
+        starts: [normalized.afternoonStart],
         toleranceMin,
       });
 

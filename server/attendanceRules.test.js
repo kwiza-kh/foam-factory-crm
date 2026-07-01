@@ -23,19 +23,22 @@ function record(checkIn, checkOut) {
 }
 
 describe("attendance rules", () => {
-  it("uses 7:00 and 8:00 as flexible morning starts with tolerance", () => {
+  it("uses 7:00 and 8:00 as flexible morning starts, then shifts late arrivals by one hour", () => {
     const rules = normalizeAttendanceRules({ lateToleMin: 10 });
 
     expect(calculateAttendanceMinutes(record("07:05", "12:00"), rules)).toBe(300);
     expect(calculateAttendanceMinutes(record("07:11", "12:00"), rules)).toBe(240);
-    expect(calculateAttendanceMinutes(record("08:11", "12:00"), rules)).toBe(229);
+    expect(calculateAttendanceMinutes(record("08:11", "12:00"), rules)).toBe(180);
+    expect(calculateAttendanceMinutes(record("09:20", "12:00"), rules)).toBe(160);
   });
 
-  it("applies the same flexible start rule to the afternoon", () => {
+  it("uses one afternoon start and shifts late arrivals by one hour", () => {
     const rules = normalizeAttendanceRules({ lateToleMin: 10 });
 
+    expect(rules.afternoonStart).toBe("13:00");
     expect(calculateAttendanceMinutes(record("13:05", "18:00"), rules)).toBe(300);
     expect(calculateAttendanceMinutes(record("13:11", "18:00"), rules)).toBe(240);
+    expect(calculateAttendanceMinutes(record("14:05", "18:00"), rules)).toBe(235);
     expect(calculateAttendanceMinutes(record("14:11", "18:00"), rules)).toBe(229);
   });
 

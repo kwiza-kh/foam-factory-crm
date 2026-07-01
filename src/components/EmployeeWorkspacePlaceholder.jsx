@@ -28,7 +28,7 @@ function todayMonth() {
 
 const DEFAULT_RULES = {
   morningStartOptions: ["07:00", "08:00"],
-  afternoonStartOptions: ["13:00", "14:00"],
+  afternoonStart: "13:00",
   workStart: "07:00",
   lunchStart: "12:00",
   lunchEnd: "13:00",
@@ -64,16 +64,13 @@ function normalizeRules(rules) {
     merged.morningStartOptions,
     DEFAULT_RULES.morningStartOptions,
   );
-  const afternoonStartOptions = normalizeTimeOptions(
-    merged.afternoonStartOptions,
-    DEFAULT_RULES.afternoonStartOptions,
-  );
+  const afternoonStart = String(merged.afternoonStart || DEFAULT_RULES.afternoonStart);
   const lunchBreakMin =
     minutesBetween(merged.lunchStart, merged.lunchEnd) || Number(merged.lunchBreakMin) || 0;
   return {
     ...merged,
     morningStartOptions,
-    afternoonStartOptions,
+    afternoonStart,
     workStart: morningStartOptions[0],
     lunchBreakMin,
     workDaysPerMonth: Number(merged.workDaysPerMonth) || DEFAULT_RULES.workDaysPerMonth,
@@ -114,8 +111,8 @@ function buildScheduleSegments(rules) {
     {
       key: "afternoon",
       label: "下午上班",
-      time: `${r.afternoonStartOptions.join(" / ")} - ${r.workEnd}`,
-      minutes: minutesBetween(r.afternoonStartOptions[0], r.workEnd),
+      time: `${r.afternoonStart} - ${r.workEnd}`,
+      minutes: minutesBetween(r.afternoonStart, r.workEnd),
       icon: Clock,
     },
   ];
@@ -354,7 +351,7 @@ function EmployeeScheduleSummary({ rules, payrollCalendar, employeeCount, pendin
         <div>
           <span className="employee-schedule-label">今日标准班次</span>
           <strong>
-            {normalized.morningStartOptions.join(" / ")} · {normalized.afternoonStartOptions.join(" / ")}
+            {normalized.morningStartOptions.join(" / ")} · 下午 {normalized.afternoonStart}
           </strong>
         </div>
         <div className="employee-schedule-meta">
@@ -517,10 +514,7 @@ function AttendanceRules({ rules, payrollCalendar, onSave }) {
   const set = (k, v) => setForm((p) => ({ ...p, [k]: v }));
   const setTimeOption = (key, index, value) => {
     setForm((p) => {
-      const fallback = key === "morningStartOptions"
-        ? DEFAULT_RULES.morningStartOptions
-        : DEFAULT_RULES.afternoonStartOptions;
-      const next = normalizeTimeOptions(p[key], fallback);
+      const next = normalizeTimeOptions(p[key], DEFAULT_RULES.morningStartOptions);
       next[index] = value;
       return { ...p, [key]: next };
     });
@@ -649,21 +643,13 @@ function AttendanceRules({ rules, payrollCalendar, onSave }) {
             />
           </div>
           <div className="rules-row">
-            <label className="rules-label">下午可选上班</label>
-            <div className="rules-dual-inputs">
-              <input
-                type="time"
-                className="rules-input"
-                value={normalizedForm.afternoonStartOptions[0]}
-                onChange={(e) => setTimeOption("afternoonStartOptions", 0, e.target.value)}
-              />
-              <input
-                type="time"
-                className="rules-input"
-                value={normalizedForm.afternoonStartOptions[1]}
-                onChange={(e) => setTimeOption("afternoonStartOptions", 1, e.target.value)}
-              />
-            </div>
+            <label className="rules-label">下午上班</label>
+            <input
+              type="time"
+              className="rules-input"
+              value={normalizedForm.afternoonStart}
+              onChange={(e) => set("afternoonStart", e.target.value)}
+            />
           </div>
           <div className="rules-row">
             <label className="rules-label">下午下班时间</label>

@@ -666,7 +666,7 @@ function todayDate() {
 
 const defaultAttendanceRules = {
   morningStartOptions: ["07:00", "08:00"],
-  afternoonStartOptions: ["13:00", "14:00"],
+  afternoonStart: "13:00",
   workStart: "07:00",
   lunchStart: "12:00",
   lunchEnd: "13:00",
@@ -697,16 +697,13 @@ function normalizeAttendanceRules(rules = {}) {
     merged.morningStartOptions,
     defaultAttendanceRules.morningStartOptions,
   );
-  const afternoonStartOptions = normalizeTimeOptions(
-    merged.afternoonStartOptions,
-    defaultAttendanceRules.afternoonStartOptions,
-  );
+  const afternoonStart = String(merged.afternoonStart || defaultAttendanceRules.afternoonStart);
   const lunchBreakMin =
     minutesBetween(merged.lunchStart, merged.lunchEnd) || Number(merged.lunchBreakMin) || 0;
   return {
     ...merged,
     morningStartOptions,
-    afternoonStartOptions,
+    afternoonStart,
     workStart: morningStartOptions[0],
     lunchBreakMin,
     workDaysPerMonth: Number(merged.workDaysPerMonth) || defaultAttendanceRules.workDaysPerMonth,
@@ -748,8 +745,8 @@ function buildAttendanceScheduleSegments(rules = {}) {
     {
       key: "afternoon",
       label: "下午上班",
-      time: `${normalized.afternoonStartOptions.join(" / ")} - ${normalized.workEnd}`,
-      minutes: minutesBetween(normalized.afternoonStartOptions[0], normalized.workEnd),
+      time: `${normalized.afternoonStart} - ${normalized.workEnd}`,
+      minutes: minutesBetween(normalized.afternoonStart, normalized.workEnd),
     },
   ];
 }
@@ -2738,7 +2735,7 @@ function MobileApp() {
                 {normalizedAttendanceRules.morningStartOptions.join(" / ")}
               </Text>
               <Text style={styles.attendanceScheduleSubtitle}>
-                下午 {normalizedAttendanceRules.afternoonStartOptions.join(" / ")} · 下班 {normalizedAttendanceRules.workEnd}
+                下午 {normalizedAttendanceRules.afternoonStart} · 下班 {normalizedAttendanceRules.workEnd}
               </Text>
             </View>
             <View style={styles.attendanceScheduleTotal}>
