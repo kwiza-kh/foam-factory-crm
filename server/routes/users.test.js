@@ -8,6 +8,10 @@ const prisma = {
     findUnique: vi.fn(),
     update: vi.fn(),
   },
+  appSetting: {
+    findUnique: vi.fn(),
+    upsert: vi.fn(),
+  },
 };
 
 vi.mock("../db.js", () => ({ prisma }));
@@ -34,6 +38,8 @@ describe("users auth routes", () => {
     delete process.env.SUPER_ADMIN_PHONE;
     delete process.env.SUPER_ADMIN_PASSWORD;
     delete process.env.SUPER_ADMIN_NAME;
+    prisma.appSetting.findUnique.mockResolvedValue(null);
+    prisma.appSetting.upsert.mockResolvedValue({});
   });
 
   it("logs in with phone and password and returns a reusable session token", async () => {
@@ -181,5 +187,56 @@ describe("users auth routes", () => {
       role: "admin",
       token: "env-session-token",
     });
+  });
+
+  it("registers an Expo push token for the current mobile user", async () => {
+    prisma.mobileUser.findUnique.mockResolvedValue({
+      id: "user-1",
+      name: "Worker",
+      phone: "13800138000",
+      role: "employee",
+      avatar: "",
+      passwordHash: hashPassword("secret123"),
+      token: "session-token-1",
+      createdAt: new Date("2026-01-01T00:00:00.000Z"),
+      updatedAt: new Date("2026-01-02T00:00:00.000Z"),
+    });
+
+    const res = await request(makeApp())
+      .post("/api/users/push-token")
+      .set("X-Mobile-User-Token", "session-token-1")
+      .send({ token: "ExpoPushToken[token-1]", platform: "ios" })
+      .expect(200);
+
+    expect(res.body).toEqual({ ok: true });
+    expect(prisma.appSetting.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { key: "mobilePushTokens" },
+        update: {
+          data: {
+            tokens: [
+              expect.objectContaining({
+                token: "ExpoPushToken[token-1]",
+                userId: "user-1",
+                userName: "Worker",
+                platform: "ios",
+              }),
+            ],
+          },
+        },
+      }),
+    );
+  });
+
+  it("rejects push token registration without a mobile session", async () => {
+    prisma.mobileUser.findUnique.mockResolvedValue(null);
+
+    const res = await request(makeApp())
+      .post("/api/users/push-token")
+      .send({ token: "ExpoPushToken[token-1]", platform: "ios" })
+      .expect(401);
+
+    expect(res.body).toEqual({ error: "未注册或账号不存在" });
+    expect(prisma.appSetting.upsert).not.toHaveBeenCalled();
   });
 });

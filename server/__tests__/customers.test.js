@@ -13,6 +13,8 @@ const mockPrisma = vi.hoisted(() => ({
   order: {
     findFirst: vi.fn(),
     findMany: vi.fn(),
+    deleteMany: vi.fn(),
+    upsert: vi.fn(),
     update: vi.fn(),
   },
   delivery: {
@@ -40,9 +42,13 @@ const mockPrisma = vi.hoisted(() => ({
   },
   $transaction: vi.fn(),
 }));
+const mockNotifyProductionSchedulePublished = vi.hoisted(() => vi.fn());
 
 vi.mock("../db.js", () => ({
   prisma: mockPrisma,
+}));
+vi.mock("../pushNotifications.js", () => ({
+  notifyProductionSchedulePublished: mockNotifyProductionSchedulePublished,
 }));
 
 import request from "supertest";
@@ -66,6 +72,8 @@ describe("Customers API Routes", () => {
     mockPrisma.mobileUser.findUnique.mockResolvedValue(null);
     mockPrisma.delivery.findMany.mockResolvedValue([]);
     mockPrisma.appSetting.findUnique.mockResolvedValue(null);
+    mockPrisma.$transaction.mockImplementation(async (callback) => callback(mockPrisma));
+    mockNotifyProductionSchedulePublished.mockResolvedValue();
     app = createApp();
   });
 
@@ -305,6 +313,95 @@ describe("Customers API Routes", () => {
   });
 
   // ── PATCH /api/customers/:id/orders/:orderId/status ─────────────
+
+  describe("PUT /api/customers/:id/:tableKey", () => {
+    it("should notify mobile devices when desktop saves newly scheduled orders", async () => {
+      mockPrisma.customer.findUnique.mockResolvedValue({
+        id: "c1",
+        name: "Test Co",
+        contact: "",
+        phone: "",
+        address: "",
+        level: "",
+        paymentTerm: "",
+        taxNo: "",
+        note: "",
+        customColumns: {},
+        products: [],
+        orders: [{ id: "o1", data: { id: "o1", orderNo: "PO-001", status: "未完成" } }],
+        deliveries: [],
+        materialCosts: [],
+        costEntries: [],
+        statements: [],
+        payments: [],
+      });
+      mockPrisma.order.findMany.mockResolvedValue([]);
+      mockPrisma.order.deleteMany.mockResolvedValue({});
+      mockPrisma.order.upsert.mockResolvedValue({});
+
+      const res = await request(app)
+        .put("/api/customers/c1/orders")
+        .send({
+          rows: [
+            {
+              id: "o1",
+              orderNo: "PO-001",
+              product: "Foam",
+              status: "已排产",
+              productionDate: "2026-07-02",
+            },
+          ],
+        });
+
+      expect(res.status).toBe(200);
+      expect(mockNotifyProductionSchedulePublished).toHaveBeenCalledWith({
+        count: 1,
+        customerName: "Test Co",
+      });
+    });
+
+    it("should not notify when saved orders were already scheduled", async () => {
+      mockPrisma.customer.findUnique.mockResolvedValue({
+        id: "c1",
+        name: "Test Co",
+        contact: "",
+        phone: "",
+        address: "",
+        level: "",
+        paymentTerm: "",
+        taxNo: "",
+        note: "",
+        customColumns: {},
+        products: [],
+        orders: [{ id: "o1", data: { id: "o1", orderNo: "PO-001", status: "已排产" } }],
+        deliveries: [],
+        materialCosts: [],
+        costEntries: [],
+        statements: [],
+        payments: [],
+      });
+      mockPrisma.order.findMany.mockResolvedValue([]);
+      mockPrisma.order.deleteMany.mockResolvedValue({});
+      mockPrisma.order.upsert.mockResolvedValue({});
+
+      const res = await request(app)
+        .put("/api/customers/c1/orders")
+        .send({
+          rows: [
+            {
+              id: "o1",
+              orderNo: "PO-001",
+              product: "Foam",
+              status: "已排产",
+              productionDate: "2026-07-02",
+            },
+          ],
+        });
+
+      expect(res.status).toBe(200);
+      expect(mockNotifyProductionSchedulePublished).not.toHaveBeenCalled();
+    });
+  });
 
   describe("PATCH /api/customers/:id/orders/:orderId/status", () => {
     it("should return 200 with updated order row", async () => {

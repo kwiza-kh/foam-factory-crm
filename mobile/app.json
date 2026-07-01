@@ -12,6 +12,9 @@
       "resizeMode": "contain",
       "backgroundColor": "#F5F6FA"
     },
+    "plugins": [
+      "expo-notifications"
+    ],
     "ios": {
       "bundleIdentifier": "com.kwizakh.foamfactorycrm",
       "buildNumber": "1.0.0",
@@ -25,7 +28,8 @@
     },
     "android": {
       "permissions": [
-        "CAMERA"
+        "CAMERA",
+        "POST_NOTIFICATIONS"
       ],
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",

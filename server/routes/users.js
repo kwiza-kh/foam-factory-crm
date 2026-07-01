@@ -3,6 +3,7 @@ import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from "crypto";
 import { prisma } from "../db.js";
 import { authMiddleware } from "../auth.js";
 import { bumpDataVersion } from "../syncVersion.js";
+import { registerMobilePushToken } from "../pushNotifications.js";
 import {
   findEnvSuperAdminByToken,
   isEnvSuperAdminLogin,
@@ -226,6 +227,24 @@ router.patch("/me/password", async (req, res) => {
     bumpDataVersion();
     res.json({ ok: true, user: publicUser(updated) });
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post("/push-token", async (req, res) => {
+  try {
+    const user = await findUserByMobileToken(req);
+    if (!user) return res.status(401).json({ error: "未注册或账号不存在" });
+    await registerMobilePushToken({
+      user,
+      token: req.body?.token,
+      platform: req.body?.platform,
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    if (err.message === "Invalid Expo push token") {
+      return res.status(400).json({ error: "Invalid Expo push token" });
+    }
     res.status(500).json({ error: err.message });
   }
 });

@@ -2,6 +2,7 @@ import { StatusBar } from "expo-status-bar";
 import Constants from "expo-constants";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as ImagePicker from "expo-image-picker";
+import * as Notifications from "expo-notifications";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -108,6 +109,15 @@ function inferDevelopmentApiBaseUrl() {
 
 const envApiBaseUrl = typeof process !== "undefined" ? process.env?.EXPO_PUBLIC_API_BASE_URL : "";
 const defaultApiBaseUrl = envApiBaseUrl || inferDevelopmentApiBaseUrl();
+
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldPlaySound: false,
+    shouldSetBadge: true,
+    shouldShowBanner: true,
+    shouldShowList: true,
+  }),
+});
 
 const iosPalette = {
   background: "#F5F6FA",
@@ -228,6 +238,40 @@ function formatElapsed(isoString) {
   if (elapsed < 3600000) return `${Math.floor(elapsed / 60000)} 分钟前`;
   if (elapsed < 86400000) return `${Math.floor(elapsed / 3600000)} 小时前`;
   return `${Math.floor(elapsed / 86400000)} 天前`;
+}
+
+async function getMobileExpoPushToken() {
+  if (Platform.OS === "web") return "";
+  const projectId =
+    Constants.expoConfig?.extra?.eas?.projectId || Constants.easConfig?.projectId || "";
+  if (!projectId) return "";
+
+  const currentPermission = await Notifications.getPermissionsAsync();
+  const finalPermission = currentPermission.granted
+    ? currentPermission
+    : await Notifications.requestPermissionsAsync();
+  if (!finalPermission.granted) return "";
+
+  const result = await Notifications.getExpoPushTokenAsync({ projectId });
+  return result?.data || "";
+}
+
+function buildMobileNotificationSnapshot(customers = [], reminders = []) {
+  return {
+    scheduledIds: new Set(
+      flattenOrders(customers)
+        .filter(isScheduledProductionOrder)
+        .map((order) => `${order._customerId || ""}:${order.id || ""}`),
+    ),
+    reminderIds: new Set(reminders.map((item) => String(item.id || ""))),
+  };
+}
+
+function hasNewSetItem(previousSet = new Set(), nextSet = new Set()) {
+  for (const value of nextSet) {
+    if (!previousSet.has(value)) return true;
+  }
+  return false;
 }
 
 function formatMobileFieldValue(order, fieldConfig) {
@@ -819,7 +863,11 @@ function MobileApp() {
   const [expandedScheduleGroups, setExpandedScheduleGroups] = useState({});
   const [savingDeliveryId, setSavingDeliveryId] = useState("");
   const [approvalNoteByEntry, setApprovalNoteByEntry] = useState({});
+  const [appNotice, setAppNotice] = useState(null);
   const syncVersionRef = useRef(0);
+  const notificationSnapshotRef = useRef(buildMobileNotificationSnapshot([], []));
+  const notificationSnapshotReadyRef = useRef(false);
+  const pushTokenUserRef = useRef("");
 
   const request = useCallback(
     async (path, options = {}) => {
@@ -887,6 +935,7 @@ function MobileApp() {
         setCustomers(list);
         const nextVersion = Number(versionResult?.version || 0);
         if (nextVersion) syncVersionRef.current = nextVersion;
+        return list;
       } catch (err) {
         if (err.status === 401) {
           await AsyncStorage.removeItem(mobileUserStorageKey);
@@ -896,6 +945,7 @@ function MobileApp() {
           setOfflineQueue([]);
         }
         setError(err.message || "连接失败");
+        return null;
       } finally {
         setLoading(false);
         setRefreshing(false);
@@ -945,6 +995,31 @@ function MobileApp() {
     }
     loadCustomers();
   }, [authLoading, currentUser?.token, loadCustomers]);
+
+  useEffect(() => {
+    if (authLoading || !currentUser?.token || !isRoleAssigned) return;
+    const registerKey = `${apiBaseUrl}|${currentUser.id || currentUser.token}`;
+    if (pushTokenUserRef.current === registerKey) return;
+    pushTokenUserRef.current = registerKey;
+
+    let cancelled = false;
+    const registerPushToken = async () => {
+      try {
+        const token = await getMobileExpoPushToken();
+        if (cancelled || !token) return;
+        await request("/users/push-token", {
+          method: "POST",
+          body: JSON.stringify({ token, platform: Platform.OS }),
+        });
+      } catch {
+        // Push permission or token registration failure should not block mobile work.
+      }
+    };
+    registerPushToken();
+    return () => {
+      cancelled = true;
+    };
+  }, [apiBaseUrl, authLoading, currentUser?.id, currentUser?.token, isRoleAssigned, request]);
 
   const persistOfflineQueue = useCallback(async (nextQueue) => {
     setOfflineQueue(nextQueue);
@@ -1110,6 +1185,42 @@ function MobileApp() {
     const employeeViews = new Set(["workbench", "alerts", "schedule", "delivery", "cost", "attendance"]);
     if (!isAdmin && !employeeViews.has(activeView)) setActiveView("workbench");
   }, [activeView, isAdmin]);
+  useEffect(() => {
+    if (!isRoleAssigned) {
+      notificationSnapshotRef.current = buildMobileNotificationSnapshot([], []);
+      notificationSnapshotReadyRef.current = false;
+      setAppNotice(null);
+      return;
+    }
+
+    const nextSnapshot = buildMobileNotificationSnapshot(customers, reminders);
+    if (!notificationSnapshotReadyRef.current) {
+      notificationSnapshotRef.current = nextSnapshot;
+      notificationSnapshotReadyRef.current = true;
+      return;
+    }
+
+    const previousSnapshot = notificationSnapshotRef.current;
+    const hasNewSchedule = hasNewSetItem(previousSnapshot.scheduledIds, nextSnapshot.scheduledIds);
+    const hasNewReminder = hasNewSetItem(previousSnapshot.reminderIds, nextSnapshot.reminderIds);
+    notificationSnapshotRef.current = nextSnapshot;
+
+    if (hasNewSchedule) {
+      setAppNotice({
+        id: Date.now(),
+        title: "新排产",
+        text: "电脑端发布了新的排产任务",
+        view: "schedule",
+      });
+    } else if (hasNewReminder) {
+      setAppNotice({
+        id: Date.now(),
+        title: "新提醒",
+        text: "电脑端数据更新后产生了新的提醒",
+        view: "alerts",
+      });
+    }
+  }, [customers, isRoleAssigned, reminders]);
   useEffect(() => {
     const preferredCustomerId =
       selectedCustomerId !== "all" &&
@@ -2385,6 +2496,27 @@ function MobileApp() {
         currentRole={currentRole}
         onAvatarPress={() => setShowSettings(true)}
       />
+      {appNotice ? (
+        <Pressable
+          style={styles.appNotice}
+          onPress={() => {
+            setActiveView(appNotice.view);
+            setAppNotice(null);
+          }}
+        >
+          <View style={styles.appNoticeTextWrap}>
+            <Text style={styles.appNoticeTitle}>{appNotice.title}</Text>
+            <Text style={styles.appNoticeText}>{appNotice.text}</Text>
+          </View>
+          <Pressable
+            hitSlop={10}
+            style={styles.appNoticeClose}
+            onPress={() => setAppNotice(null)}
+          >
+            <Text style={styles.appNoticeCloseText}>×</Text>
+          </Pressable>
+        </Pressable>
+      ) : null}
       <View style={styles.mobileBody}>{content}</View>
       <BottomTabBar tabs={visibleMobileTabs} activeView={activeView} onChange={setActiveView} />
       {overlays}
@@ -6294,6 +6426,52 @@ const styles = {
       color: iosPalette.muted,
       fontSize: 12,
       fontWeight: "800",
+    },
+    appNotice: {
+      minHeight: 58,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: 12,
+      marginHorizontal: 18,
+      marginTop: 10,
+      marginBottom: 2,
+      borderRadius: 14,
+      paddingHorizontal: 14,
+      paddingVertical: 10,
+      backgroundColor: iosPalette.accentSoft,
+      borderWidth: 1,
+      borderColor: "#B8D9FF",
+    },
+    appNoticeTextWrap: {
+      flex: 1,
+      minWidth: 0,
+      gap: 2,
+    },
+    appNoticeTitle: {
+      color: iosPalette.accent,
+      fontSize: 13,
+      fontWeight: "900",
+    },
+    appNoticeText: {
+      color: iosPalette.textSoft,
+      fontSize: 12,
+      fontWeight: "700",
+      lineHeight: 17,
+    },
+    appNoticeClose: {
+      width: 30,
+      height: 30,
+      alignItems: "center",
+      justifyContent: "center",
+      borderRadius: 15,
+      backgroundColor: iosPalette.surface,
+    },
+    appNoticeCloseText: {
+      color: iosPalette.muted,
+      fontSize: 20,
+      fontWeight: "800",
+      lineHeight: 22,
     },
     avatarButton: {
       width: 48,

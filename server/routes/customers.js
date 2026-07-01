@@ -3,6 +3,7 @@ import { randomUUID } from "crypto";
 import { prisma } from "../db.js";
 import { findUserByMobileToken, normalizeMobileDisplaySettings, normalizeRole } from "./users.js";
 import { bumpDataVersion } from "../syncVersion.js";
+import { notifyProductionSchedulePublished } from "../pushNotifications.js";
 
 const router = Router();
 const VALID_TABLES = new Set([
@@ -116,6 +117,17 @@ function normalizeOrderStatus(status = "") {
   const value = String(status || "").trim();
   if (value === "已发货") return "已送货";
   return value || "未完成";
+}
+
+function countNewlyScheduledOrders(previousOrders = [], nextOrders = []) {
+  const previousStatusById = new Map(
+    previousOrders.map((order) => [String(order.id || ""), normalizeOrderStatus(order.status)]),
+  );
+  return nextOrders.filter((order) => {
+    const orderId = String(order.id || "");
+    if (normalizeOrderStatus(order.status) !== "已排产") return false;
+    return previousStatusById.get(orderId) !== "已排产";
+  }).length;
 }
 
 function normalizeFinalDeliveryStatus(status = "") {
@@ -1072,6 +1084,8 @@ router.put("/:id/:tableKey", async (req, res) => {
   try {
     const delegate = TABLE_DELEGATES[tableKey];
     let savedRows = [];
+    let newScheduledCount = 0;
+    let customerName = "";
     await prisma.$transaction(async (tx) => {
       const current = await tx.customer.findUnique({
         where: { id },
@@ -1091,6 +1105,7 @@ router.put("/:id/:tableKey", async (req, res) => {
         throw err;
       }
       const currentCustomer = normalize(current);
+      customerName = currentCustomer.name || "";
       const existingRows = await tx[delegate].findMany({
         where: { customerId: { not: id } },
         select: { id: true },
@@ -1108,6 +1123,9 @@ router.put("/:id/:tableKey", async (req, res) => {
       }
       if (tableKey === "deliveries") {
         assertDeliveryRowsCanBeSaved(currentCustomer, savedRows);
+      }
+      if (tableKey === "orders") {
+        newScheduledCount = countNewlyScheduledOrders(currentCustomer.orders || [], savedRows);
       }
 
       if (savedIds.length) {
@@ -1139,6 +1157,12 @@ router.put("/:id/:tableKey", async (req, res) => {
       }
     });
     bumpDataVersion();
+    if (newScheduledCount) {
+      void notifyProductionSchedulePublished({
+        count: newScheduledCount,
+        customerName,
+      });
+    }
     res.json({ ok: true, rows: savedRows });
   } catch (err) {
     res.status(err.statusCode || 500).json({ error: err.message });
