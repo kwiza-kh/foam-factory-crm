@@ -38,6 +38,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { statusClass } from "./lib/app-utils.jsx";
 import { normalizeDesktopRole, isDesktopBusinessUser, desktopRoleLabel } from "./lib/auth.js";
+import { buildProductionEmployeeOptions } from "./lib/productionEmployees.js";
 import {
   createTranslator,
   formatCurrencyForLanguage,
@@ -2298,6 +2299,10 @@ function CustomerWorkspace({ currentUser = null, onBackToZones, onLogout }) {
     () => buildMobileOrderFieldOptions(customers),
     [customers],
   );
+  const productionEmployeeOptions = useMemo(
+    () => buildProductionEmployeeOptions(mobileUsers),
+    [mobileUsers],
+  );
 
   useEffect(() => {
     if (!selectedCustomer && customers[0]) {
@@ -3457,6 +3462,13 @@ function CustomerWorkspace({ currentUser = null, onBackToZones, onLogout }) {
 
   const saveProductionSchedule = async (schedule) => {
     if (!selectedCustomer || !productionScheduleOrders.length) return;
+    const scheduledEmployee = productionEmployeeOptions.find(
+      (employee) => employee.value === String(schedule.line || "").trim(),
+    );
+    if (!scheduledEmployee) {
+      await dialogs.alert("请选择已注册的员工进行排产。", { title: "排产" });
+      return;
+    }
 
     const currentCustomer =
       customersRef.current.find((customer) => customer.id === selectedCustomerId) ||
@@ -3479,7 +3491,7 @@ function CustomerWorkspace({ currentUser = null, onBackToZones, onLogout }) {
         status: nextStatus,
         [productionScheduleDateField]: schedule.date,
         [productionScheduleQuantityField]: quantity,
-        [productionLineField]: schedule.line,
+        [productionLineField]: scheduledEmployee.value,
         [productionNoteField]: schedule.note,
       };
     });
@@ -4591,6 +4603,7 @@ function CustomerWorkspace({ currentUser = null, onBackToZones, onLogout }) {
           <ProductionScheduleModal
             customer={selectedCustomer}
             orders={productionScheduleOrders}
+            employeeOptions={productionEmployeeOptions}
             onClose={() => setProductionScheduleOrders([])}
             onSave={saveProductionSchedule}
           />
