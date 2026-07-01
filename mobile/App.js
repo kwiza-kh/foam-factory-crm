@@ -665,14 +665,18 @@ function todayDate() {
 }
 
 const defaultAttendanceRules = {
-  workStart: "09:00",
+  morningStartOptions: ["07:00", "08:00"],
+  afternoonStartOptions: ["13:00", "14:00"],
+  workStart: "07:00",
   lunchStart: "12:00",
   lunchEnd: "13:00",
   workEnd: "18:00",
   lunchBreakMin: 60,
-  workDaysPerMonth: 22,
-  overtimeMultiplier: 1.5,
+  workDaysPerMonth: 26,
+  overtimeMultiplier: 1,
   lateToleMin: 10,
+  payrollCycleStartDay: 11,
+  payDays: [25, 10],
 };
 
 function timeToMinutes(value, fallback = 0) {
@@ -689,12 +693,41 @@ function minutesBetween(start, end) {
 
 function normalizeAttendanceRules(rules = {}) {
   const merged = { ...defaultAttendanceRules, ...(rules || {}) };
+  const morningStartOptions = normalizeTimeOptions(
+    merged.morningStartOptions,
+    defaultAttendanceRules.morningStartOptions,
+  );
+  const afternoonStartOptions = normalizeTimeOptions(
+    merged.afternoonStartOptions,
+    defaultAttendanceRules.afternoonStartOptions,
+  );
   const lunchBreakMin =
     minutesBetween(merged.lunchStart, merged.lunchEnd) || Number(merged.lunchBreakMin) || 0;
   return {
     ...merged,
+    morningStartOptions,
+    afternoonStartOptions,
+    workStart: morningStartOptions[0],
     lunchBreakMin,
+    workDaysPerMonth: Number(merged.workDaysPerMonth) || defaultAttendanceRules.workDaysPerMonth,
+    overtimeMultiplier: 1,
+    lateToleMin: Number(merged.lateToleMin) || 0,
+    payrollCycleStartDay:
+      Number(merged.payrollCycleStartDay) || defaultAttendanceRules.payrollCycleStartDay,
+    payDays: Array.isArray(merged.payDays) && merged.payDays.length
+      ? merged.payDays
+      : defaultAttendanceRules.payDays,
   };
+}
+
+function normalizeTimeOptions(value, fallback) {
+  const options = Array.isArray(value) ? value : [];
+  const normalized = options
+    .map((item) => String(item || "").trim())
+    .filter(Boolean)
+    .sort((a, b) => timeToMinutes(a) - timeToMinutes(b))
+    .slice(0, 2);
+  return [...normalized, ...fallback].slice(0, 2);
 }
 
 function buildAttendanceScheduleSegments(rules = {}) {
@@ -703,8 +736,8 @@ function buildAttendanceScheduleSegments(rules = {}) {
     {
       key: "morning",
       label: "上午上班",
-      time: `${normalized.workStart} - ${normalized.lunchStart}`,
-      minutes: minutesBetween(normalized.workStart, normalized.lunchStart),
+      time: `${normalized.morningStartOptions.join(" / ")} - ${normalized.lunchStart}`,
+      minutes: minutesBetween(normalized.morningStartOptions[0], normalized.lunchStart),
     },
     {
       key: "lunch",
@@ -715,8 +748,8 @@ function buildAttendanceScheduleSegments(rules = {}) {
     {
       key: "afternoon",
       label: "下午上班",
-      time: `${normalized.lunchEnd} - ${normalized.workEnd}`,
-      minutes: minutesBetween(normalized.lunchEnd, normalized.workEnd),
+      time: `${normalized.afternoonStartOptions.join(" / ")} - ${normalized.workEnd}`,
+      minutes: minutesBetween(normalized.afternoonStartOptions[0], normalized.workEnd),
     },
   ];
 }
@@ -758,6 +791,7 @@ function MobileApp() {
   const [attendanceStats, setAttendanceStats] = useState(null);
   const [attendanceLeaves, setAttendanceLeaves] = useState([]);
   const [attendanceRules, setAttendanceRules] = useState(defaultAttendanceRules);
+  const [payrollCalendar, setPayrollCalendar] = useState(null);
   const [attendanceLoading, setAttendanceLoading] = useState(false);
   const [leaveType, setLeaveType] = useState("事假");
   const [leaveStartDate, setLeaveStartDate] = useState("");
@@ -1490,6 +1524,15 @@ function MobileApp() {
     }
   }, [request]);
 
+  const loadPayrollCalendar = useCallback(async () => {
+    try {
+      const res = await request("/attendance/payroll-calendar");
+      if (res.calendar) setPayrollCalendar(res.calendar);
+    } catch (err) {
+      console.warn("loadPayrollCalendar:", err.message);
+    }
+  }, [request]);
+
   const loadLeaves = useCallback(async () => {
     try {
       const res = await request("/attendance/leaves");
@@ -1503,6 +1546,7 @@ function MobileApp() {
     if (activeView === "attendance" && currentUser?.token) {
       loadAttendanceToday();
       loadAttendanceRules();
+      loadPayrollCalendar();
       loadLeaves();
       loadAttendanceStats("");
     }
@@ -1511,6 +1555,7 @@ function MobileApp() {
     currentUser?.token,
     loadAttendanceToday,
     loadAttendanceRules,
+    loadPayrollCalendar,
     loadLeaves,
     loadAttendanceStats,
   ]);
@@ -2556,6 +2601,7 @@ function MobileApp() {
             onRefresh={() => {
               loadAttendanceToday();
               loadAttendanceRules();
+              loadPayrollCalendar();
               loadLeaves();
               loadAttendanceStats("");
             }}
@@ -2566,6 +2612,7 @@ function MobileApp() {
         onLayout={() => {
           loadAttendanceToday();
           loadAttendanceRules();
+          loadPayrollCalendar();
           loadLeaves();
           loadAttendanceStats("");
         }}
@@ -2688,7 +2735,10 @@ function MobileApp() {
             <View>
               <Text style={styles.attendanceScheduleKicker}>今日班次</Text>
               <Text style={styles.attendanceScheduleTitle}>
-                {normalizedAttendanceRules.workStart} - {normalizedAttendanceRules.workEnd}
+                {normalizedAttendanceRules.morningStartOptions.join(" / ")}
+              </Text>
+              <Text style={styles.attendanceScheduleSubtitle}>
+                下午 {normalizedAttendanceRules.afternoonStartOptions.join(" / ")} · 下班 {normalizedAttendanceRules.workEnd}
               </Text>
             </View>
             <View style={styles.attendanceScheduleTotal}>
@@ -2721,6 +2771,28 @@ function MobileApp() {
             <Text style={styles.attendanceScheduleFooterText}>
               午休 {normalizedAttendanceRules.lunchStart} - {normalizedAttendanceRules.lunchEnd}
             </Text>
+            <Text style={styles.attendanceScheduleFooterText}>
+              加班同普通时薪
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.attendanceScheduleCard}>
+          <View style={styles.attendanceScheduleHeader}>
+            <View>
+              <Text style={styles.attendanceScheduleKicker}>工资日历</Text>
+              <Text style={styles.attendanceScheduleTitle}>
+                {payrollCalendar?.cycle?.label || "每月 11 号起算"}
+              </Text>
+              <Text style={styles.attendanceScheduleSubtitle}>已从服务器同步</Text>
+            </View>
+          </View>
+          <View style={styles.attendanceScheduleFooter}>
+            {(payrollCalendar?.payDates?.length ? payrollCalendar.payDates : ["25号", "10号"]).map((date) => (
+              <Text key={date} style={styles.attendanceScheduleFooterText}>
+                发薪 {date}
+              </Text>
+            ))}
           </View>
         </View>
 
@@ -2728,7 +2800,7 @@ function MobileApp() {
         {attendanceStats ? (
           <View style={styles.attendanceCard}>
             <Text style={styles.attendanceCardTitle}>
-              本月统计 · {attendanceStats.month}
+              本周期统计 · {attendanceStats.cycle?.label || attendanceStats.month}
             </Text>
             <View style={styles.attendanceStatsGrid}>
               <View style={styles.attendanceStatItem}>
@@ -5809,6 +5881,13 @@ const legacyStyles = StyleSheet.create({
     fontSize: 22,
     fontWeight: "900",
     fontVariant: ["tabular-nums"],
+  },
+  attendanceScheduleSubtitle: {
+    marginTop: 4,
+    color: iosPalette.muted,
+    fontSize: 12,
+    fontWeight: "700",
+    lineHeight: 17,
   },
   attendanceScheduleTotal: {
     minWidth: 84,

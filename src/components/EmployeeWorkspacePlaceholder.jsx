@@ -27,14 +27,18 @@ function todayMonth() {
 }
 
 const DEFAULT_RULES = {
-  workStart: "09:00",
+  morningStartOptions: ["07:00", "08:00"],
+  afternoonStartOptions: ["13:00", "14:00"],
+  workStart: "07:00",
   lunchStart: "12:00",
   lunchEnd: "13:00",
   workEnd: "18:00",
   lunchBreakMin: 60,
-  workDaysPerMonth: 22,
-  overtimeMultiplier: 1.5,
+  workDaysPerMonth: 26,
+  overtimeMultiplier: 1,
   lateToleMin: 10,
+  payrollCycleStartDay: 11,
+  payDays: [25, 10],
 };
 
 function timeToMinutes(value, fallback = 0) {
@@ -56,12 +60,38 @@ function formatHours(minutes) {
 
 function normalizeRules(rules) {
   const merged = { ...DEFAULT_RULES, ...rules };
+  const morningStartOptions = normalizeTimeOptions(
+    merged.morningStartOptions,
+    DEFAULT_RULES.morningStartOptions,
+  );
+  const afternoonStartOptions = normalizeTimeOptions(
+    merged.afternoonStartOptions,
+    DEFAULT_RULES.afternoonStartOptions,
+  );
   const lunchBreakMin =
     minutesBetween(merged.lunchStart, merged.lunchEnd) || Number(merged.lunchBreakMin) || 0;
   return {
     ...merged,
+    morningStartOptions,
+    afternoonStartOptions,
+    workStart: morningStartOptions[0],
     lunchBreakMin,
+    workDaysPerMonth: Number(merged.workDaysPerMonth) || DEFAULT_RULES.workDaysPerMonth,
+    overtimeMultiplier: 1,
+    lateToleMin: Number(merged.lateToleMin) || 0,
+    payrollCycleStartDay: Number(merged.payrollCycleStartDay) || DEFAULT_RULES.payrollCycleStartDay,
+    payDays: Array.isArray(merged.payDays) && merged.payDays.length ? merged.payDays : DEFAULT_RULES.payDays,
   };
+}
+
+function normalizeTimeOptions(value, fallback) {
+  const options = Array.isArray(value) ? value : [];
+  const normalized = options
+    .map((item) => String(item || "").trim())
+    .filter(Boolean)
+    .sort((a, b) => timeToMinutes(a) - timeToMinutes(b))
+    .slice(0, 2);
+  return [...normalized, ...fallback].slice(0, 2);
 }
 
 function buildScheduleSegments(rules) {
@@ -70,8 +100,8 @@ function buildScheduleSegments(rules) {
     {
       key: "morning",
       label: "上午上班",
-      time: `${r.workStart} - ${r.lunchStart}`,
-      minutes: minutesBetween(r.workStart, r.lunchStart),
+      time: `${r.morningStartOptions.join(" / ")} - ${r.lunchStart}`,
+      minutes: minutesBetween(r.morningStartOptions[0], r.lunchStart),
       icon: SunMedium,
     },
     {
@@ -84,8 +114,8 @@ function buildScheduleSegments(rules) {
     {
       key: "afternoon",
       label: "下午上班",
-      time: `${r.lunchEnd} - ${r.workEnd}`,
-      minutes: minutesBetween(r.lunchEnd, r.workEnd),
+      time: `${r.afternoonStartOptions.join(" / ")} - ${r.workEnd}`,
+      minutes: minutesBetween(r.afternoonStartOptions[0], r.workEnd),
       icon: Clock,
     },
   ];
@@ -112,8 +142,10 @@ export default function EmployeeWorkspace({ currentUser, onBackToZones, onLogout
   const [mobileUsers, setMobileUsers] = useState([]);
   const [leaves, setLeaves] = useState([]);
   const [overview, setOverview] = useState([]);
+  const [overviewCycle, setOverviewCycle] = useState(null);
   const [overviewMonth, setOverviewMonth] = useState(todayMonth());
   const [rules, setRules] = useState(DEFAULT_RULES);
+  const [payrollCalendar, setPayrollCalendar] = useState(null);
   const [salaries, setSalaries] = useState({});
   const [loading, setLoading] = useState(false);
   const [actionId, setActionId] = useState("");
@@ -122,16 +154,18 @@ export default function EmployeeWorkspace({ currentUser, onBackToZones, onLogout
 
   const loadAll = useCallback(async () => {
     try {
-      const [usersRes, leavesRes, rulesRes, salariesRes] = await Promise.all([
+      const [usersRes, leavesRes, rulesRes, salariesRes, calendarRes] = await Promise.all([
         api.getMobileUsers(),
         api.getAttendanceLeaves(),
         api.getAttendanceRules(),
         api.getAttendanceSalaries(),
+        api.getPayrollCalendar(),
       ]);
       setMobileUsers(usersRes.data || usersRes || []);
       setLeaves(leavesRes.leaves || []);
       if (rulesRes?.rules) setRules(normalizeRules(rulesRes.rules));
       if (salariesRes?.salaries) setSalaries(salariesRes.salaries);
+      if (calendarRes?.calendar) setPayrollCalendar(calendarRes.calendar);
     } catch (err) {
       console.warn("loadAll:", err.message);
     }
@@ -142,6 +176,7 @@ export default function EmployeeWorkspace({ currentUser, onBackToZones, onLogout
     try {
       const res = await api.getAttendanceOverview(month);
       setOverview(res.overview || []);
+      setOverviewCycle(res.cycle || null);
       if (res.rules) setRules(normalizeRules(res.rules));
     } catch (err) {
       console.warn("loadOverview:", err.message);
@@ -196,6 +231,8 @@ export default function EmployeeWorkspace({ currentUser, onBackToZones, onLogout
       const normalized = normalizeRules(newRules);
       const res = await api.updateAttendanceRules(normalized);
       if (res.rules) setRules(normalizeRules(res.rules));
+      const calendarRes = await api.getPayrollCalendar();
+      if (calendarRes?.calendar) setPayrollCalendar(calendarRes.calendar);
     } catch (err) {
       console.warn("saveRules:", err.message);
     }
@@ -232,6 +269,7 @@ export default function EmployeeWorkspace({ currentUser, onBackToZones, onLogout
 
         <EmployeeScheduleSummary
           rules={rules}
+          payrollCalendar={payrollCalendar}
           employeeCount={mobileUsers.length}
           pendingCount={pendingCount}
         />
@@ -275,6 +313,7 @@ export default function EmployeeWorkspace({ currentUser, onBackToZones, onLogout
           {tab === "rules" && (
             <AttendanceRules
               rules={rules}
+              payrollCalendar={payrollCalendar}
               onSave={saveRules}
             />
           )}
@@ -290,6 +329,7 @@ export default function EmployeeWorkspace({ currentUser, onBackToZones, onLogout
             <EmployeeOverview
               overview={overview}
               month={overviewMonth}
+              cycle={overviewCycle}
               loading={loading}
               rules={rules}
               onMonthChange={setOverviewMonth}
@@ -302,10 +342,11 @@ export default function EmployeeWorkspace({ currentUser, onBackToZones, onLogout
   );
 }
 
-function EmployeeScheduleSummary({ rules, employeeCount, pendingCount }) {
+function EmployeeScheduleSummary({ rules, payrollCalendar, employeeCount, pendingCount }) {
   const normalized = normalizeRules(rules);
   const scheduleSegments = buildScheduleSegments(normalized);
   const dailyMin = calcDailyWorkMinutes(normalized);
+  const payDates = payrollCalendar?.payDates || [];
 
   return (
     <section className="employee-schedule-summary">
@@ -313,11 +354,12 @@ function EmployeeScheduleSummary({ rules, employeeCount, pendingCount }) {
         <div>
           <span className="employee-schedule-label">今日标准班次</span>
           <strong>
-            {normalized.workStart} - {normalized.workEnd}
+            {normalized.morningStartOptions.join(" / ")} · {normalized.afternoonStartOptions.join(" / ")}
           </strong>
         </div>
         <div className="employee-schedule-meta">
           <span>{formatHours(dailyMin)} 日净工时</span>
+          <span>发薪 {payDates.length ? payDates.join(" / ") : "25号 / 10号"}</span>
           <span>{employeeCount} 个手机账号</span>
           <span>{pendingCount} 条待审批</span>
         </div>
@@ -463,7 +505,7 @@ function EmployeeUsers({ users, salaries, rules, actionId, onUpdateRole, onUpdat
 }
 
 // ── Attendance Rules ────────────────────────────────────────────────────────
-function AttendanceRules({ rules, onSave }) {
+function AttendanceRules({ rules, payrollCalendar, onSave }) {
   const [form, setForm] = useState(() => normalizeRules(rules));
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -473,6 +515,16 @@ function AttendanceRules({ rules, onSave }) {
   }, [rules]);
 
   const set = (k, v) => setForm((p) => ({ ...p, [k]: v }));
+  const setTimeOption = (key, index, value) => {
+    setForm((p) => {
+      const fallback = key === "morningStartOptions"
+        ? DEFAULT_RULES.morningStartOptions
+        : DEFAULT_RULES.afternoonStartOptions;
+      const next = normalizeTimeOptions(p[key], fallback);
+      next[index] = value;
+      return { ...p, [key]: next };
+    });
+  };
 
   const handleSave = async () => {
     setSaving(true);
@@ -490,6 +542,7 @@ function AttendanceRules({ rules, onSave }) {
   const dailyMin = calcDailyWorkMinutes(normalizedForm);
   const dailyHrs = dailyMin / 60;
   const monthlyHrs = dailyHrs * Number(form.workDaysPerMonth);
+  const payDates = payrollCalendar?.payDates || [];
 
   return (
     <div className="employee-panel">
@@ -511,7 +564,7 @@ function AttendanceRules({ rules, onSave }) {
         <div className="rules-day-plan-head">
           <div>
             <p className="rules-day-kicker">今日班次</p>
-            <h4>上午 / 午休 / 下午</h4>
+            <h4>双档上班 / 午休 / 无限加班</h4>
           </div>
           <div className="rules-day-total">
             <span>{formatHours(dailyMin)}</span>
@@ -550,19 +603,32 @@ function AttendanceRules({ rules, onSave }) {
           <span className="rules-summary-val">{monthlyHrs.toFixed(0)}h</span>
           <span className="rules-summary-label">月标准工时</span>
         </div>
+        <div className="rules-summary-sep" />
+        <div className="rules-summary-item">
+          <span className="rules-summary-val">{payDates.length ? payDates.join(" / ") : "25号 / 10号"}</span>
+          <span className="rules-summary-label">服务端同步发薪日</span>
+        </div>
       </div>
 
       <div className="rules-grid">
         <div className="rules-group">
           <h4 className="rules-group-title">班次时间</h4>
           <div className="rules-row">
-            <label className="rules-label">上午上班开始</label>
-            <input
-              type="time"
-              className="rules-input"
-              value={form.workStart}
-              onChange={(e) => set("workStart", e.target.value)}
-            />
+            <label className="rules-label">上午可选上班</label>
+            <div className="rules-dual-inputs">
+              <input
+                type="time"
+                className="rules-input"
+                value={normalizedForm.morningStartOptions[0]}
+                onChange={(e) => setTimeOption("morningStartOptions", 0, e.target.value)}
+              />
+              <input
+                type="time"
+                className="rules-input"
+                value={normalizedForm.morningStartOptions[1]}
+                onChange={(e) => setTimeOption("morningStartOptions", 1, e.target.value)}
+              />
+            </div>
           </div>
           <div className="rules-row">
             <label className="rules-label">午休开始</label>
@@ -574,13 +640,30 @@ function AttendanceRules({ rules, onSave }) {
             />
           </div>
           <div className="rules-row">
-            <label className="rules-label">午休结束 / 下午开始</label>
+            <label className="rules-label">午休结束</label>
             <input
               type="time"
               className="rules-input"
               value={form.lunchEnd}
               onChange={(e) => set("lunchEnd", e.target.value)}
             />
+          </div>
+          <div className="rules-row">
+            <label className="rules-label">下午可选上班</label>
+            <div className="rules-dual-inputs">
+              <input
+                type="time"
+                className="rules-input"
+                value={normalizedForm.afternoonStartOptions[0]}
+                onChange={(e) => setTimeOption("afternoonStartOptions", 0, e.target.value)}
+              />
+              <input
+                type="time"
+                className="rules-input"
+                value={normalizedForm.afternoonStartOptions[1]}
+                onChange={(e) => setTimeOption("afternoonStartOptions", 1, e.target.value)}
+              />
+            </div>
           </div>
           <div className="rules-row">
             <label className="rules-label">下午下班时间</label>
@@ -590,6 +673,21 @@ function AttendanceRules({ rules, onSave }) {
               value={form.workEnd}
               onChange={(e) => set("workEnd", e.target.value)}
             />
+          </div>
+          <div className="rules-row">
+            <label className="rules-label">迟到容忍</label>
+            <div className="rules-input-wrap">
+              <input
+                type="number"
+                className="rules-input"
+                min="0"
+                max="60"
+                step="5"
+                value={form.lateToleMin}
+                onChange={(e) => set("lateToleMin", Number(e.target.value))}
+              />
+              <span className="rules-input-unit">分钟</span>
+            </div>
           </div>
         </div>
 
@@ -611,41 +709,34 @@ function AttendanceRules({ rules, onSave }) {
             </div>
           </div>
           <div className="rules-row">
-            <label className="rules-label">加班工资倍率</label>
+            <label className="rules-label">加班时薪</label>
+            <div className="rules-static-value">同普通时薪 · 不限制加班工时</div>
+          </div>
+          <div className="rules-row">
+            <label className="rules-label">工资周期起始日</label>
             <div className="rules-input-wrap">
               <input
                 type="number"
                 className="rules-input"
                 min="1"
-                max="5"
-                step="0.5"
-                value={form.overtimeMultiplier}
-                onChange={(e) => set("overtimeMultiplier", Number(e.target.value))}
+                max="28"
+                step="1"
+                value={form.payrollCycleStartDay}
+                onChange={(e) => set("payrollCycleStartDay", Number(e.target.value))}
               />
-              <span className="rules-input-unit">倍</span>
+              <span className="rules-input-unit">号</span>
             </div>
           </div>
           <div className="rules-row">
-            <label className="rules-label">迟到容忍（分钟）</label>
-            <div className="rules-input-wrap">
-              <input
-                type="number"
-                className="rules-input"
-                min="0"
-                max="60"
-                step="5"
-                value={form.lateToleMin}
-                onChange={(e) => set("lateToleMin", Number(e.target.value))}
-              />
-              <span className="rules-input-unit">分钟</span>
-            </div>
+            <label className="rules-label">发薪日</label>
+            <div className="rules-static-value">每月 25 号和 10 号</div>
           </div>
         </div>
       </div>
 
       <div className="rules-formula-note">
         <span className="rules-formula-icon">ƒ</span>
-        时薪 = 月薪 ÷ (每月工作天数 × 日净工时) · 日净工时 = 上午上班 + 下午上班
+        时薪 = 月薪 ÷ (26 天 × 日净工时) · 超过标准下班后的工时按同一时薪继续计算
       </div>
     </div>
   );
@@ -743,7 +834,7 @@ function EmployeeLeaves({ leaves, actionId, onApprove, onRefresh }) {
 }
 
 // ── Employee Overview ────────────────────────────────────────────────────────
-function EmployeeOverview({ overview, month, loading, rules, onMonthChange, onRefresh }) {
+function EmployeeOverview({ overview, month, cycle, loading, rules, onMonthChange, onRefresh }) {
   const prevMonth = () => {
     const [y, m] = month.split("-").map(Number);
     const d = new Date(y, m - 2, 1);
@@ -765,7 +856,7 @@ function EmployeeOverview({ overview, month, loading, rules, onMonthChange, onRe
         <h3>考勤总览</h3>
         <div className="employee-month-nav">
           <Button variant="ghost" size="sm" onClick={prevMonth} className="icon-button">‹</Button>
-          <span className="employee-month-label">{month}</span>
+          <span className="employee-month-label">{cycle?.label || month}</span>
           <Button variant="ghost" size="sm" onClick={nextMonth} className="icon-button">›</Button>
           <Button variant="ghost" size="sm" onClick={onRefresh} className="ghost-button compact">
             <RefreshCw size={14} />

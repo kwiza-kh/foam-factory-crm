@@ -3,6 +3,13 @@ import { randomUUID } from "crypto";
 import { prisma } from "../db.js";
 import { authMiddleware } from "../auth.js";
 import { findUserByMobileToken } from "./users.js";
+import {
+  buildPayrollCalendar,
+  calculateAttendanceMinutes,
+  calculateHourlyRate,
+  getPayrollCycleForDate,
+  normalizeAttendanceRules,
+} from "../attendanceRules.js";
 
 const router = Router();
 
@@ -17,51 +24,6 @@ function mobileUserAuth(req, res, next) {
 
 function todayDate() {
   return new Date().toISOString().slice(0, 10);
-}
-
-const defaultAttendanceRules = {
-  workStart: "09:00",
-  lunchStart: "12:00",
-  lunchEnd: "13:00",
-  workEnd: "18:00",
-  lunchBreakMin: 60,
-  workDaysPerMonth: 22,
-  overtimeMultiplier: 1.5,
-  lateToleMin: 10,
-};
-
-function timeToMinutes(value, fallback = 0) {
-  const [hours, minutes] = String(value || "")
-    .split(":")
-    .map((part) => Number(part));
-  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return fallback;
-  return hours * 60 + minutes;
-}
-
-function minutesBetween(start, end) {
-  return Math.max(0, timeToMinutes(end) - timeToMinutes(start));
-}
-
-function normalizeAttendanceRules(rules = {}) {
-  const merged = { ...defaultAttendanceRules, ...(rules || {}) };
-  const lunchBreakMin =
-    minutesBetween(merged.lunchStart, merged.lunchEnd) || Number(merged.lunchBreakMin) || 0;
-  return {
-    ...merged,
-    lunchBreakMin,
-  };
-}
-
-function dailyWorkMinutes(rules = {}) {
-  const normalized = normalizeAttendanceRules(rules);
-  const morning = minutesBetween(normalized.workStart, normalized.lunchStart);
-  const afternoon = minutesBetween(normalized.lunchEnd, normalized.workEnd);
-  const segmented = morning + afternoon;
-  if (segmented > 0) return segmented;
-  return Math.max(
-    0,
-    minutesBetween(normalized.workStart, normalized.workEnd) - Number(normalized.lunchBreakMin),
-  );
 }
 
 // GET /api/attendance/today — current user's today record
@@ -136,14 +98,25 @@ router.post("/check-out", mobileUserAuth, async (req, res) => {
   }
 });
 
+function cycleDateFromMonth(month) {
+  return /^\d{4}-\d{2}$/.test(month) ? `${month}-01` : todayDate();
+}
+
+function attendanceCycleWhere(userId, cycle) {
+  return { userId, date: { gte: cycle.startDate, lte: cycle.endDate } };
+}
+
 // GET /api/attendance/stats?month=2026-06
 router.get("/stats", mobileUserAuth, async (req, res) => {
   try {
     const user = await findUserByMobileToken(req);
     if (!user) return res.status(401).json({ error: "请先登录手机账号" });
     const month = String(req.query.month || todayDate().slice(0, 7));
+    const rulesSetting = await prisma.appSetting.findUnique({ where: { key: "attendance_rules" } });
+    const rules = normalizeAttendanceRules(rulesSetting?.data || {});
+    const cycle = getPayrollCycleForDate(cycleDateFromMonth(month), rules);
     const records = await prisma.attendanceRecord.findMany({
-      where: { userId: user.id, date: { startsWith: month } },
+      where: attendanceCycleWhere(user.id, cycle),
       orderBy: { date: "asc" },
     });
 
@@ -158,7 +131,7 @@ router.get("/stats", mobileUserAuth, async (req, res) => {
         minutes: 0,
       };
       if (r.checkIn && r.checkOut) {
-        const mins = Math.round((new Date(r.checkOut) - new Date(r.checkIn)) / 60000);
+        const mins = calculateAttendanceMinutes(r, rules);
         if (mins > 0) {
           day.minutes = mins;
           workDays++;
@@ -173,6 +146,8 @@ router.get("/stats", mobileUserAuth, async (req, res) => {
       workDays,
       totalHours: (totalMinutes / 60).toFixed(1),
       totalMinutes,
+      rules,
+      cycle,
       daily,
     });
   } catch (err) {
@@ -276,6 +251,22 @@ router.put("/rules", authMiddleware, async (req, res) => {
   }
 });
 
+// GET /api/attendance/payroll-calendar — server-synced payroll cycle and pay dates
+router.get("/payroll-calendar", mobileUserAuth, async (req, res) => {
+  try {
+    if (readMobileToken(req)) {
+      const user = await findUserByMobileToken(req);
+      if (!user) return res.status(401).json({ error: "请先登录手机账号" });
+    }
+    const setting = await prisma.appSetting.findUnique({ where: { key: "attendance_rules" } });
+    const rules = normalizeAttendanceRules(setting?.data || {});
+    const date = String(req.query.date || todayDate());
+    res.json({ calendar: buildPayrollCalendar(date, rules), rules });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/attendance/salaries — get all employee monthly salaries
 router.get("/salaries", authMiddleware, async (req, res) => {
   try {
@@ -319,21 +310,18 @@ router.get("/admin/overview", authMiddleware, async (req, res) => {
     const rules = normalizeAttendanceRules(rulesSetting?.data || {});
     const salarySetting = await prisma.appSetting.findUnique({ where: { key: "employee_salaries" } });
     const salaries = salarySetting?.data || {};
-
-    // Compute daily standard hours from rules
-    const dailyMinutes = dailyWorkMinutes(rules);
-    const monthlyStdHours = (Number(rules.workDaysPerMonth) * dailyMinutes) / 60;
+    const cycle = getPayrollCycleForDate(cycleDateFromMonth(month), rules);
 
     const overview = [];
     for (const user of users) {
       const records = await prisma.attendanceRecord.findMany({
-        where: { userId: user.id, date: { startsWith: month } },
+        where: attendanceCycleWhere(user.id, cycle),
       });
       let days = 0;
       let minutes = 0;
       for (const r of records) {
         if (r.checkIn && r.checkOut) {
-          const m = Math.round((new Date(r.checkOut) - new Date(r.checkIn)) / 60000);
+          const m = calculateAttendanceMinutes(r, rules);
           if (m > 0) { days++; minutes += m; }
         } else if (r.checkIn) {
           days++;
@@ -345,24 +333,22 @@ router.get("/admin/overview", authMiddleware, async (req, res) => {
           userId: user.id,
           status: "approved",
           AND: [
-            { startDate: { lte: month + "-31" } },
-            { endDate: { gte: month + "-01" } },
+            { startDate: { lte: cycle.endDate } },
+            { endDate: { gte: cycle.startDate } },
           ],
         },
       });
       let leaveDays = 0;
       for (const l of leaves) {
-        const start = new Date(Math.max(new Date(l.startDate).getTime(), new Date(month + "-01").getTime()));
-        const end = new Date(Math.min(new Date(l.endDate).getTime(), new Date(month + "-31").getTime()));
+        const start = new Date(Math.max(new Date(l.startDate).getTime(), new Date(cycle.startDate).getTime()));
+        const end = new Date(Math.min(new Date(l.endDate).getTime(), new Date(cycle.endDate).getTime()));
         if (end >= start) leaveDays += Math.ceil((end - start) / 86400000) + 1;
       }
 
       // Salary calculation
       const monthlySalary = Number(salaries[user.id]) || 0;
       const actualHours = minutes / 60;
-      const hourlyRate = monthlyStdHours > 0 && monthlySalary > 0
-        ? monthlySalary / monthlyStdHours
-        : 0;
+      const hourlyRate = calculateHourlyRate(monthlySalary, rules);
       const estimatedPay = hourlyRate > 0 ? actualHours * hourlyRate : 0;
 
       overview.push({
@@ -379,7 +365,7 @@ router.get("/admin/overview", authMiddleware, async (req, res) => {
       });
     }
 
-    res.json({ month, overview, rules });
+    res.json({ month, cycle, overview, rules });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

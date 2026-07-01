@@ -111,7 +111,9 @@ export const api = {
 
   getAttendanceRules: () => req("GET", "/attendance/rules"),
 
-  /** @param {{ workStart: string; lunchStart: string; lunchEnd: string; workEnd: string; lunchBreakMin: number; workDaysPerMonth: number; overtimeMultiplier: number; lateToleMin: number }} rules */
+  getPayrollCalendar: () => req("GET", "/attendance/payroll-calendar"),
+
+  /** @param {{ morningStartOptions?: string[]; afternoonStartOptions?: string[]; workStart?: string; lunchStart: string; lunchEnd: string; workEnd: string; lunchBreakMin: number; workDaysPerMonth: number; overtimeMultiplier: number; lateToleMin: number; payrollCycleStartDay?: number; payDays?: number[] }} rules */
   updateAttendanceRules: (rules) => req("PUT", "/attendance/rules", rules),
 
   getAttendanceSalaries: () => req("GET", "/attendance/salaries"),
