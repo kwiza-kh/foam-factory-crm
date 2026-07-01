@@ -1107,7 +1107,7 @@ function MobileApp() {
     [customers],
   );
   useEffect(() => {
-    const employeeViews = new Set(["workbench", "alerts", "schedule", "delivery", "cost"]);
+    const employeeViews = new Set(["workbench", "alerts", "schedule", "delivery", "cost", "attendance"]);
     if (!isAdmin && !employeeViews.has(activeView)) setActiveView("workbench");
   }, [activeView, isAdmin]);
   useEffect(() => {
