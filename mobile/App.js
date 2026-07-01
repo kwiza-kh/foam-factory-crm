@@ -3,6 +3,7 @@ import Constants from "expo-constants";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as ImagePicker from "expo-image-picker";
 import * as Notifications from "expo-notifications";
+import { buildLanApiBaseUrl, resolveStoredApiBaseUrl } from "./apiBaseUrl";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -96,19 +97,8 @@ const baseMobileOrderFields = [
   { field: "followUp", label: "跟进记录" },
 ];
 
-function inferDevelopmentApiBaseUrl() {
-  const hostUri =
-    Constants.expoConfig?.hostUri ||
-    Constants.manifest2?.extra?.expoClient?.hostUri ||
-    Constants.manifest?.debuggerHost ||
-    "";
-  const host = String(hostUri).split(":")[0];
-  if (host) return `http://${host}:3001/api`;
-  return "http://127.0.0.1:3001/api";
-}
-
 const envApiBaseUrl = typeof process !== "undefined" ? process.env?.EXPO_PUBLIC_API_BASE_URL : "";
-const defaultApiBaseUrl = envApiBaseUrl || inferDevelopmentApiBaseUrl();
+const defaultApiBaseUrl = envApiBaseUrl || buildLanApiBaseUrl(Constants);
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -965,8 +955,12 @@ function MobileApp() {
         ]);
         if (!mounted) return;
         if (savedApiUrl) {
-          setApiBaseUrl(savedApiUrl);
-          setApiDraft(savedApiUrl);
+          const restoredApiUrl = resolveStoredApiBaseUrl(savedApiUrl, defaultApiBaseUrl);
+          setApiBaseUrl(restoredApiUrl);
+          setApiDraft(restoredApiUrl);
+          if (restoredApiUrl !== savedApiUrl) {
+            await AsyncStorage.setItem(mobileApiStorageKey, restoredApiUrl);
+          }
         }
         if (savedUser) {
           setCurrentUser(JSON.parse(savedUser));
